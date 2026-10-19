@@ -447,7 +447,10 @@ class CollectionService:
     async def _attachment_worker(self) -> None:
         """Фоновое скачивание картинок на диск (data/attachments/...)."""
         if not self.s.download_attachments:
-            log.info("Скачивание вложений отключено (DOWNLOAD_ATTACHMENTS=0).")
+            log.info(
+                "Скачивание картинок ОТКЛЮЧЕНО (по умолчанию). Включается явным "
+                "DOWNLOAD_ATTACHMENTS=1 в .env; сейчас сохраняются только метаданные вложений."
+            )
             return
         while self._running:
             pending = self.repo.pending_image_attachments(limit=5)

@@ -45,7 +45,7 @@ app/
 | Данные | Источник | Где хранится |
 |---|---|---|
 | Все сообщения (текст, правки, pinned, replies, stickers, реакции, embeds) | `channel.history()` пагинацией | `messages` (+ raw_json) |
-| Картинки и прочие вложения | CDN (`get_from_cdn`) | файлы в `data/attachments/…`, метаданные+sha256 в `attachments` |
+| Картинки и прочие вложения | CDN (`get_from_cdn`) — скачивание **только при явном `DOWNLOAD_ATTACHMENTS=1`** в .env (по умолчанию выключено) | файлы в `data/attachments/…`, метаданные+sha256 в `attachments` |
 | Профили пользователей: username, bio, pronouns-поля, avatar/banner, accent color, дата регистрации, flags | `/users/{id}/profile` (доступен только user-токену) | `user_profiles` |
 | Бейджи, connections (соцсети), mutual guilds/friends | профиль | `badges_json`, `connections_json`, `raw_json` |
 | Серверные данные: ник, joined_at, boost, timeout, права | `guild.fetch_member` | `guild_member_profiles` |

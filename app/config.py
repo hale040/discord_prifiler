@@ -65,8 +65,13 @@ class Settings:
     request_delay_min: float = field(default_factory=lambda: float(os.getenv("REQUEST_DELAY_MIN", "2.5") or 2.5))
     request_delay_max: float = field(default_factory=lambda: float(os.getenv("REQUEST_DELAY_MAX", "7.0") or 7.0))
 
-    # Сохранять вложения (картинки) на диск
-    download_attachments: bool = os.getenv("DOWNLOAD_ATTACHMENTS", "1") == "1"
+    # Сохранять вложения (картинки) на диск.
+    # ВНИМАНИЕ: скачивание включается ТОЛЬКО явным DOWNLOAD_ATTACHMENTS=1 в .env.
+    # Без этой строки (или при 0/false/no) файлы не загружаются — в БД пишутся
+    # только метаданные (url, sha256, размер), чего достаточно для анализа текста.
+    download_attachments: bool = field(
+        default_factory=lambda: os.getenv("DOWNLOAD_ATTACHMENTS", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
     attachments_dir: str = os.getenv("ATTACHMENTS_DIR", "data/attachments")
 
     # База данных
@@ -84,6 +89,8 @@ def load_settings() -> Settings:
         )
     if not s.channel_id:
         raise RuntimeError("CHANNEL_ID не задан — укажите id целевого канала.")
-    os.makedirs(s.attachments_dir, exist_ok=True)
+    if s.download_attachments:
+        # каталог под картинки создаём только когда скачивание явно включено
+        os.makedirs(s.attachments_dir, exist_ok=True)
     os.makedirs("data", exist_ok=True)
     return s
