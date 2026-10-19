@@ -50,6 +50,12 @@ class ConsoleView:
     def on_attachment_saved(self, att_id: int, path: str, size: int) -> None:
         self._line("MEDIA", f"вложение {att_id} -> {path} ({size} байт)")
 
+    def on_message_edited(self, message_id: int) -> None:
+        self._line("EDIT", f"сообщение {message_id} отредактировано — метрики пересчитаны")
+
+    def on_message_deleted(self, message_id: int) -> None:
+        self._line("DELETE", f"сообщение {message_id} удалено автором (помечено в БД)")
+
     def on_stats(self, stats: dict[str, int]) -> None:
         parts = [f"{k}={v}" for k, v in stats.items()]
         self._line("STATS", " | ".join(parts))

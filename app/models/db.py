@@ -40,5 +40,8 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
             conn.execute(
                 text("ALTER TABLE channel_states ADD COLUMN oldest_message_id BIGINT")
             )
+        mcols = {c["name"] for c in inspect(engine).get_columns("messages")}
+        if "deleted_at" not in mcols:
+            conn.execute(text("ALTER TABLE messages ADD COLUMN deleted_at DATETIME"))
 
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)

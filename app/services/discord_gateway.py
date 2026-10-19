@@ -32,17 +32,20 @@ class UserbotClient(discord.Client):
         # discord.py-self сам формирует корректные gateway properties по
         # user-token'у (client_type web/desktop/mobile), поэтому трафик
         # выглядит как обычный клиент Discord, а не как бот-либария.
-        # Максимально «тихий» кэш: участников не держим, гильдии не чанкуем.
+        # Кэш сообщений включён точечно (max_messages=200): без него live
+        # MESSAGE_EDIT/MESSAGE_DELETE приходят с author=None и пустым
+        # content — редактирования было бы не зафиксировать.
         super().__init__(
             member_cache_flags=discord.MemberCacheFlags.none(),
             chunk_guilds_at_startup=False,
-            guild_subscriptions=False,
-            max_messages=None,  # ничего не кэшируем в памяти
+            guild_subscriptions=True,  # нужны live MESSAGE_CREATE для гильдий
+            max_messages=200,
             status=discord.Status.online,
         )
         self._token = token
         self._gateway_callback = gateway_callback
         self._ready_callback = ready_callback
+        self._ready_fired = False
 
     # ------------------------------------------------------------- lifecycle
     async def start(self) -> None:
@@ -61,8 +64,27 @@ class UserbotClient(discord.Client):
         except Exception:  # noqa: BLE001
             log.exception("Ошибка live-обработки сообщения %s", getattr(message, "id", "?"))
 
+    async def on_message_edit(self, before: Any, after: Any) -> None:
+        """Live MESSAGE_UPDATE — фиксируем факт и содержимое редактирования."""
+        try:
+            await self._gateway_callback("MESSAGE_EDIT", {"message": after, "before": before})
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка live-обработки редактирования %s", getattr(after, "id", "?"))
+
+    async def on_message_delete(self, message: Any) -> None:
+        """Live MESSAGE_DELETE — помечаем сообщение удалённым (не удаляем данные)."""
+        try:
+            await self._gateway_callback("MESSAGE_DELETE", {"message": message})
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка live-обработки удаления %s", getattr(message, "id", "?"))
+
     # ---------------------------------------------------------------- events
     async def on_ready(self) -> None:
+        # on_ready вызывается при каждой переподключении gateway — иначе
+        # контроллер повторно запускал бы полный backfill. Готовимся один раз.
+        if getattr(self, "_ready_fired", False):
+            return
+        self._ready_fired = True
         me = self.user
         log.info(
             "Вход выполнен: %s (id=%s) — режим пользователя, бот-флаг отсутствует",
