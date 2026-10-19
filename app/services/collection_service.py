@@ -67,6 +67,9 @@ class CollectionService:
         self._profile_queue: asyncio.Queue[int] = asyncio.Queue()
         self._running = False
         self._tasks: list[asyncio.Task] = []
+        # курсоры в рамках процесса: куда догружали историю (после restart —
+        # резюм по oldest_message_id из БД)
+        self._backfill_cursor: int | None = None
 
     def _notify(self, method: str, *args) -> None:
         if self.view is not None:
@@ -218,20 +221,34 @@ class CollectionService:
         Если задан START_DATE, запросы начинаются сразу с нужной даты
         (snowflake-курсор), а не с самого начала чата — лишняя история даже
         не запрашивается у API.
+
+        Защита от зацикливания (главный риск after-стратегии): если страница
+        вернула только уже известные сообщения, курсор всё равно двигается на
+        max(id) страницы + добавляется hard-cap по количеству пустых страниц.
         """
         state = self.repo.get_state(channel.id)
-        # Курсор: от чего идём вверх по времени.
-        if self.s.start_date is not None:
+        # Курсор: от чего идём вперёд по времени.
+        if self._backfill_cursor is not None:
+            # продолжение догружения после reconnect в рамках процесса
+            after = self._backfill_cursor
+        elif self.s.start_date is not None and not state.last_message_id:
             after = snowflake_for(self.s.start_date)
             log.info(
                 "Backfill с даты старта %s (snowflake-курсор %s).",
                 self.s.start_date.isoformat(), after,
             )
         else:
-            # Без ограничения по дате: если в состоянии уже есть сохранённый
-            # самый старый id — продолжим добор от него; иначе с нуля.
-            after = state.oldest_message_id or 0
+            # Резюм после рестарта процесса / второй запуск: продолжаем ровно
+            # от последнего собранного сообщения. Иначе Discord вернёт уже
+            # сохранённую страницу (page_cap), saved=0 и backfill будет
+            # бесконечно крутиться на одном месте.
+            after = state.last_message_id or (
+                snowflake_for(self.s.start_date) if self.s.start_date is not None else 0
+            )
+            if state.last_message_id:
+                log.info("Backfill: резюм от последнего курсора %s.", after)
         total_pages = 0
+        empty_pages = 0
         while self._running:
             kwargs: dict[str, Any] = {
                 "limit": random.randint(25, 50),  # маленькие страницы — «человечнее»
@@ -260,7 +277,30 @@ class CollectionService:
             # oldest_message_id — самая старая загруженная точка (для резюма).
             self.repo.update_state(channel.id, newest_id, saved, guild_id)
             self.repo.mark_oldest(channel.id, oldest_id)
+            # Двигаем курсор строго вперёд независимо от того, сколько
+            # реально сохранилось: иначе при page_cap / дублях цикл
+            # зацикливается на одной и той же странице.
+            if newest_id <= after:
+                log.warning(
+                    "Страница не продвинула курсор (%s <= %s) — прерываю backfill.",
+                    newest_id, after,
+                )
+                break
             after = newest_id
+            self._backfill_cursor = newest_id
+            if saved == 0:
+                empty_pages += 1
+                # long-term cap: страница целиком состоит из уже собранных
+                # сообщений — скорее всего повторная выгрузка, останавливаемся
+                # после нескольких таких страниц подряд.
+                if empty_pages >= 5:
+                    log.info(
+                        "Backfill: %s страниц подряд без новых сообщений — стоп (курсор=%s).",
+                        empty_pages, after,
+                    )
+                    break
+            else:
+                empty_pages = 0
             log.info(
                 "Backfill: страница %s, сохранено %s/%s, диапазон id %s..%s",
                 total_pages, saved, len(batch), oldest_id, newest_id,
