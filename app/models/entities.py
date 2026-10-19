@@ -160,6 +160,7 @@ class Message(Base):
     reference_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # reply-to
 
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -26,6 +26,8 @@ from app.models.entities import (
 log = logging.getLogger("repository")
 
 HASHTAG_RE = re.compile(r"(?<!\w)(?:#[a-zA-Z0-9_]{2,})|(?<!\w)<#\d+>")
+USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
+ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 
 
 class Repository:
@@ -105,16 +107,41 @@ class Repository:
             s.commit()
             return True
 
-    def update_message_edited(self, message_id: int, edited_at: datetime, content: str) -> None:
+    def update_message_edited(
+        self, message_id: int, edited_at: datetime | None, content: str
+    ) -> None:
+        """Зафиксировать редактирование: новый контент + пересчёт метрик.
+
+        Метрики (word/char/hashtag/mentions/reactions) важны для будущего
+        психотипирования — при редактировании они пересчитываются заново.
+        Если edited_at не пришёл из события (либа sometimes теряет поле),
+        подставляем текущее время, чтобы факт правки всё равно сохранился.
+        """
         with self._sf() as s:
             msg = s.get(Message, message_id)
-            if msg is not None:
-                msg.edited_at = edited_at
-                msg.content = content
-                msg.clean_content = content
-                msg.word_count = len(content.split())
-                msg.char_count = len(content)
+            if msg is None:
+                return
+            msg.edited_at = edited_at or datetime.now(timezone.utc)
+            msg.content = content or ""
+            msg.clean_content = content or ""
+            msg.word_count = len((content or "").split())
+            msg.char_count = len(content or "")
+            msg.hashtag_count = len(HASHTAG_RE.findall(content or ""))
+            msg.mention_count = len(USER_MENTION_RE.findall(content or "")) + len(
+                ROLE_MENTION_RE.findall(content or "")
+            )
+            s.commit()
+
+    def mark_message_deleted(self, message_id: int) -> bool:
+        """Пометить сообщение удалённым (данные сохраняем — это история)."""
+        with self._sf() as s:
+            msg = s.get(Message, message_id)
+            if msg is None:
+                return False
+            if msg.deleted_at is None:
+                msg.deleted_at = datetime.now(timezone.utc)
                 s.commit()
+            return True
 
     # ------------------------------------------------------------ attachments
     def mark_attachment_downloaded(

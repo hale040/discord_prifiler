@@ -64,15 +64,13 @@ class CollectorController:
             self._stats_task = asyncio.create_task(self._stats_loop(), name="stats-loop")
 
     async def on_gateway_event(self, action: str, payload: dict[str, Any]) -> None:
-        """Live-события Discord (MESSAGE_CREATE) — усиление поллера.
+        """Live-события Discord — усиление поллера.
 
-        Основной источник данных — периодический history-запрос; live-событие
-        используется только для того, чтобы не ждать следующего интервала.
-        Клиент (UserbotClient.on_message) передаёт уже готовый объект
-        ``discord.Message`` в ``payload["message"]``.
+        Основной источник данных — периодический history-запрос; live-события
+        используются, чтобы не ждать следующего интервала и фиксировать
+        редактирования/удаления сообщений.
+        Клиент (UserbotClient) передаёт готовые объекты в ``payload["message"]``.
         """
-        if action != "MESSAGE_CREATE":
-            return
         msg = payload.get("message")
         if msg is None:
             return
@@ -82,13 +80,18 @@ class CollectorController:
         except (TypeError, ValueError):
             return
         try:
-            state = self.repo.get_state(self.settings.channel_id)
-            saved = await self.collector.handle_live_message(msg, state.guild_id)
-            if saved:
-                self.repo.update_state(self.settings.channel_id, msg.id, 1, state.guild_id)
-                self.view.on_new_messages(1, msg.id)
+            if action == "MESSAGE_CREATE":
+                state = self.repo.get_state(self.settings.channel_id)
+                saved = await self.collector.handle_live_message(msg, state.guild_id)
+                if saved:
+                    self.repo.update_state(self.settings.channel_id, msg.id, 1, state.guild_id)
+                    self.view.on_new_messages(1, msg.id)
+            elif action == "MESSAGE_EDIT":
+                await self.collector.handle_live_edit(msg, payload.get("before"))
+            elif action == "MESSAGE_DELETE":
+                await self.collector.handle_live_delete(msg)
         except Exception as exc:  # noqa: BLE001
-            log.debug("live MESSAGE_CREATE обработан с ошибкой: %s", exc)
+            log.debug("live %s обработан с ошибкой: %s", action, exc)
 
     # ------------------------------------------------------------ run loop
     async def _stats_loop(self) -> None:

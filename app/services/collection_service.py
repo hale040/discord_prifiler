@@ -80,6 +80,39 @@ class CollectionService:
         """Обработка live MESSAGE_CREATE (вызывается контроллером)."""
         return await self._handle_message(msg, guild_id)
 
+    async def handle_live_edit(self, msg: Any, before: Any = None) -> bool:
+        """Обработка live MESSAGE_EDIT: фиксируем новый контент и метрики."""
+        mid = getattr(msg, "id", None) or getattr(before, "id", None)
+        if not mid:
+            return False
+        content = getattr(msg, "content", None)
+        clean = getattr(msg, "clean_content", None)
+        # если либа прислала «пустой» partial без содержимого — берём из before
+        if content is None and before is not None:
+            content = getattr(before, "content", "")
+        if clean is None:
+            clean = content
+        edited_at = getattr(msg, "edited_at", None) or getattr(before, "edited_at", None)
+        if edited_at is not None and edited_at.tzinfo is None:
+            edited_at = edited_at.replace(tzinfo=timezone.utc)
+        await asyncio.to_thread(
+            self.repo.update_message_edited, int(mid), edited_at, clean or ""
+        )
+        self._notify("on_message_edited", int(mid))
+        return True
+
+    async def handle_live_delete(self, msg_or_id: Any) -> bool:
+        """Обработка live MESSAGE_DELETE: помечаем удалённым, данные храним."""
+        mid = getattr(msg_or_id, "id", msg_or_id)
+        try:
+            mid = int(mid)
+        except (TypeError, ValueError):
+            return False
+        marked = await asyncio.to_thread(self.repo.mark_message_deleted, mid)
+        if marked:
+            self._notify("on_message_deleted", mid)
+        return marked
+
     # ------------------------------------------------------------------ run
     async def start(self) -> None:
         """Запуск фоновых циклов (вызывается после on_ready)."""
@@ -119,19 +152,31 @@ class CollectionService:
         except Exception:  # noqa: BLE001
             log.exception("Ошибка первичной выгрузки истории")
 
+        consecutive_errors = 0
         while self._running:
             interval = self.s.poll_interval_sec * random.uniform(0.85, 1.25)
             await asyncio.sleep(interval)  # периодичность опроса канала
             try:
                 await self._fetch_new_messages(channel, guild_id)
+                consecutive_errors = 0
             except discord.LoginFailure:
                 log.error("Сессия недействительна (LoginFailure) — останавливаю сбор.")
                 self._running = False
+                self.client._ready_fired = False  # на случай внешнего перезапуска
+                if getattr(self.client, "is_logged_in", lambda: False)():
+                    await self.client.close()
                 return
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
-                log.exception("Ошибка инкрементального опроса канала")
+                consecutive_errors += 1
+                log.exception("Ошибка инкрементального опроса канала (подряд: %s)", consecutive_errors)
+                if consecutive_errors >= 3:
+                    # экспоненциальный backoff: 4x, 8x, ... но не дольше 30 мин
+                    penalty = min(interval * (2 ** consecutive_errors), 1800)
+                    log.warning("Бэкофф: следующий опрос через ~%.0f сек.", penalty)
+                    await asyncio.sleep(penalty)
+                    consecutive_errors = 0
 
     # ----------------------------------------------------------- history ops
     async def _fetch_new_messages(self, channel: discord.abc.Messageable, guild_id: int | None) -> int:
@@ -144,14 +189,20 @@ class CollectionService:
         if after:
             kwargs["after"] = _to_snowflake(after)
 
+        batch: list[discord.Message] = []
         async for msg in channel.history(**kwargs):
-            saved = await self._handle_message(msg, guild_id)
+            batch.append(msg)
+        batch.sort(key=lambda m: m.id)
+        # всю пачку пишем в БД одним коммитом — меньше fsync/WAL-чреды
+        for msg in batch:
+            saved = await asyncio.to_thread(self._handle_message_sync, msg, guild_id)
             new_count += int(saved)
             if max_id is None or msg.id > max_id:
                 max_id = msg.id
             await human_delay(self.s.request_delay_min / 4, self.s.request_delay_max / 4)
 
-        self.repo.update_state(channel.id, max_id, new_count, guild_id)
+        if batch or new_count:
+            self.repo.update_state(channel.id, max_id, new_count, guild_id)
         if new_count:
             log.info("Новых сообщений: %s (курсор -> %s)", new_count, max_id)
         else:
@@ -199,7 +250,9 @@ class CollectionService:
             batch.sort(key=lambda m: m.id)  # сохраняем строго хронологически
             saved = 0
             for msg in batch:
-                saved += int(await self._handle_message(msg, guild_id))
+                # БД-запись уводим из event loop в поток — иначе многостраничный
+                # backfill блокирует gateway и рвёт heartbeat-сессию.
+                saved += int(await asyncio.to_thread(self._handle_message_sync, msg, guild_id))
             oldest_id = batch[0].id
             newest_id = batch[-1].id
             total_pages += 1
@@ -219,7 +272,13 @@ class CollectionService:
             await human_delay(self.s.request_delay_min, self.s.request_delay_max * 2)
 
     # ------------------------------------------------------------ processing
-    async def _handle_message(self, msg: discord.Message, guild_id: int | None) -> bool:
+    def _handle_message_sync(self, msg: discord.Message, guild_id: int | None) -> bool:
+        """Синхронное ядро обработки сообщения (БД-операции).
+
+        Вызывается либо напрямую из event loop (live-события), либо через
+        asyncio.to_thread во время bulk-backfill — чтобы долгие SQLite-коммиты
+        не блокировали gateway-сокет (иначе Discord видит лаги и рвёт сессию).
+        """
         # Фильтр по дате начала сбора: всё, что раньше START_DATE, игнорируем.
         if self.s.start_date is not None:
             ts = getattr(msg, "created_at", None)
@@ -253,6 +312,9 @@ class CollectionService:
                     except Exception:  # noqa: BLE001
                         log.debug("Не удалось сохранить server-данные из payload: %s", u.id)
         return True
+
+    async def _handle_message(self, msg: discord.Message, guild_id: int | None) -> bool:
+        return self._handle_message_sync(msg, guild_id)
 
     def _queue_profile(self, user_id: int) -> None:
         if user_id in self._profiled or user_id in self._queued_profiles:
