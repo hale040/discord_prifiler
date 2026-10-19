@@ -43,6 +43,17 @@ def snowflake_for(dt: datetime) -> int:
     return max(ms, 0) << 22
 
 
+def _to_snowflake(value: int | None) -> discord.Object | None:
+    """discord.py-self ожидает в history(after=/before=) объект с атрибутом .id.
+
+    Числовой snowflake заворачиваем в discord.Object — иначе внутри
+    abc.Messageable.history происходит AttributeError: 'int' object ...
+    """
+    if value is None:
+        return None
+    return discord.Object(id=int(value))
+
+
 class CollectionService:
     def __init__(self, settings: Settings, repo: Repository, client: UserbotClient) -> None:
         self.s = settings
@@ -131,7 +142,7 @@ class CollectionService:
         max_id = after
         kwargs: dict[str, Any] = {"limit": min(self.s.fetch_limit, 100), "oldest_first": True}
         if after:
-            kwargs["after"] = after
+            kwargs["after"] = _to_snowflake(after)
 
         async for msg in channel.history(**kwargs):
             saved = await self._handle_message(msg, guild_id)
@@ -173,7 +184,7 @@ class CollectionService:
         while self._running:
             kwargs: dict[str, Any] = {
                 "limit": random.randint(25, 50),  # маленькие страницы — «человечнее»
-                "after": after,
+                "after": _to_snowflake(after),
                 "oldest_first": True,
             }
             batch: list[discord.Message] = []
