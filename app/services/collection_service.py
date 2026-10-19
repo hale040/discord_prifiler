@@ -286,6 +286,13 @@ class CollectionService:
                     newest_id, after,
                 )
                 break
+            # достройка связей «кто кому отвечает» по уже сохранённым reply-ссылкам
+            try:
+                linked = self.repo.link_reply_references()
+                if linked:
+                    log.info("Backfill: достроено связей ответов: %s", linked)
+            except Exception:  # noqa: BLE001
+                log.exception("Ошибка достройки графа ответов (страница %s)", total_pages)
             after = newest_id
             self._backfill_cursor = newest_id
             if saved == 0:

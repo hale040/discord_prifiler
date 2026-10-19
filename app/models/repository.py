@@ -143,6 +143,61 @@ class Repository:
                 s.commit()
             return True
 
+    # ---------------------------------------------------- связи диалога (reply graph)
+    def link_reply_references(self) -> int:
+        """Достроить связи «сообщение → на кого ответ» по reply-цепочкам.
+
+        Для каждого сохранённого сообщения с ``reference_id`` (ответ на другое
+        сообщение): если родитель уже в БД — проставляем ``reply_to_author_id``
+        из автора родителя. Если родителя нет (удалён/вне периода сбора), но
+        Discord прислал resolved-упоминание — автором ответа считаем первого
+        упомянутого пользователя (обычно <@id> стоит в начале реплики-ответа).
+
+        Идемпотентно: повторный пропуск ничего не меняет. Возвращает число
+        обновлённых строк.
+        """
+        with self._sf() as s:
+            rows = s.execute(
+                select(
+                    Message.id,
+                    Message.reference_id,
+                    Message.author_id,
+                    Message.mention_users_json,
+                ).where(
+                    Message.reference_id.is_not(None),
+                    Message.reply_to_author_id.is_(None),
+                )
+            ).all()
+            updated = 0
+            for mid, ref_id, author_id, mentions_json in rows:
+                target = None
+                if ref_id is not None and ref_id != mid:
+                    parent_author = s.scalar(
+                        select(Message.author_id).where(Message.id == ref_id)
+                    )
+                    if parent_author is not None and parent_author != author_id:
+                        target = parent_author
+                if target is None and mentions_json:
+                    import json
+
+                    try:
+                        mentioned = json.loads(mentions_json)
+                    except (ValueError, TypeError):
+                        mentioned = []
+                    for uid in mentioned:
+                        if int(uid) != author_id:
+                            target = int(uid)
+                            break
+                if target is not None:
+                    s.execute(
+                        Message.__table__.update()
+                        .where(Message.id == mid)
+                        .values(reply_to_author_id=target)
+                    )
+                    updated += 1
+            s.commit()
+            return updated
+
     # ------------------------------------------------------------ attachments
     def mark_attachment_downloaded(
         self, attachment_id: int, path: str, sha256: str

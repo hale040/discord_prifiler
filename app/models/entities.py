@@ -157,7 +157,13 @@ class Message(Base):
     tts: Mapped[bool] = mapped_column(Boolean, default=False)
     type: Mapped[int] = mapped_column(Integer, default=0)
     flags: Mapped[int] = mapped_column(Integer, default=0)
-    reference_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # reply-to
+    reference_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)  # reply-to
+    # Автор сообщения, на которое дан ответ (reply_to_author_id). Заполняется
+    # из БД-графа ответов (Repository.link_reply_references) — даёт связи
+    # «кто кому отвечает» даже когда само родительское сообщение не сохранено.
+    reply_to_author_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
 
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
