@@ -30,4 +30,15 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
         cursor.close()
 
     Base.metadata.create_all(engine)
+
+    # Лёгкая миграция для существующих БД: create_all не добавляет колонки.
+    with engine.begin() as conn:
+        from sqlalchemy import inspect, text
+
+        cols = {c["name"] for c in inspect(engine).get_columns("channel_states")}
+        if "oldest_message_id" not in cols:
+            conn.execute(
+                text("ALTER TABLE channel_states ADD COLUMN oldest_message_id BIGINT")
+            )
+
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)

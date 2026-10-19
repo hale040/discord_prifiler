@@ -33,6 +33,15 @@ from app.utils.helpers import human_delay, to_json
 
 log = logging.getLogger("collector")
 
+# Discord epoch: 2015-01-01T00:00:00Z. Snowflake >> 22 + epoch = timestamp ms.
+DISCORD_EPOCH_MS = 1_420_070_400_000
+
+
+def snowflake_for(dt: datetime) -> int:
+    """Минимальный snowflake id для сообщений, отправленных >= dt."""
+    ms = int(dt.timestamp() * 1000) - DISCORD_EPOCH_MS
+    return max(ms, 0) << 22
+
 
 class CollectionService:
     def __init__(self, settings: Settings, repo: Repository, client: UserbotClient) -> None:
@@ -140,39 +149,73 @@ class CollectionService:
         return new_count
 
     async def _backfill_history(self, channel: discord.abc.Messageable, guild_id: int | None) -> None:
-        """Полная выгрузка истории: страница за страницей «вверх», как человек скроллит ленту."""
+        """Выгрузка истории от START_DATE (или от начала канала) к текущему моменту.
+
+        Идём «вниз по ленте» маленькими страницами ``history(after=cursor,
+        oldest_first=True)`` — так же, как человек листает канал вниз.
+        Если задан START_DATE, запросы начинаются сразу с нужной даты
+        (snowflake-курсор), а не с самого начала чата — лишняя история даже
+        не запрашивается у API.
+        """
         state = self.repo.get_state(channel.id)
-        before = state.last_message_id  # продолжаем с того места, где остановились
+        # Курсор: от чего идём вверх по времени.
+        if self.s.start_date is not None:
+            after = snowflake_for(self.s.start_date)
+            log.info(
+                "Backfill с даты старта %s (snowflake-курсор %s).",
+                self.s.start_date.isoformat(), after,
+            )
+        else:
+            # Без ограничения по дате: если в состоянии уже есть сохранённый
+            # самый старый id — продолжим добор от него; иначе с нуля.
+            after = state.oldest_message_id or 0
         total_pages = 0
         while self._running:
-            kwargs: dict[str, Any] = {"limit": random.randint(25, 50)}  # маленькие страницы — «человечнее»
-            if before is not None:
-                kwargs["before"] = before
+            kwargs: dict[str, Any] = {
+                "limit": random.randint(25, 50),  # маленькие страницы — «человечнее»
+                "after": after,
+                "oldest_first": True,
+            }
             batch: list[discord.Message] = []
             async for msg in channel.history(**kwargs):
                 batch.append(msg)
             if not batch:
-                log.info("История догружена полностью (%s страниц).", total_pages)
+                log.info(
+                    "История догружена до текущего момента (%s страниц, курсор=%s).",
+                    total_pages, after,
+                )
                 break
             batch.sort(key=lambda m: m.id)  # сохраняем строго хронологически
             saved = 0
             for msg in batch:
                 saved += int(await self._handle_message(msg, guild_id))
-            before = batch[0].id
+            oldest_id = batch[0].id
+            newest_id = batch[-1].id
             total_pages += 1
-            self.repo.update_state(channel.id, batch[-1].id, saved, guild_id)
+            # last_message_id — самый новый (для инкрементального poll),
+            # oldest_message_id — самая старая загруженная точка (для резюма).
+            self.repo.update_state(channel.id, newest_id, saved, guild_id)
+            self.repo.mark_oldest(channel.id, oldest_id)
+            after = newest_id
             log.info(
-                "Backfill: страница %s, сохранено %s/%s, курсор oldest=%s",
-                total_pages, saved, len(batch), before,
+                "Backfill: страница %s, сохранено %s/%s, диапазон id %s..%s",
+                total_pages, saved, len(batch), oldest_id, newest_id,
             )
             self._notify(
-                "on_backfill_page", total_pages, saved, len(batch), before
+                "on_backfill_page", total_pages, saved, len(batch), oldest_id
             )
             # большая «пауза на прочтение» между страницами истории
             await human_delay(self.s.request_delay_min, self.s.request_delay_max * 2)
 
     # ------------------------------------------------------------ processing
     async def _handle_message(self, msg: discord.Message, guild_id: int | None) -> bool:
+        # Фильтр по дате начала сбора: всё, что раньше START_DATE, игнорируем.
+        if self.s.start_date is not None:
+            ts = getattr(msg, "created_at", None)
+            if ts is not None and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts is not None and ts < self.s.start_date:
+                return False
         data = mappers.message_data(msg, guild_id)
         atts = mappers.attachments_data(msg)
         saved = self.repo.insert_message(data, atts)

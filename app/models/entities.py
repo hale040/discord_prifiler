@@ -224,5 +224,7 @@ class ChannelState(Base):
     channel_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Самый старый загруженный id (для резюма backfill без ограничения по дате)
+    oldest_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     messages_total: Mapped[int] = mapped_column(Integer, default=0)

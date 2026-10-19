@@ -29,6 +29,12 @@ class ConsoleView:
     def on_ready(self, who: str, user_id: int) -> None:
         self._line("READY", f"Вход выполнен от имени пользователя: {who} (id={user_id})")
 
+    def on_start_date(self, dt) -> None:
+        if dt is None:
+            self._line("CONFIG", "START_DATE не задан — собираем всю историю канала")
+        else:
+            self._line("CONFIG", f"Сбор сообщений с даты: {dt.isoformat()} (UTC)")
+
     def on_backfill_page(self, page: int, saved: int, total: int, cursor: int) -> None:
         self._line("HISTORY", f"страница #{page}: сохранено {saved}/{total}, oldest cursor={cursor}")
 

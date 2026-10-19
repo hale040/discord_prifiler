@@ -42,6 +42,11 @@ class CollectorController:
         self.collector = CollectionService(settings, self.repo, self.client)
         self.collector.view = self.view  # сервис может докладывать о прогрессе
 
+        if settings.start_date is not None:
+            self.view.on_start_date(settings.start_date)
+        else:
+            self.view.on_start_date(None)
+
         self._started = asyncio.Event()
         self._stats_task: asyncio.Task | None = None
 

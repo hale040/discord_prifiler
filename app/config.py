@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 
 def _env_int(name: str, default: int) -> int:
@@ -12,6 +13,25 @@ def _env_int(name: str, default: int) -> int:
         return int(raw) if raw.strip() else default
     except ValueError:
         return default
+
+
+def _parse_since(raw: str) -> datetime | None:
+    """Парсит START_DATE / SINCE: '2024-01-01', '2024-01-01 12:30' или ISO8601.
+
+    Naive-датеты трактуются как UTC. Пустое значение -> None (без ограничения).
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("T", " ").replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RuntimeError(
+            f"START_DATE={raw!r} не разбирается. Формат: ГГГГ-ММ-ДД[ ЧЧ:ММ[:СС]] или ISO8601."
+        ) from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass(slots=True)
@@ -29,6 +49,16 @@ class Settings:
 
     # Максимум сообщений за один проход history-запроса
     fetch_limit: int = field(default_factory=lambda: _env_int("FETCH_LIMIT", 100))
+
+    # Дата начала сбора (UTC). Сообщения старше неё не парсятся и не сохраняются.
+    # Формат: '2024-01-01' или '2024-01-01 12:30[:SS]' или ISO8601 с зоной.
+    # Naive-дата трактуется как UTC. Пусто / 0 / 'all' -> собирать всю историю.
+    start_date: datetime | None = field(
+        default_factory=lambda: _parse_since(
+            "" if os.getenv("START_DATE", "").strip() in {"0", "all", "none"}
+            else os.getenv("START_DATE", "")
+        )
+    )
 
     # Задержка между запросами к API, чтобы имитировать поведение живого
     # пользователя (human-like pacing). Случайная величина в диапазоне.

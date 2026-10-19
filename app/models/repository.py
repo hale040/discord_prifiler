@@ -168,6 +168,19 @@ class Repository:
                 st.guild_id = guild_id
             s.commit()
 
+    def mark_oldest(self, channel_id: int, oldest_message_id: int | None) -> None:
+        """Запоминает самый старый загруженный id (для резюма backfill)."""
+        if oldest_message_id is None:
+            return
+        with self._sf() as s:
+            st = s.get(ChannelState, channel_id)
+            if st is None:
+                st = ChannelState(channel_id=channel_id)
+                s.add(st)
+            if st.oldest_message_id is None or oldest_message_id < st.oldest_message_id:
+                st.oldest_message_id = oldest_message_id
+            s.commit()
+
     # ------------------------------------------------------------- analytics
     def stats(self) -> dict[str, int]:
         from sqlalchemy import func

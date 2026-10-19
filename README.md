@@ -68,9 +68,26 @@ app/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # заполнить DISCORD_TOKEN и CHANNEL_ID
+cp .env.example .env        # заполнить DISCORD_TOKEN, CHANNEL_ID и (опционально) START_DATE
 python main.py              # Ctrl+C / SIGTERM — корректное завершение
 ```
+
+### Дата начала сбора (START_DATE)
+
+В `.env` задаётся `START_DATE` — собирать сообщения только с этой даты (UTC):
+
+```
+START_DATE=2024-01-01            # только дата
+START_DATE=2024-01-01 12:30      # дата + время
+START_DATE=                      # пусто (или 0/all) — вся история
+```
+
+Работает в двух уровнях:
+- **Экономия запросов:** backfill стартует сразу с snowflake-курсора,
+  вычисленного из даты (`(ms - Discord epoch) << 22`), — история до этой
+  даты у API вообще не запрашивается.
+- **Фильтр на записи:** любое сообщение (backfill, poll, live-событие) со
+  `created_at < START_DATE` отбрасывается и не попадает в БД.
 
 Прогресс — в консоли (`HISTORY/POLL/PROFILE/MEDIA/STATS`), данные — в
 `data/profiling.db` (SQLite) и `data/attachments/`.
