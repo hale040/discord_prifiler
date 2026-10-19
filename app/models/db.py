@@ -43,5 +43,17 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
         mcols = {c["name"] for c in inspect(engine).get_columns("messages")}
         if "deleted_at" not in mcols:
             conn.execute(text("ALTER TABLE messages ADD COLUMN deleted_at DATETIME"))
+        if "reply_to_author_id" not in mcols:
+            conn.execute(
+                text("ALTER TABLE messages ADD COLUMN reply_to_author_id BIGINT")
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_messages_reply_to_author_id "
+                    "ON messages (reply_to_author_id)"
+                )
+            )
+        if "reference_id" not in mcols:
+            conn.execute(text("ALTER TABLE messages ADD COLUMN reference_id BIGINT"))
 
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)

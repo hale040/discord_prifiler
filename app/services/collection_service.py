@@ -260,6 +260,13 @@ class CollectionService:
             # oldest_message_id — самая старая загруженная точка (для резюма).
             self.repo.update_state(channel.id, newest_id, saved, guild_id)
             self.repo.mark_oldest(channel.id, oldest_id)
+            # достройка связей «кто кому отвечает» по уже сохранённым reply-ссылкам
+            try:
+                linked = self.repo.link_reply_references()
+                if linked:
+                    log.info("Backfill: достроено связей ответов: %s", linked)
+            except Exception:  # noqa: BLE001
+                log.exception("Ошибка достройки графа ответов (страница %s)", total_pages)
             after = newest_id
             log.info(
                 "Backfill: страница %s, сохранено %s/%s, диапазон id %s..%s",

@@ -235,6 +235,11 @@ def message_data(msg: discord.Message, channel_guild_id: int | None) -> dict[str
     ref = getattr(msg, "reference", None)
     if ref is not None:
         data["reference_id"] = _safe(lambda: int(ref.message_id))
+        # если либа отдала resolved-родителя — автора ответа знаем сразу,
+        # без ожидания достройки графа из БД
+        rid = _safe(lambda: int(ref.resolved.author.id))
+        if rid is not None and rid != msg.author.id:
+            data["reply_to_author_id"] = rid
     # сырой дамп — на случай полей, которые мы ещё не маппим
     raw = _safe(lambda: msg.to_dict())
     if raw:

@@ -95,10 +95,15 @@ class CollectorController:
 
     # ------------------------------------------------------------ run loop
     async def _stats_loop(self) -> None:
-        """Периодически показываем сводку по собранному."""
+        """Периодически показываем сводку по собранному + достраиваем граф ответов."""
         while True:
             await asyncio.sleep(60)
             try:
+                # связи «кто кому отвечает» достраиваются из уже сохранённых
+                # reply-ссылок (идемпотентно: обрабатываются только незакрытые строки)
+                linked = await asyncio.to_thread(self.repo.link_reply_references)
+                if linked:
+                    log.info("Достроено связей ответов: %s", linked)
                 self.view.on_stats(self.repo.stats())
             except Exception as exc:  # noqa: BLE001
                 log.debug("stats failed: %s", exc)

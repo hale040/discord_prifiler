@@ -97,9 +97,57 @@ START_DATE=                      # пусто (или 0/all) — вся исто
 - `user_profiles` — глобальный профиль (bio, badges, connections, flags, raw_json)
 - `guild_member_profiles` — серверный профиль (nick, joined_at, timeout, permissions)
 - `user_role_tags` — теги/роли пользователя
-- `messages` — сообщения + метрики (word_count, hashtag_count, mentions, reactions…)
+- `messages` — сообщения + метрики (word_count, hashtag_count, mentions, reactions…),
+  связи диалога: `reference_id` (на какое сообщение ответ) и `reply_to_author_id`
+  (кому отвечает — автор родителя; достраивается фоном из reply-графа, работает
+  даже если родительское сообщение удалено/вне периода сбора)
 - `attachments` — вложения (url, sha256, stored_path, downloaded)
 - `channel_states` — курсор last_message_id для инкрементального сбора (resume-safe)
 
 Повторный запуск продолжает сбор с сохранённого курсора; дедупликация по
 snowflake ID сообщений и вложений.
+
+## Компактный экспорт диалогов для LLM
+
+Связи «кто кому отвечает» строятся автоматически (каждая страница backfill и
+цикл статистики вызывают `Repository.link_reply_references()`), а также
+однократно для уже накопленных данных:
+
+```bash
+python -c "from app.config import Settings; from app.models.db import init_db; \
+from app.models.repository import Repository; \
+print(Repository(init_db(Settings())).link_reply_references())"
+```
+
+Выгрузка диалога в токено-экономичном формате (метки U1/U2…, имена — один раз
+в шапке, ответы — `>N`, правка/удаление — флаги `e/d`, вложения — `[img]`):
+
+```bash
+# весь диалог канала вокруг целевого пользователя (с ответами собеседников)
+python -m app.services.export_service --user fluffy_rat_69 -o dialog.txt
+
+# фильтры: период, канал, лимит, обрезка длинных реплик
+python -m app.services.export_service --user-id 123456789 --since 2024-01-01 --channel 123 --max-len 150
+
+# только реплики целевого пользователя (максимально компактно, но без контекста)
+python -m app.services.export_service --user fluffy_rat_69 --target-only
+```
+
+Пример вывода:
+
+```
+# target=Fluffy(111) span=2026-10-01..2026-10-01 msgs=6
+# U1=Fluffy, U2=partner_x, U3=guest_y
+# формат: 'U№ ЧЧ:ММ [>N|@Uk][ed] текст [img]', где >N — ответ на реплику N, e/d — edit/delete
+
+# 2026-10-01
+U2 12:00: Кофе будешь?
+U1 12:01: >1 давай, и фотоотчет скинь
+U1 12:03: @U3 а ты что молчишь?
+U2 12:04: >2 не дождешься
+U1 12:05: e Огонь горит уже так жарко… [img]
+```
+
+`>N` — ответ на реплику №N этого же экспорта; `@Uk` — адресат, если
+родительского сообщения нет в выборке (удалено/вне периода). Пингующие
+`<@id>` из текста вырезаны — роль участника полностью описывается связями.
