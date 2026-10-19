@@ -29,11 +29,49 @@ def _safe(fn, default=None):
         return default
 
 
-def flags_to_list(flags: discord.UserFlags | None) -> list[str]:
+def to_int(value, default: int = 0) -> int:
+    """Безопасное приведение к int.
+
+    discord.py-self (2.x) возвращает для enum-полей объекты вида
+    `_EnumValue_MessageType` / `_EnumValue_PremiumType`, у которых НЕТ
+    `__int__` — прямой `int(msg.type)` падает с TypeError. Число лежит в
+    атрибуте `.value`. Также поддерживаем строковые числа и None.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    inner = getattr(value, "value", None)
+    if inner is not None and inner is not value:
+        try:
+            return int(inner)
+        except (TypeError, ValueError):
+            pass
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def flags_to_list(flags) -> list[str]:
+    """Только ВЗВЕДЁННЫЕ имена флагов.
+
+    discord.py-self: итерация по объекту Flags отдаёт пары (name, bool)
+    для всех известных флагов — без фильтра `if val` список содержит
+    вообще все возможные флаги, что ломает профайлинг.
+    Поддержка и dict-флагов ({"staff": true}), и enum-списков.
+    """
     if flags is None:
         return []
     try:
-        return [name for name, val in flags]
+        if isinstance(flags, dict):
+            return [k for k, v in flags.items() if v]
+        items = list(flags)
+        if items and isinstance(items[0], tuple):
+            return [name for name, val in items if val]
+        return [str(f) for f in items]  # iterable of enabled enum values
     except Exception:  # noqa: BLE001
         return []
 
@@ -87,7 +125,7 @@ def user_fields(user: discord.abc.User) -> dict[str, Any]:
                 for c in conns
             ]
         )
-    fields["premium_type"] = _safe(lambda: int(user.premium_type))
+    fields["premium_type"] = _safe(lambda: to_int(user.premium_type, -1))
     fields["premium_since"] = _safe(lambda: user.premium_since)
     mg = _safe(lambda: list(user.mutual_guilds))
     mf = _safe(lambda: list(user.mutual_friends))
@@ -155,8 +193,8 @@ def message_data(msg: discord.Message, channel_guild_id: int | None) -> dict[str
         "content": msg.content or "",
         "clean_content": clean or "",
         "tts": bool(getattr(msg, "tts", False)),
-        "type": int(getattr(msg, "type", 0) or 0),
-        "flags": int(getattr(msg.flags, "value", 0) or 0) if getattr(msg, "flags", None) else 0,
+        "type": to_int(getattr(msg, "type", 0)),
+        "flags": to_int(getattr(msg.flags, "value", 0)) if getattr(msg, "flags", None) else 0,
         "timestamp": msg.created_at,
         "edited_at": msg.edited_at,
         "pinned": bool(getattr(msg, "pinned", False)),
