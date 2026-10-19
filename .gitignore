@@ -3,3 +3,19 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+
+# Local data (SQLite DB, downloaded media)
+data/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Logs
+*.log
