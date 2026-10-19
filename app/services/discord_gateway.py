@@ -1,0 +1,121 @@
+"""Discord-клиент от имени ПОЛЬЗОВАТЕЛЬСКОГО аккаунта (userbot).
+
+Используется библиотека ``discord.py-self`` (форк discord.py для self-bot /
+user-token подключений). В отличие от официальной библиотеки она:
+
+  * подключается по user-token'у (Client, а не AutoShardedBot);
+  * отправляет корректные client_type/properties, чтобы Discord видел
+    обычный клиент (web/desktop/mobile), а не бота;
+  * умеет делать пользовательские эндпоинты: /users/{id}/profile
+    (полный профиль: bio, pronouns, badges, connections, mutual guilds).
+
+Anti-detection / human-like поведение реализовано здесь и в CollectionService:
+  * случайные паузы между запросами (REQUEST_DELAY_MIN/MAX);
+  * история запрашивается small-pages через history(after=cursor) — ровно так,
+    как это делает UI-клиент при скролле канала вверх;
+  * никаких команд, реакций, отправки сообщений — только чтение.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import discord
+
+log = logging.getLogger("discord_gateway")
+
+
+class UserbotClient(discord.Client):
+    """Тонкая обёртка над discord.py-self Client с user-oriented настройками."""
+
+    def __init__(self, token: str, *, gateway_callback, ready_callback) -> None:
+        # discord.py-self сам формирует корректные gateway properties по
+        # user-token'у (client_type web/desktop/mobile), поэтому трафик
+        # выглядит как обычный клиент Discord, а не как бот-либария.
+        # Максимально «тихий» кэш: участников не держим, гильдии не чанкуем.
+        super().__init__(
+            member_cache_flags=discord.MemberCacheFlags.none(),
+            chunk_guilds_at_startup=False,
+            guild_subscriptions=False,
+            max_messages=None,  # ничего не кэшируем в памяти
+            status=discord.Status.online,
+        )
+        self._token = token
+        self._gateway_callback = gateway_callback
+        self._ready_callback = ready_callback
+
+    # ------------------------------------------------------------- lifecycle
+    async def start(self) -> None:
+        # В discord.py-self метод start() принимает только токен (bot= уже не нужен)
+        await super().start(self._token)
+
+    # ---------------------------------------------------------------- events
+    async def on_message(self, message: discord.Message) -> None:
+        """Live-событие MESSAGE_CREATE — отдаём готовый объект контроллеру.
+
+        Основной источник данных — периодический history-опрос; это событие
+        лишь ускоряет реакцию (не ждём следующего интервала).
+        """
+        try:
+            await self._gateway_callback("MESSAGE_CREATE", {"message": message})
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка live-обработки сообщения %s", getattr(message, "id", "?"))
+
+    # ---------------------------------------------------------------- events
+    async def on_ready(self) -> None:
+        me = self.user
+        log.info(
+            "Вход выполнен: %s (id=%s) — режим пользователя, бот-флаг отсутствует",
+            getattr(me, "name", "?"),
+            getattr(me, "id", "?"),
+        )
+        if me is not None and getattr(me, "bot", False):
+            log.warning("Токен помечен как bot-токен! Для user-режима нужен user-token.")
+        await self._ready_callback(self)
+
+    # ------------------------------------------------------------ permissions
+    async def safe_fetch_channel(self, channel_id: int) -> discord.abc.Messageable | None:
+        try:
+            return await self.fetch_channel(channel_id)
+        except discord.Forbidden:
+            log.error("Нет доступа к каналу %s (403)", channel_id)
+        except discord.NotFound:
+            log.error("Канал %s не найден (404)", channel_id)
+        except discord.HTTPException as exc:
+            log.error("fetch_channel(%s) failed: %s", channel_id, exc)
+        return None
+
+    async def fetch_full_profile(self, user_id: int):
+        """Полный профиль пользователя (bio, badges, connections, mutual guilds).
+
+        Эндпоинт ``/users/{id}/profile`` доступен только пользовательским
+        токеном — боты его не видят. Возвращает ``discord.UserProfile`` либо None.
+        """
+        try:
+            return await self.fetch_user_profile(
+                user_id,
+                with_mutual_guilds=True,
+                with_mutual_friends=True,
+                with_mutual_friends_count=True,
+            )
+        except TypeError:
+            # подстраховка, если версия либы не поддерживает какие-то kwarg
+            try:
+                return await self.fetch_user_profile(user_id)
+            except discord.DiscordException as exc:
+                log.debug("fetch_user_profile(%s) fallback failed: %s", user_id, exc)
+                return None
+        except discord.Forbidden:
+            log.debug("Профиль %s недоступен (заблокирован/нет доступа)", user_id)
+            return None
+        except discord.HTTPException as exc:
+            log.debug("fetch_user_profile(%s) http error: %s", user_id, exc)
+            return None
+
+    async def fetch_member_safe(self, guild_id: int, user_id: int) -> discord.Member | None:
+        try:
+            guild = self.get_guild(guild_id) or await self.fetch_guild(guild_id)
+            return await guild.fetch_member(user_id)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("fetch_member(%s,%s) failed: %s", guild_id, user_id, exc)
+            return None
