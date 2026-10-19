@@ -1,0 +1,486 @@
+"""Service-слой: периодический сбор данных из канала + скачивание вложений.
+
+Канал опрашивается так, как это делает живой пользователь:
+
+  * «досылка» новых сообщений через ``history(after=cursor)`` — ровно так
+    работает UI при открытии канала;
+  * «прокрутка ленты вверх»small-страницами через ``history(before=..., limit=N)``
+    для добора всей истории;
+  * между запросами — случайные human-like паузы (см. utils.human_delay);
+  * профили авторов добираются эндпоинтом ``/users/{id}/profile``
+    (доступен только user-токену) с отдельной очереди и паузами;
+  * картинки качаются в фоне, тоже с паузами.
+
+Никаких исходящих сообщений/реакций — только чтение.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import os
+import random
+from datetime import datetime, timezone
+from typing import Any
+
+import discord
+
+from app.config import Settings
+from app.models.repository import Repository
+from app.services import mappers
+from app.services.discord_gateway import UserbotClient
+from app.utils.helpers import human_delay, to_json
+
+log = logging.getLogger("collector")
+
+# Discord epoch: 2015-01-01T00:00:00Z. Snowflake >> 22 + epoch = timestamp ms.
+DISCORD_EPOCH_MS = 1_420_070_400_000
+
+
+def snowflake_for(dt: datetime) -> int:
+    """Минимальный snowflake id для сообщений, отправленных >= dt."""
+    ms = int(dt.timestamp() * 1000) - DISCORD_EPOCH_MS
+    return max(ms, 0) << 22
+
+
+def _to_snowflake(value: int | None) -> discord.Object | None:
+    """discord.py-self ожидает в history(after=/before=) объект с атрибутом .id.
+
+    Числовой snowflake заворачиваем в discord.Object — иначе внутри
+    abc.Messageable.history происходит AttributeError: 'int' object ...
+    """
+    if value is None:
+        return None
+    return discord.Object(id=int(value))
+
+
+class CollectionService:
+    def __init__(self, settings: Settings, repo: Repository, client: UserbotClient) -> None:
+        self.s = settings
+        self.repo = repo
+        self.client = client
+        # view может быть подменён контроллером для доклада о прогрессе
+        self.view = None
+        # кэш уже опрофиленных пользователей в рамках процесса
+        self._profiled: set[int] = set()
+        self._queued_profiles: set[int] = set()
+        self._profile_queue: asyncio.Queue[int] = asyncio.Queue()
+        self._running = False
+        self._tasks: list[asyncio.Task] = []
+
+    def _notify(self, method: str, *args) -> None:
+        if self.view is not None:
+            try:
+                getattr(self.view, method)(*args)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ------------------------------------------------------------- public API
+    async def handle_live_message(self, msg: discord.Message, guild_id: int | None) -> bool:
+        """Обработка live MESSAGE_CREATE (вызывается контроллером)."""
+        return await self._handle_message(msg, guild_id)
+
+    async def handle_live_edit(self, msg: Any, before: Any = None) -> bool:
+        """Обработка live MESSAGE_EDIT: фиксируем новый контент и метрики."""
+        mid = getattr(msg, "id", None) or getattr(before, "id", None)
+        if not mid:
+            return False
+        content = getattr(msg, "content", None)
+        clean = getattr(msg, "clean_content", None)
+        # если либа прислала «пустой» partial без содержимого — берём из before
+        if content is None and before is not None:
+            content = getattr(before, "content", "")
+        if clean is None:
+            clean = content
+        edited_at = getattr(msg, "edited_at", None) or getattr(before, "edited_at", None)
+        if edited_at is not None and edited_at.tzinfo is None:
+            edited_at = edited_at.replace(tzinfo=timezone.utc)
+        await asyncio.to_thread(
+            self.repo.update_message_edited, int(mid), edited_at, clean or ""
+        )
+        self._notify("on_message_edited", int(mid))
+        return True
+
+    async def handle_live_delete(self, msg_or_id: Any) -> bool:
+        """Обработка live MESSAGE_DELETE: помечаем удалённым, данные храним."""
+        mid = getattr(msg_or_id, "id", msg_or_id)
+        try:
+            mid = int(mid)
+        except (TypeError, ValueError):
+            return False
+        marked = await asyncio.to_thread(self.repo.mark_message_deleted, mid)
+        if marked:
+            self._notify("on_message_deleted", mid)
+        return marked
+
+    # ------------------------------------------------------------------ run
+    async def start(self) -> None:
+        """Запуск фоновых циклов (вызывается после on_ready)."""
+        if self._running:
+            return
+        self._running = True
+        channel = await self.client.safe_fetch_channel(self.s.channel_id)
+        if channel is None:
+            raise RuntimeError(f"Канал {self.s.channel_id} недоступен — завершение.")
+        guild_id = getattr(getattr(channel, "guild", None), "id", None)
+        log.info(
+            "Целевой канал: #%s (guild=%s). Старт периодического сбора.",
+            getattr(channel, "name", channel.id), guild_id,
+        )
+        self._tasks = [
+            asyncio.create_task(self._poll_loop(channel, guild_id), name="poll-loop"),
+            asyncio.create_task(self._profile_worker(), name="profile-worker"),
+            asyncio.create_task(self._attachment_worker(), name="attachment-worker"),
+        ]
+
+    async def stop(self) -> None:
+        self._running = False
+        for t in self._tasks:
+            t.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+
+    # ------------------------------------------------------------- poll loop
+    async def _poll_loop(self, channel: discord.abc.Messageable, guild_id: int | None) -> None:
+        """Основной цикл: раз в POLL_INTERVAL_SEC запрашиваем чат."""
+        # Первый проход — полная выгрузка истории от старых к новым,
+        # затем переходим в режим инкрементальной «досылки».
+        try:
+            await self._backfill_history(channel, guild_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка первичной выгрузки истории")
+
+        consecutive_errors = 0
+        while self._running:
+            interval = self.s.poll_interval_sec * random.uniform(0.85, 1.25)
+            await asyncio.sleep(interval)  # периодичность опроса канала
+            try:
+                await self._fetch_new_messages(channel, guild_id)
+                consecutive_errors = 0
+            except discord.LoginFailure:
+                log.error("Сессия недействительна (LoginFailure) — останавливаю сбор.")
+                self._running = False
+                self.client._ready_fired = False  # на случай внешнего перезапуска
+                if getattr(self.client, "is_logged_in", lambda: False)():
+                    await self.client.close()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                consecutive_errors += 1
+                log.exception("Ошибка инкрементального опроса канала (подряд: %s)", consecutive_errors)
+                if consecutive_errors >= 3:
+                    # экспоненциальный backoff: 4x, 8x, ... но не дольше 30 мин
+                    penalty = min(interval * (2 ** consecutive_errors), 1800)
+                    log.warning("Бэкофф: следующий опрос через ~%.0f сек.", penalty)
+                    await asyncio.sleep(penalty)
+                    consecutive_errors = 0
+
+    # ----------------------------------------------------------- history ops
+    async def _fetch_new_messages(self, channel: discord.abc.Messageable, guild_id: int | None) -> int:
+        """Достаём сообщения после последнего известного курсора (как скролл вниз)."""
+        state = self.repo.get_state(channel.id)
+        after = state.last_message_id
+        new_count = 0
+        max_id = after
+        kwargs: dict[str, Any] = {"limit": min(self.s.fetch_limit, 100), "oldest_first": True}
+        if after:
+            kwargs["after"] = _to_snowflake(after)
+
+        batch: list[discord.Message] = []
+        async for msg in channel.history(**kwargs):
+            batch.append(msg)
+        batch.sort(key=lambda m: m.id)
+        # всю пачку пишем в БД одним коммитом — меньше fsync/WAL-чреды
+        for msg in batch:
+            saved = await asyncio.to_thread(self._handle_message_sync, msg, guild_id)
+            new_count += int(saved)
+            if max_id is None or msg.id > max_id:
+                max_id = msg.id
+            await human_delay(self.s.request_delay_min / 4, self.s.request_delay_max / 4)
+
+        if batch or new_count:
+            self.repo.update_state(channel.id, max_id, new_count, guild_id)
+        if new_count:
+            log.info("Новых сообщений: %s (курсор -> %s)", new_count, max_id)
+        else:
+            log.debug("Новых сообщений нет.")
+        self._notify("on_new_messages", new_count, max_id)
+        return new_count
+
+    async def _backfill_history(self, channel: discord.abc.Messageable, guild_id: int | None) -> None:
+        """Выгрузка истории от START_DATE (или от начала канала) к текущему моменту.
+
+        Идём «вниз по ленте» маленькими страницами ``history(after=cursor,
+        oldest_first=True)`` — так же, как человек листает канал вниз.
+        Если задан START_DATE, запросы начинаются сразу с нужной даты
+        (snowflake-курсор), а не с самого начала чата — лишняя история даже
+        не запрашивается у API.
+        """
+        state = self.repo.get_state(channel.id)
+        # Курсор: от чего идём вверх по времени.
+        if self.s.start_date is not None:
+            after = snowflake_for(self.s.start_date)
+            log.info(
+                "Backfill с даты старта %s (snowflake-курсор %s).",
+                self.s.start_date.isoformat(), after,
+            )
+        else:
+            # Без ограничения по дате: если в состоянии уже есть сохранённый
+            # самый старый id — продолжим добор от него; иначе с нуля.
+            after = state.oldest_message_id or 0
+        total_pages = 0
+        while self._running:
+            kwargs: dict[str, Any] = {
+                "limit": random.randint(25, 50),  # маленькие страницы — «человечнее»
+                "after": _to_snowflake(after),
+                "oldest_first": True,
+            }
+            batch: list[discord.Message] = []
+            async for msg in channel.history(**kwargs):
+                batch.append(msg)
+            if not batch:
+                log.info(
+                    "История догружена до текущего момента (%s страниц, курсор=%s).",
+                    total_pages, after,
+                )
+                break
+            batch.sort(key=lambda m: m.id)  # сохраняем строго хронологически
+            saved = 0
+            for msg in batch:
+                # БД-запись уводим из event loop в поток — иначе многостраничный
+                # backfill блокирует gateway и рвёт heartbeat-сессию.
+                saved += int(await asyncio.to_thread(self._handle_message_sync, msg, guild_id))
+            oldest_id = batch[0].id
+            newest_id = batch[-1].id
+            total_pages += 1
+            # last_message_id — самый новый (для инкрементального poll),
+            # oldest_message_id — самая старая загруженная точка (для резюма).
+            self.repo.update_state(channel.id, newest_id, saved, guild_id)
+            self.repo.mark_oldest(channel.id, oldest_id)
+            after = newest_id
+            log.info(
+                "Backfill: страница %s, сохранено %s/%s, диапазон id %s..%s",
+                total_pages, saved, len(batch), oldest_id, newest_id,
+            )
+            self._notify(
+                "on_backfill_page", total_pages, saved, len(batch), oldest_id
+            )
+            # большая «пауза на прочтение» между страницами истории
+            await human_delay(self.s.request_delay_min, self.s.request_delay_max * 2)
+
+    # ------------------------------------------------------------ processing
+    def _handle_message_sync(self, msg: discord.Message, guild_id: int | None) -> bool:
+        """Синхронное ядро обработки сообщения (БД-операции).
+
+        Вызывается либо напрямую из event loop (live-события), либо через
+        asyncio.to_thread во время bulk-backfill — чтобы долгие SQLite-коммиты
+        не блокировали gateway-сокет (иначе Discord видит лаги и рвёт сессию).
+        """
+        # Фильтр по дате начала сбора: всё, что раньше START_DATE, игнорируем.
+        if self.s.start_date is not None:
+            ts = getattr(msg, "created_at", None)
+            if ts is not None and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts is not None and ts < self.s.start_date:
+                return False
+        data = mappers.message_data(msg, guild_id)
+        atts = mappers.attachments_data(msg)
+        saved = self.repo.insert_message(data, atts)
+        if not saved:
+            # сообщение уже есть — обновим только факт редактирования
+            if data.get("edited_at"):
+                self.repo.update_message_edited(
+                    data["id"], data["edited_at"], data.get("clean_content", "")
+                )
+            return False
+        # автор + упомянутые => в очередь профилирования
+        for uid in mappers.extract_user_ids(msg):
+            self._queue_profile(uid)
+        # участники, пришедшие прямо в payload сообщения (полные member-объекты)
+        if getattr(msg, "guild", None) is not None:
+            member_objs = [msg.author] + list(msg.mentions or [])
+            for u in member_objs:
+                if isinstance(u, discord.Member):
+                    try:
+                        gf, roles = mappers.guild_and_roles_from_member(u)
+                        base = mappers.user_fields(u)
+                        if gf or base:
+                            self.repo.upsert_user_profile(u.id, base, gf or None, roles or None)
+                    except Exception:  # noqa: BLE001
+                        log.debug("Не удалось сохранить server-данные из payload: %s", u.id)
+        return True
+
+    async def _handle_message(self, msg: discord.Message, guild_id: int | None) -> bool:
+        return self._handle_message_sync(msg, guild_id)
+
+    def _queue_profile(self, user_id: int) -> None:
+        if user_id in self._profiled or user_id in self._queued_profiles:
+            return
+        self._queued_profiles.add(user_id)
+        self._profile_queue.put_nowait(user_id)
+
+    # ------------------------------------------------------- profile worker
+    async def _profile_worker(self) -> None:
+        """Фоновое профайлирование: полный профиль + серверный Member + роли."""
+        while self._running:
+            try:
+                user_id = await asyncio.wait_for(self._profile_queue.get(), timeout=5.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                raise
+            try:
+                await self._profile_user(user_id)
+            except Exception:  # noqa: BLE001
+                log.exception("Ошибка профилирования пользователя %s", user_id)
+            finally:
+                self._queued_profiles.discard(user_id)
+                self._profile_queue.task_done()
+            await human_delay(self.s.request_delay_min, self.s.request_delay_max)
+
+    async def _profile_user(self, user_id: int) -> None:
+        fields: dict[str, Any] = {}
+        guild_fields: dict[str, Any] | None = None
+        roles: list[dict[str, Any]] | None = None
+
+        # 1) Полный пользовательский профиль (bio, badges, connections, mutual...)
+        prof = await self.client.fetch_full_profile(user_id)
+        if prof is not None:
+            fields = mappers.user_fields(prof)
+            raw_extra = {
+                "primary_guild": _safe_attr(lambda: prof.primary_guild.name),
+                "collectibles": _safe_json(lambda: list(prof.collectibles)),
+            }
+            merged = {k: v for k, v in raw_extra.items() if v}
+            if merged:
+                old_raw = fields.get("raw_json")
+                base = _load_json(old_raw) if old_raw else {}
+                base.update(merged)
+                fields["raw_json"] = to_json(base)
+
+        # 2) Объект пользователя (username/avatar/created_at) — если профиль не пришёл
+        if not fields:
+            try:
+                u = await self.client.fetch_user(user_id)
+                fields = mappers.user_fields(u)
+            except discord.DiscordException as exc:
+                log.debug("fetch_user(%s): %s", user_id, exc)
+
+        # 3) Серверный участник: nick/joined_at/роли/таймауты/права
+        state = self.repo.get_state(self.s.channel_id)
+        gid = state.guild_id
+        if gid is not None:
+            member = await self.client.fetch_member_safe(gid, user_id)
+            if member is not None:
+                gf, rlist = mappers.guild_and_roles_from_member(member)
+                if gf:
+                    guild_fields = gf
+                roles = rlist or None
+                # из Member можно достать и базовые поля быстрее, чем из profile
+                for k, v in mappers.user_fields(member).items():
+                    fields.setdefault(k, v)
+
+        # 4) Локаль/таймзон — доступны только о себе через profile.metadata;
+        #    сохраняем всё, что удалось получить.
+        if fields or guild_fields:
+            self.repo.upsert_user_profile(user_id, fields or {}, guild_fields, roles)
+            self._profiled.add(user_id)
+            log.debug("Профиль сохранён: %s (+roles=%s)", user_id, len(roles or []))
+            self._notify(
+                "on_profile_saved",
+                user_id,
+                fields.get("username") or str(user_id),
+                len(roles or []),
+            )
+
+    # ---------------------------------------------------- attachment worker
+    async def _attachment_worker(self) -> None:
+        """Фоновое скачивание картинок на диск (data/attachments/...)."""
+        if not self.s.download_attachments:
+            log.info("Скачивание вложений отключено (DOWNLOAD_ATTACHMENTS=0).")
+            return
+        while self._running:
+            pending = self.repo.pending_image_attachments(limit=5)
+            if not pending:
+                await asyncio.sleep(10)
+                continue
+            for att in pending:
+                if not self._running:
+                    return
+                try:
+                    await self._download_attachment(att)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    log.exception("Не удалось скачать вложение %s", att.id)
+                await human_delay(self.s.request_delay_min, self.s.request_delay_max)
+
+    async def _download_attachment(self, att) -> None:
+        # путь: data/attachments/<message-shard>/<yyyy-mm>/<id>_<filename>
+        dt = datetime.now(timezone.utc)
+        subdir = os.path.join(self.s.attachments_dir, str(att.message_id // 1_000), f"{dt:%Y-%m}")
+        os.makedirs(subdir, exist_ok=True)
+        safe_name = "".join(c for c in att.filename if c.isalnum() or c in "._-")[:120] or f"{att.id}.bin"
+        path = os.path.join(subdir, f"{att.id}_{safe_name}")
+        if os.path.exists(path):
+            self.repo.mark_attachment_downloaded(att.id, path, sha256_of_file(path))
+            self._notify("on_attachment_saved", att.id, path, os.path.getsize(path))
+            return
+
+        # Скачиваем напрямую по сохранённому URL через CDN-транспорт библиотеки
+        # (запрос идёт с теми же заголовками/сессией, что и у «браузера»).
+        data: bytes | None = None
+        try:
+            data = await self.client.http.get_from_cdn(att.url)
+        except discord.HTTPException as exc:
+            log.debug("get_from_cdn(%s) failed: %s — пробуем proxy_url", att.id, exc)
+            if att.proxy_url:
+                try:
+                    data = await self.client.http.get_from_cdn(att.proxy_url)
+                except discord.HTTPException as exc2:
+                    log.warning("Вложение %s недоступно: %s", att.id, exc2)
+                    return
+        if data is None:
+            return
+        with open(path, "wb") as f:
+            f.write(data)
+        self.repo.mark_attachment_downloaded(att.id, path, hashlib.sha256(data).hexdigest())
+        log.debug("Скачано: %s (%s байт)", path, len(data))
+        self._notify("on_attachment_saved", att.id, path, len(data))
+
+
+# --------------------------------------------------------------------- helpers
+def sha256_of_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_json(s: str) -> dict:
+    import json
+
+    try:
+        v = json.loads(s)
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
+
+
+def _safe_attr(fn):
+    try:
+        v = fn()
+        return str(v) if v is not None and not isinstance(v, (int, float, bool, str)) else v
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _safe_json(fn):
+    try:
+        return to_json(fn())
+    except Exception:  # noqa: BLE001
+        return None
