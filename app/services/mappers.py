@@ -132,7 +132,12 @@ def user_fields(user: discord.abc.User) -> dict[str, Any]:
     mfc = _safe(lambda: user.mutual_friends_count)
     raw: dict[str, Any] = {}
     if mg:
-        raw["mutual_guilds"] = [{"id": g.id, "name": g.name} for g in mg]
+        # discord.py-self 2.1.0: MutualGuild имеет только .id и .nick —
+        # имени гильдии у объекта нет (AttributeError при прямом обращении).
+        raw["mutual_guilds"] = [
+            {"id": _safe(lambda g=g: int(g.id)), "nick": _safe(lambda g=g: g.nick)}
+            for g in mg
+        ]
     if mf:
         raw["mutual_friends"] = [f.id for f in mf]
     if mfc is not None:
