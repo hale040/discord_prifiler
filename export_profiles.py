@@ -128,15 +128,157 @@ def fetch_roles(conn) -> dict[int, list[dict]]:
 def fetch_messages(conn) -> dict[int, list[dict]]:
     out: dict[int, list[dict]] = {}
     q = """SELECT id, channel_id, guild_id, author_id, content, clean_content,
-                  type, reference_id, timestamp, edited_at, deleted_at, pinned,
+                  type, reference_id, reply_to_author_id, timestamp, edited_at,
+                  deleted_at, pinned,
                   word_count, char_count, has_attachment, embed_count,
                   mention_count, hashtag_count, reaction_total, reactions_json,
                   mention_users_json, stickers_json
            FROM messages WHERE deleted_at IS NULL ORDER BY timestamp ASC"""
     for r in conn.execute(q):
         d = dict(r)
+        # старые БД без колонки reply_to_author_id -> None (достроим позже)
+        d.setdefault("reply_to_author_id", None)
         out.setdefault(d["author_id"], []).append(d)
     return out
+
+
+def fetch_all_messages_flat(conn) -> list[dict]:
+    """Все сообщения канала хронологически (для сборки диалогов с собеседниками)."""
+    q = """SELECT id, channel_id, guild_id, author_id, content, clean_content,
+                  type, reference_id, reply_to_author_id, timestamp, edited_at,
+                  deleted_at, pinned,
+                  word_count, char_count, has_attachment, embed_count,
+                  mention_count, hashtag_count, reaction_total, reactions_json,
+                  mention_users_json, stickers_json
+           FROM messages WHERE deleted_at IS NULL ORDER BY timestamp ASC, id ASC"""
+    rows = [dict(r) for r in conn.execute(q)]
+    for d in rows:
+        d.setdefault("reply_to_author_id", None)
+    return rows
+
+
+def build_names(conn, users: list[dict]) -> dict[int, str]:
+    """user_id -> отображаемое имя (global_name/username, серверный ник в приоритете)."""
+    names = {u["user_id"]: (u["global_name"] or u["username"] or f"id{u['user_id']}")
+             for u in users}
+    try:
+        for g in conn.execute("SELECT user_id, nick FROM guild_member_profiles"):
+            if g["nick"]:
+                names[g["user_id"]] = g["nick"]
+    except sqlite3.Error:
+        pass
+    return names
+
+
+# ---------------------------------------------------------------------------
+# Связи диалога: reply-цепочки + временной контекст собеседников
+# ---------------------------------------------------------------------------
+
+CONTEXT_WINDOW_SEC = 120  # окно «соседних» реплик для восстановления ветки
+
+
+def rebuild_links(messages_all: dict[int, list[dict]]) -> None:
+    """Достроить ``reply_to_author_id`` из raw-полей БД (идемпотентно).
+
+    Используется, если коллектор ещё не выполнил link_reply_references():
+    1) родитель по reference_id есть в базе -> автор родителя;
+    2) только для сообщений БЕЗ reference_id: первое resolved-упоминание
+       (mention_users_json), отличные от автора. Для настоящих reply-сообщений
+       упоминания не используются — там <@id> это ping третьих лиц, а не адресат.
+    """
+    by_id = {m["id"]: m for msgs in messages_all.values() for m in msgs}
+    for m in by_id.values():
+        if m.get("reply_to_author_id"):
+            continue
+        ref = m.get("reference_id")
+        if ref and ref != m["id"]:
+            parent = by_id.get(ref)
+            if parent and parent["author_id"] != m["author_id"]:
+                m["reply_to_author_id"] = parent["author_id"]
+        elif not ref:
+            for uid in load_json(m.get("mention_users_json")) or []:
+                try:
+                    uid = int(uid)
+                except (TypeError, ValueError):
+                    continue
+                if uid != m["author_id"]:
+                    m["reply_to_author_id"] = uid
+                    break
+
+
+def build_dialog(
+    all_msgs: list[dict],
+    target_uid: int,
+    window_sec: int = CONTEXT_WINDOW_SEC,
+) -> tuple[list[dict], str]:
+    """Собрать связанные беседы вокруг сообщений целевого пользователя.
+
+    Правила связности (сообщения уже отсортированы по времени):
+      * корень ветки — реплика целевого;
+      * reply-связь: сообщение с reference_id == id другой реплики любой
+        стороны, или ответ адресован целевому (reply_to_author_id);
+      * временная близость +-window_sec внутри того же канала.
+    Возвращает (уникальные сообщения хронологически, режим связи).
+    """
+    if not all_msgs:
+        return [], "none"
+    tgt_ts = [parse_ts(m["timestamp"]) for m in all_msgs]
+    tgt_pos = {m["id"]: i for i, m in enumerate(all_msgs)}
+    selected: dict[int, dict] = {}
+    linked_any = False
+
+    def add(msg: dict) -> None:
+        selected[msg["id"]] = msg
+
+    def neighbor_ids(center_idx: int, want_target: bool | None) -> list[int]:
+        """Индексы соседей в окне; want_target=None — все, True/False — только
+        реплики целевого / собеседников."""
+        ts = tgt_ts[center_idx]
+        ids = []
+        j = center_idx - 1
+        while j >= 0 and (ts - tgt_ts[j]).total_seconds() <= window_sec:
+            m = all_msgs[j]
+            if want_target is None or (m["author_id"] == target_uid) == want_target:
+                ids.append(m["id"])
+            j -= 1
+        j = center_idx + 1
+        end = len(all_msgs)
+        while j < end and (tgt_ts[j] - ts).total_seconds() <= window_sec:
+            m = all_msgs[j]
+            if want_target is None or (m["author_id"] == target_uid) == want_target:
+                ids.append(m["id"])
+            j += 1
+        return ids
+
+    for i, m in enumerate(all_msgs):
+        if m["author_id"] != target_uid:
+            continue
+        add(m)
+        # 1) прямые reply-связи в обе стороны
+        ref = m.get("reference_id")
+        if ref and ref in tgt_pos and ref != m["id"]:
+            add(all_msgs[tgt_pos[ref]])
+            linked_any = True
+        # соседи, отвечающие на текущее (дочерние реплики)
+        for other in all_msgs[max(0, i - 40): i + 41]:
+            if other["id"] == m["id"]:
+                continue
+            if other.get("reference_id") == m["id"] or (
+                other.get("reply_to_author_id") == target_uid
+                and other.get("reference_id") in (None, m["id"])
+            ):
+                add(other)
+                linked_any = True
+        # 2) временной контекст: реплики собеседников рядом с целевым
+        for nid in neighbor_ids(i, want_target=False):
+            add(all_msgs[tgt_pos[nid]])
+        # и собственные соседние реплики (контекст монолога/темы)
+        for nid in neighbor_ids(i, want_target=True):
+            add(all_msgs[tgt_pos[nid]])
+
+    mode = "reply+time" if linked_any else "time-only"
+    result = sorted(selected.values(), key=lambda x: (x["timestamp"], x["id"]))
+    return result, mode
 
 
 def row_get(row: dict, key: str, default=None):
@@ -306,8 +448,108 @@ def analyze_messages(msgs: list[dict], all_user_ids: set[int]) -> dict:
 # Транскрипт и очистка от PII
 # ---------------------------------------------------------------------------
 
-def make_transcript(msgs: list[dict], max_chars: int, redact_pii: bool) -> tuple[str, bool]:
-    """Хронологическая лента вида: [2026-10-07 14:03] текст. Обрезка с хвоста."""
+def make_transcript(
+    msgs: list[dict],
+    max_chars: int,
+    redact_pii: bool,
+    target_uid: int | None = None,
+    names: dict[int, str] | None = None,
+) -> tuple[str, bool]:
+    """Компактная диалоговая лента (экономию токенов — приоритет).
+
+    Без контекста (target_uid=None) — старый формат «[дата время] текст».
+    С контекстом — строки вида:
+        T 14:03 >5 текст            — реплика целевого пользователя
+        O2 14:04 >2 текст           — собеседник O2 (имя — один раз в шапке)
+        *                             — начало новой темы/ветки
+    Флаги: >N — ответ на реплику N, e/d — edit/delete, [img]/[emb] — медиа.
+    Обрезка с ХВОСТА ленты (последние сообщения приоритетнее).
+    """
+    if target_uid is None or names is None:
+        return _make_transcript_plain(msgs, max_chars, redact_pii)
+
+    header_rows = list(msgs)
+    labels: dict[int, str] = {}
+    order: list[tuple[str, int]] = [("T", target_uid)]
+    for m in header_rows:
+        aid = m["author_id"]
+        if aid == target_uid or aid in labels:
+            continue
+        lab = f"O{len(order)}"
+        labels[aid] = lab
+        order.append((lab, aid))
+    for m in header_rows:
+        rid = m.get("reply_to_author_id")
+        if rid and rid != target_uid and rid not in labels:
+            lab = f"O{len(order)}"
+            labels[rid] = lab
+            order.append((lab, rid))
+
+    legend = ", ".join(f"{lab}={names.get(uid, uid)}" for lab, uid in order)
+    head = (f"# целевой=T; {legend}; "
+            "формат: 'автор ЧЧ:ММ [>N|@Uk][ed][img] текст', >N — ответ на реплику N, "
+            "@Uk — адресат ответа, *=новая тема")
+
+    lines: list[str] = []
+    id_to_num: dict[int, int] = {}
+    prev_ts_dt = None
+    num = 0
+    for m in header_rows:
+        num += 1
+        id_to_num[m["id"]] = num
+        ts = parse_ts(m["timestamp"])
+        day = ts.strftime("%Y-%m-%d")
+        new_day = prev_ts_dt is None or ts.date() != prev_ts_dt.date()
+        gap_min = (ts - prev_ts_dt).total_seconds() / 60 if prev_ts_dt else 999
+        label = "T" if m["author_id"] == target_uid else labels.get(
+            m["author_id"], f"?{m['author_id']}")
+        text = strip_mentions((m["clean_content"] or m["content"] or "").strip())
+        text = re.sub(r"\s+", " ", text)
+        if not text:
+            text = "[msg]"
+        parts = []
+        if new_day:
+            parts.append(f"# {day}")
+        elif gap_min > 15:
+            parts.append("*")
+        flags = ""
+        ref = m.get("reference_id")
+        if ref and ref in id_to_num and ref != m["id"]:
+            flags += f">{id_to_num[ref]}"
+        elif m.get("reply_to_author_id"):
+            rid = m["reply_to_author_id"]
+            flags += "@" + ("T" if rid == target_uid else labels.get(rid, "?"))
+        if m.get("edited_at"):
+            flags += "e"
+        if m.get("deleted_at"):
+            flags += "d"
+        atts = ""
+        if m.get("has_attachment"):
+            atts += "[img]"
+        if m.get("embed_count"):
+            atts += "[emb]"
+        body = " ".join(x for x in (f"{label} {ts.strftime('%H:%M')}", flags, text, atts) if x)
+        lines.append(f"{parts[0]} {body}".strip() if parts else body)
+        prev_ts_dt = ts
+
+    # обрезка по лимиту: берём ХВОСТ (свежие диалоги информативнее), шапка всегда цела
+    tail: list[str] = []
+    total = len(head) + 1
+    truncated = False
+    for line in reversed(lines):
+        if total + len(line) + 1 > max_chars:
+            truncated = True
+            break
+        tail.append(line)
+        total += len(line) + 1
+    out_lines = [head] + list(reversed(tail))
+    if redact_pii:
+        out_lines = [redact(l) for l in out_lines]
+    return "\n".join(out_lines), truncated
+
+
+def _make_transcript_plain(msgs: list[dict], max_chars: int, redact_pii: bool) -> tuple[str, bool]:
+    """Старый одиночный формат: [2026-10-07 14:03] текст. Обрезка с хвоста."""
     lines = []
     total = 0
     truncated = False
@@ -390,10 +632,19 @@ PROFILE_SYSTEM_PROMPT = """Ты — аналитик по профайлингу
 
 
 def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
-                  all_user_ids, args, generated_at) -> dict:
+                  all_user_ids, args, generated_at,
+                  dialog_msgs: list[dict] | None = None,
+                  dialog_mode: str | None = None,
+                  names: dict[int, str] | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
-    transcript, truncated = make_transcript(msgs, args.max_msg_chars, args.redact_pii)
+    if dialog_msgs is not None and not args.no_context:
+        transcript, truncated = make_transcript(
+            dialog_msgs, args.max_msg_chars, args.redact_pii,
+            target_uid=user["user_id"], names=names or {},
+        )
+    else:
+        transcript, truncated = make_transcript(msgs, args.max_msg_chars, args.redact_pii)
 
     attachments_summary = []
     images = []
@@ -461,6 +712,13 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             for r in roles
         ],
         "statistics": stats,
+        "dialog_context": {
+            "mode": dialog_mode or ("off" if args.no_context else "none"),
+            "linked_messages": len(dialog_msgs) if dialog_msgs is not None else 0,
+            "note": ("транскрипт содержит связанные реплики собеседников: "
+                     "reply-цепочки (>N/@Uk) и временной контекст +-120 c; "
+                     "T — целевой пользователь, O2..On — остальные участники"),
+        },
         "media": {
             "attachments_total": len(attachments_summary),
             "images_total": len(images),
@@ -527,6 +785,10 @@ def parse_args():
     p.add_argument("--no-prompts", action="store_true", help="не генерировать .md промпты")
     p.add_argument("--redact-pii", action="store_true",
                    help="вырезать телефоны/email/IP/IBAN из текста перед экспортом")
+    p.add_argument("--no-context", action="store_true",
+                   help="не включать реплики собеседников (старый формат: только монолог целевого)")
+    p.add_argument("--context-window", type=int, default=CONTEXT_WINDOW_SEC,
+                   metavar="SEC", help="окно временной связности диалога в секундах (по умолчанию 120)")
     return p.parse_args()
 
 
@@ -543,6 +805,18 @@ def main():
     msg_map = fetch_messages(conn)
     att_map = fetch_attachments(conn)
     all_user_ids = set(u["user_id"] for u in users)
+
+    # связи ответов + полная лента канала для сборки диалогов с собеседниками
+    rebuild_links(msg_map)
+    names = build_names(conn, users)
+    if args.no_context:
+        flat_all: list[dict] | None = None
+    else:
+        flat_all = fetch_all_messages_flat(conn)
+        by_author: dict[int, list[dict]] = {}
+        for m in flat_all:
+            by_author.setdefault(m["author_id"], []).append(m)
+        rebuild_links({uid: ms for uid, ms in by_author.items()})
 
     wanted = {int(x) for x in args.users.split(",") if x.strip()} if args.users else None
 
@@ -565,9 +839,17 @@ def main():
             if len(msgs) < args.min_messages:
                 skipped += 1
                 continue
+            dialog_msgs, dialog_mode = None, None
+            if flat_all is not None:
+                # диалог строим по каналу активности целевого пользователя
+                ch = Counter(m["channel_id"] for m in msgs).most_common(1)[0][0]
+                channel_msgs = [m for m in flat_all if m["channel_id"] == ch]
+                dialog_msgs, dialog_mode = build_dialog(
+                    channel_msgs, uid, window_sec=args.context_window)
             dossier = build_dossier(
                 u, guild_map.get(uid, []), role_map.get(uid, []),
                 msgs, att_map, all_user_ids, args, generated_at,
+                dialog_msgs=dialog_msgs, dialog_mode=dialog_mode, names=names,
             )
             fname = f"{uid}_{slug(u['username'])}"
             jl.write(json.dumps(dossier, ensure_ascii=False, default=str) + "\n")

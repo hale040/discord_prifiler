@@ -149,9 +149,11 @@ class Repository:
 
         Для каждого сохранённого сообщения с ``reference_id`` (ответ на другое
         сообщение): если родитель уже в БД — проставляем ``reply_to_author_id``
-        из автора родителя. Если родителя нет (удалён/вне периода сбора), но
-        Discord прислал resolved-упоминание — автором ответа считаем первого
-        упомянутого пользователя (обычно <@id> стоит в начале реплики-ответа).
+        из автора родителя. Если родителя нет (удалён/вне периода сбора) и это
+        обычный reply, связь НЕ угадывается по упоминаниям: <@id> в тексте
+        чаще всего пинг третьих лиц, а не адресат. Для сообщений БЕЗ
+        reference_id считаем адресатом первое resolved-упоминание (reply без
+        reference обычно сопровождается явным пином адресата).
 
         Идемпотентно: повторный пропуск ничего не меняет. Возвращает число
         обновлённых строк.
@@ -164,7 +166,6 @@ class Repository:
                     Message.author_id,
                     Message.mention_users_json,
                 ).where(
-                    Message.reference_id.is_not(None),
                     Message.reply_to_author_id.is_(None),
                 )
             ).all()
@@ -177,7 +178,7 @@ class Repository:
                     )
                     if parent_author is not None and parent_author != author_id:
                         target = parent_author
-                if target is None and mentions_json:
+                elif ref_id is None and mentions_json:
                     import json
 
                     try:
