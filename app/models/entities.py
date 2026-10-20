@@ -98,6 +98,11 @@ class UserProfile(Base):
     # Полный сырой дамп объекта (на случай полей, которые ORM не раскрыла)
     raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Приоритетный пользователь: вручную ставится в админке; экспорт/фильтры
+    # умеют выбирать только таких (см. export_profiles.py --priority-only).
+    priority: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    priority_note: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_updated: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
