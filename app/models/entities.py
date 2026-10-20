@@ -25,6 +25,28 @@ class Base(DeclarativeBase):
 
 
 # ---------------------------------------------------------------------------
+# Журнал действий админки (кто / что / когда / результат)
+# ---------------------------------------------------------------------------
+class AuditLog(Base):
+    """Пишется admin_app.py при каждом изменяющем действии и входе."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    actor: Mapped[str] = mapped_column(String(128), default="admin")
+    action: Mapped[str] = mapped_column(String(64), default="")  # login/sql_update/...
+    target: Mapped[str] = mapped_column(String(256), default="")  # таблица/id/файл
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)  # SQL/параметры
+    result: Mapped[str] = mapped_column(String(512), default="ok")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Audit {self.id} {self.action} by {self.actor}>"
+
+
+# ---------------------------------------------------------------------------
 # Профили пользователей (аккаунт Discord + профиль на сервере)
 # ---------------------------------------------------------------------------
 class UserProfile(Base):

@@ -72,8 +72,19 @@ def _v01_baseline(engine: Engine) -> None:
             )
 
 
+def _v02_audit_log(engine: Engine) -> None:
+    """v2: таблица audit_log — журнал действий админки (admin_app.py).
+
+    Создаётся через SQLAlchemy Core (метаданные моделей), идемпотентно.
+    """
+    from .entities import AuditLog  # локальный импорт: модель -> её же DDL
+
+    AuditLog.__table__.create(engine, checkfirst=True)
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
+    ("audit_log: журнал действий админки", _v02_audit_log),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

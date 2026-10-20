@@ -11,3 +11,5 @@ aiohttp>=3.9
 
 # Опционально: загрузка переменных окружения из .env
 python-dotenv>=1.0
+Flask>=3.0
+itsdangerous>=2.1
