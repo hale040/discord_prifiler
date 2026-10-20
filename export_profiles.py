@@ -731,6 +731,9 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             "connections": load_json(row_get(user, "connections_json")),
             "premium_type": row_get(user, "premium_type"),
             "mutual": row_get(user, "mutual"),
+            # приоритет (ставится вручную в админке; NULL в старых БД до миграции v3)
+            "priority": bool(row_get(user, "priority")),
+            "priority_note": row_get(user, "priority_note"),
         }, args.redact_pii),
         "guild_presence": sanitize([
             {
@@ -840,6 +843,9 @@ def parse_args():
     p.add_argument("--db", default="data/profiling.db", help="путь к SQLite базе")
     p.add_argument("--out", default="out", help="каталог результата")
     p.add_argument("--users", default="", help="список user_id через запятую (по умолчанию все)")
+    p.add_argument("--priority-only", action="store_true",
+                   help="экспортировать только приоритетных пользователей "
+                        "(флаг priority в админке; колонка появится после миграции v3)")
     p.add_argument("--min-messages", type=int, default=1,
                    help="минимум сообщений, чтобы экспортить пользователя")
     p.add_argument("--max-lines", type=int, default=env_max_lines, metavar="N",
@@ -930,6 +936,21 @@ def main():
 
     wanted = {int(x) for x in args.users.split(",") if x.strip()} if args.users else None
 
+    # --priority-only: экспорт только приоритетных (флаг ставится в админке).
+    if getattr(args, "priority_only", False):
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(user_profiles)")]
+        if "priority" not in cols:
+            sys.exit("[FATAL] В базе нет колонки user_profiles.priority. "
+                     "Обновите код и запустите коллектор/админку — миграция v3 "
+                     "добавит её автоматически (или: python -m app.models.migrations).")
+        prio_ids = {r["user_id"] for r in conn.execute(
+            "SELECT user_id FROM user_profiles WHERE priority IS NOT NULL AND priority != 0")}
+        print(f"[FILTER] приоритетных пользователей: {len(prio_ids)}")
+        if not prio_ids:
+            sys.exit("[FATAL] Приоритетных пользователей нет — отметьте хотя бы одного "
+                     "★ в админке (таблица user_profiles).")
+        wanted = prio_ids if wanted is None else (wanted & prio_ids)
+
     # позиционный аргумент: один пользователь по username / имени / id (пусто = все)
     target_arg = (args.target or "").strip().lower()
     if target_arg:
@@ -1013,6 +1034,7 @@ def main():
             index.append({
                 "user_id": str(uid),
                 "display_name": u["global_name"] or u["username"],
+                "priority": bool(u.get("priority")),
                 "messages": st["messages_total"],
                 "span_days": st["span_days"],
                 "transcript_truncated": dossier["meta"]["transcript_truncated"],

@@ -82,9 +82,36 @@ def _v02_audit_log(engine: Engine) -> None:
     AuditLog.__table__.create(engine, checkfirst=True)
 
 
+def _v03_user_priority(engine: Engine) -> None:
+    """v3: флаг приоритетного пользователя в user_profiles.
+
+    priority      — 1/0 (булев); ставится вручную в админке, используется
+                    фильтрами лент и экспортом (--priority-only).
+    priority_note — короткий комментарий «почему приоритетный».
+    Индекс ix_user_profiles_priority — для быстрых выборок фильтра.
+    Идемпотентно: колонки/индекс создаются только если отсутствуют.
+    """
+    with engine.begin() as conn:
+        ucols = _columns(engine, "user_profiles")
+        if "priority" not in ucols:
+            conn.execute(
+                text("ALTER TABLE user_profiles ADD COLUMN priority BOOLEAN NOT NULL DEFAULT 0")
+            )
+        if "priority_note" not in ucols:
+            conn.execute(text("ALTER TABLE user_profiles ADD COLUMN priority_note VARCHAR(512)"))
+        if "ix_user_profiles_priority" not in _indexes(engine, "user_profiles"):
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_user_profiles_priority "
+                    "ON user_profiles (priority)"
+                )
+            )
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
+    ("user_profiles: флаг priority + priority_note + индекс", _v03_user_priority),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

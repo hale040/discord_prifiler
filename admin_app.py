@@ -75,8 +75,8 @@ VIEW_COLUMNS: dict[str, list[str]] = {
         "reaction_total",
     ],
     "user_profiles": [
-        "id", "user_id", "username", "global_name", "created_at_discord",
-        "bot", "about", "premium_type", "last_updated",
+        "id", "user_id", "username", "global_name", "priority",
+        "created_at_discord", "bot", "about", "premium_type", "last_updated",
     ],
     "guild_member_profiles": [
         "id", "user_id", "guild_id", "nick", "joined_at", "timeout_until",
@@ -375,16 +375,27 @@ def create_app(database_url: str) -> Flask:
       {% for c in cols %}<option {{ 'selected' if col==c }}>{{ c }}</option>{% endfor %}</select></div>
       <div style='flex:1'><label class='muted'>= значение</label>
       <input type='text' name='val' value='{{ val }}'></div>
+      {% if has_priority %}<label style='white-space:nowrap;padding-bottom:.45rem'>
+        <input type='checkbox' name='prio' value='1' {{ 'checked' if prio=='1' }}>
+        только ★ приоритетные</label>{% endif %}
       <button class='btn'>Применить</button>
       <a class='btn gray' href='{{ url_for('browse', table=table) }}'>сброс</a>
     </form>
     <p class='muted'>В ленте только нужные столбцы{% if hidden_count %} · {{ hidden_count }}
-    скрытых (raw/json) см. в карточке записи{% endif %}. Клик по id — открыть/править.</p>
+    скрытых (raw/json) см. в карточке записи{% endif %}. Клик по id — открыть/править.
+    {% if has_priority %}★ — отметить/снять приоритет одним кликом.{% endif %}</p>
     <div style='overflow:auto'><table><tr>
+      {% if has_priority %}<th title='приоритетный пользователь'>★</th>{% endif %}
       {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr>
       {% for row in rows %}<tr>
+        {% if has_priority %}<td style='text-align:center;white-space:nowrap'>
+          <a class='btn gray' style='padding:.05rem .35rem' title='переключить priority'
+             href='/browse/{{ table|e }}?star={{ row.pk }}&page={{ cur_page }}'
+             {%- if q %}&q={{ q|urlencode }}{% endif -%}
+             {%- if prio %}&prio=1{% endif %}}>{{ '★' if row.cells[cols.index('priority')][0] not in ('None','—','0','False','false') else '☆' }}</a></td>{% endif %}
         {% for cell in row.cells %}<td class='{{ 'json' if cell[1] }}' title='{{ cell[0] }}'>
           {% if loop.index0 == 0 %}<a href="{{ url_for('record', table=table, pk=row.pk) }}">{{ cell[0] }}</a>
+          {% elif has_priority and cols[loop.index0] == 'priority' %}{# колонка priority не дублируется — показ через ★ #}
           {% else %}{{ cell[0] }}{% endif %}</td>{% endfor %}
         <td style='white-space:nowrap'>
           <a class='btn' href="{{ url_for('record', table=table, pk=row.pk) }}">✎</a>
@@ -541,11 +552,36 @@ def create_app(database_url: str) -> Flask:
         q = (request.args.get("q") or "").strip()
         col = safe_ident(request.args.get("col") or "") if request.args.get("col") else ""
         val = request.args.get("val") or ""
+        prio = (request.args.get("prio") or "").strip()  # '1' только приоритетные
+        star_pk = request.args.get("star")              # быстрый переключатель ★
         page = max(1, int(request.args.get("page") or 1))
         per = 50
 
-        # Таблица через SQLAlchemy Core (autoload) — используется в выражениях ниже.
         sa_tbl = Table(table, MetaData(), autoload_with=engine)
+
+        # Быстрая кнопка ★: переключить priority у одной записи (GET ?star=<pk>).
+        if star_pk and "priority" in all_cols:
+            with engine.begin() as conn:
+                cur = conn.execute(
+                    sa_select(sa_tbl.columns.priority).where(
+                        sa_tbl.columns[pk] == star_pk
+                    )
+                ).scalar()
+                newv = 0 if cur else 1
+                conn.execute(
+                    sa_update(sa_tbl)
+                    .where(sa_tbl.columns[pk] == star_pk)
+                    .values(priority=newv)
+                )
+            audit(
+                "priority_toggle", f"{table}#{star_pk}",
+                f"priority {'включён' if newv else 'выключен'}",
+            )
+            return redirect(url_for("browse", table=table, q=q or None,
+                                    col=col or None, val=val or None,
+                                    prio=prio or None, page=page))
+
+        # Таблица через SQLAlchemy Core (autoload) — используется в выражениях ниже.
         where_parts = []
         if q:
             like = "%" + q.replace("%", "\\%").replace("_", "\\_") + "%"
@@ -553,6 +589,9 @@ def create_app(database_url: str) -> Flask:
             where_parts.append(sa_or(*conds))
         if col and val:
             where_parts.append(sa_tbl.columns[col] == val)
+        # Фильтр «только приоритетные» (для таблиц с колонкой priority).
+        if prio == "1" and "priority" in all_cols:
+            where_parts.append(sa_tbl.columns.priority.is_not(None) & (sa_tbl.columns.priority != 0))
         wclause = sa_and(*where_parts) if where_parts else None
 
         sel = sa_select(sa_tbl).order_by(sa_tbl.columns[pk].desc()).limit(per).offset((page - 1) * per)
@@ -574,6 +613,8 @@ def create_app(database_url: str) -> Flask:
                 base += "&q=" + quote_plus(q)
             if col:
                 base += "&col=" + quote_plus(col) + "&val=" + quote_plus(val)
+            if prio:
+                base += "&prio=" + quote_plus(prio)
             return base
 
         return render(
@@ -581,6 +622,7 @@ def create_app(database_url: str) -> Flask:
             total=total, q=q, col=col, val=val, cur_page=page,
             pages=max(1, -(-total // per)), href=href,
             hidden_count=len(all_cols) - len(cols),
+            prio=prio, has_priority="priority" in all_cols, pk_col=pk,
         )
 
     # --- карточка записи: просмотр + редактирование -------------------------
