@@ -145,7 +145,12 @@ class CollectionService:
 
     # ------------------------------------------------------------- poll loop
     async def _poll_loop(self, channel: discord.abc.Messageable, guild_id: int | None) -> None:
-        """Основной цикл: раз в POLL_INTERVAL_SEC запрашиваем чат."""
+        """Основной цикл: проверяем новые сообщения, затем ждём POLL_INTERVAL_SEC.
+
+        Порядок выдержан специально: **сразу после запуска** (и сразу после
+        завершения backfill) выполняется проверка новых сообщений без ожидания,
+        далее цикл работает по схеме «обход завершён → спим ~5 мин → новый обход».
+        """
         # Первый проход — полная выгрузка истории от старых к новым,
         # затем переходим в режим инкрементальной «досылки».
         try:
@@ -156,9 +161,13 @@ class CollectionService:
             log.exception("Ошибка первичной выгрузки истории")
 
         consecutive_errors = 0
+        first_pass = True  # при запуске не спим: первая проверка — сразу
         while self._running:
-            interval = self.s.poll_interval_sec * random.uniform(0.85, 1.25)
-            await asyncio.sleep(interval)  # периодичность опроса канала
+            if not first_pass:
+                interval = self.s.poll_interval_sec * random.uniform(0.85, 1.25)
+                log.debug("Ожидание перед следующим обходом: ~%.0f сек.", interval)
+                await asyncio.sleep(interval)  # пауза между обходами (~5 мин)
+            first_pass = False
             try:
                 await self._fetch_new_messages(channel, guild_id)
                 consecutive_errors = 0
