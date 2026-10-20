@@ -7,8 +7,8 @@
   - серверными атрибутами (ник, роли/теги, дата вступления, таймауты);
   - статистикой коммуникации (частоты, длины, реакции, ответы, эмодзи,
     активность по часам/дням недели — сигналы для определения психотипа);
-  - текстовой лентой сообщений (chronological transcript, обрезанной по
-    лимиту токенов) — основным материалом для LLM;
+  - текстовой лентой сообщений (chronological transcript, ПОЛНОЙ по
+    умолчанию; лимит символов включается только явно: --max-msg-chars N);
   - медиа-сигналами (картинки: локальные пути/URL).
 
 Выход:
@@ -19,7 +19,7 @@
 
 Запуск:
   python export_profiles.py [--db data/profiling.db] [--out out]
-        [--users id1,id2] [--min-messages 5] [--max-msg-chars 40000]
+        [--users id1,id2] [--min-messages 5] [--max-msg-chars 0]
         [--per-user-json] [--no-prompts]
 """
 from __future__ import annotations
@@ -450,7 +450,7 @@ def analyze_messages(msgs: list[dict], all_user_ids: set[int]) -> dict:
 
 def make_transcript(
     msgs: list[dict],
-    max_chars: int,
+    max_chars: int | None,
     redact_pii: bool,
     target_uid: int | None = None,
     names: dict[int, str] | None = None,
@@ -533,26 +533,32 @@ def make_transcript(
         prev_ts_dt = ts
 
     # обрезка по лимиту: берём ХВОСТ (свежие диалоги информативнее), шапка всегда цела
-    tail: list[str] = []
-    total = len(head) + 1
-    truncated = False
-    for line in reversed(lines):
-        if total + len(line) + 1 > max_chars:
-            truncated = True
-            break
-        tail.append(line)
-        total += len(line) + 1
-    out_lines = [head] + list(reversed(tail))
+    if max_chars and max_chars > 0:
+        # явный лимит задан: берём ХВОСТ ленты (свежие диалоги информативнее)
+        tail: list[str] = []
+        total = len(head) + 1
+        truncated = False
+        for line in reversed(lines):
+            if total + len(line) + 1 > max_chars:
+                truncated = True
+                break
+            tail.append(line)
+            total += len(line) + 1
+        body_lines = list(reversed(tail))
+    else:
+        body_lines, truncated = lines, False   # лимит снят: полная лента
+    out_lines = [head] + body_lines
     if redact_pii:
         out_lines = [redact(l) for l in out_lines]
     return "\n".join(out_lines), truncated
 
 
-def _make_transcript_plain(msgs: list[dict], max_chars: int, redact_pii: bool) -> tuple[str, bool]:
+def _make_transcript_plain(msgs: list[dict], max_chars: "int | None", redact_pii: bool) -> tuple[str, bool]:
     """Старый одиночный формат: [2026-10-07 14:03] текст. Обрезка с хвоста."""
     lines = []
     total = 0
     truncated = False
+    limit_on = bool(max_chars) and max_chars > 0
     for m in reversed(msgs):  # последние сообщения приоритетнее при обрезке
         ts = parse_ts(m["timestamp"])
         text = (m["clean_content"] or m["content"] or "").strip()
@@ -569,7 +575,7 @@ def _make_transcript_plain(msgs: list[dict], max_chars: int, redact_pii: bool) -
         line = f"[{ts.strftime('%Y-%m-%d %H:%M')}] {text}{tag}"
         if redact_pii:
             line = redact(line)
-        if total + len(line) > max_chars:
+        if limit_on and total + len(line) > max_chars:
             truncated = True
             break
         lines.append(line)
@@ -754,10 +760,13 @@ def render_prompt_md(dossier: dict) -> str:
         d["transcript"] or "(нет сообщений)",
         "```",
         "",
-        f"Всего сообщений в деле: {st['messages_total']} "
-        f"(транскрипт обрезан по лимиту символов: {d['meta']['transcript_truncated']}; "
-        f"видимая часть — самая свежая, период данных: {st.get('first_message_at')} .. "
-        f"{st.get('last_message_at')}, {st.get('span_days')} дн.).",
+        f"Всего сообщений в деле: {st['messages_total']}. "
+        + ("Транскрипт ПОЛНЫЙ (лимит символов не задавался). "
+           if not d["meta"]["transcript_truncated"]
+           else "ВНИМАНИЕ: транскрипт обрезан по явному --max-msg-chars; "
+                "в ленте только самая свежая часть. ")
+        + f"Период данных: {st.get('first_message_at')} .. "
+        f"{st.get('last_message_at')}, {st.get('span_days')} дн.",
         "Ответь только валидным JSON по схеме из системной инструкции.",
     ]
     return "\n".join(lines)
@@ -786,8 +795,9 @@ def parse_args():
     p.add_argument("--users", default="", help="список user_id через запятую (по умолчанию все)")
     p.add_argument("--min-messages", type=int, default=1,
                    help="минимум сообщений, чтобы экспортить пользователя")
-    p.add_argument("--max-msg-chars", type=int, default=40000,
-                   help="лимит символов транскрипта на пользователя (~10k токенов)")
+    p.add_argument("--max-msg-chars", type=int, default=0, metavar="N",
+                   help="лимит символов транскрипта на пользователя; "
+                        "0/пусто (ПО МОЛЧАНИЮ) = БЕЗ лимита, полная лента")
     p.add_argument("--per-user-json", action="store_true",
                    help="класть дела в out/profiles/*.json, а не только dataset.jsonl")
     p.add_argument("--no-prompts", action="store_true", help="не генерировать .md промпты")
