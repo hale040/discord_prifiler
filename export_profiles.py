@@ -755,7 +755,9 @@ def render_prompt_md(dossier: dict) -> str:
         "```",
         "",
         f"Всего сообщений в деле: {st['messages_total']} "
-        f"(транскрипт обрезан: {d['meta']['transcript_truncated']}).",
+        f"(транскрипт обрезан по лимиту символов: {d['meta']['transcript_truncated']}; "
+        f"видимая часть — самая свежая, период данных: {st.get('first_message_at')} .. "
+        f"{st.get('last_message_at')}, {st.get('span_days')} дн.).",
         "Ответь только валидным JSON по схеме из системной инструкции.",
     ]
     return "\n".join(lines)
@@ -795,11 +797,43 @@ def parse_args():
                    help="не включать реплики собеседников (старый формат: только монолог целевого)")
     p.add_argument("--context-window", type=int, default=CONTEXT_WINDOW_SEC,
                    metavar="SEC", help="окно временной связности диалога в секундах (по умолчанию 120)")
+    p.add_argument("--since", default="", metavar="YYYY-MM-DD[THH:MM]",
+                   help="включать в транскрипт только сообщения с этой даты/времени (UTC)")
+    p.add_argument("--until", default="", metavar="YYYY-MM-DD[THH:MM]",
+                   help="включать в транскрипт только сообщения до этой даты/времени (UTC)")
     return p.parse_args()
+
+
+def parse_bound(value: str, end_of_day: bool = False) -> datetime | None:
+    """Граница периода: '2026-09-25' или '2026-09-25T18:00' -> aware UTC datetime."""
+    if not value:
+        return None
+    v = value.strip().replace(" ", "T")
+    dt = None
+    try:
+        dt = datetime.fromisoformat(v)
+    except ValueError:
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+            try:
+                dt = datetime.strptime(v, fmt)
+                break
+            except ValueError:
+                continue
+    if dt is None:
+        sys.exit(f"[FATAL] Не удалось разобрать дату '{value}' (ждёт YYYY-MM-DD[THH:MM]).")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if end_of_day and len(value.strip()) <= 10:
+        dt = dt.replace(hour=23, minute=59, second=59)
+    return dt
 
 
 def main():
     args = parse_args()
+    since_dt = parse_bound(args.since)
+    until_dt = parse_bound(args.until, end_of_day=True)
+    if since_dt and until_dt and since_dt > until_dt:
+        sys.exit(f"[FATAL] --since ({args.since}) позже --until ({args.until}).")
     db_path = Path(args.db)
     out_dir = Path(args.out)
     conn = open_db(db_path)
@@ -877,6 +911,22 @@ def main():
                 channel_msgs = [m for m in flat_all if m["channel_id"] == ch]
                 dialog_msgs, dialog_mode = build_dialog(
                     channel_msgs, uid, window_sec=args.context_window)
+            # фильтр периода (--since/--until): режем и монолог, и диалог —
+            # статистика и транскрипт считаются по одному и тому же окну
+            if since_dt or until_dt:
+                def _in_period(m: dict) -> bool:
+                    ts = parse_ts(m["timestamp"])
+                    return ((not since_dt or ts >= since_dt)
+                            and (not until_dt or ts <= until_dt))
+                msgs = [m for m in msgs if _in_period(m)]
+                if len(msgs) < args.min_messages:
+                    skipped += 1
+                    continue
+                if dialog_msgs is not None:
+                    dialog_msgs = [m for m in dialog_msgs if _in_period(m)]
+                    if not any(m["author_id"] == uid for m in dialog_msgs):
+                        dialog_msgs = None
+                        dialog_mode = None
             dossier = build_dossier(
                 u, guild_map.get(uid, []), role_map.get(uid, []),
                 msgs, att_map, all_user_ids, args, generated_at,
