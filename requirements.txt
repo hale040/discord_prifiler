@@ -1,0 +1,15 @@
+# --- Core dependencies (Python 3.12) ---
+# Форк discord.py для подключения по user-token'у (selfbot/userbot).
+# Ставится как пакет `discord.py-self`, импортируется как `discord`.
+discord.py-self>=2.0.0
+
+# ORM + SQLite
+SQLAlchemy>=2.0
+
+# HTTP-транспорт (зависимость discord.py-self, указана явно)
+aiohttp>=3.9
+
+# Опционально: загрузка переменных окружения из .env
+python-dotenv>=1.0
+Flask>=3.0
+itsdangerous>=2.1
