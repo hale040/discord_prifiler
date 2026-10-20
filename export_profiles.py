@@ -7,8 +7,9 @@
   - серверными атрибутами (ник, роли/теги, дата вступления, таймауты);
   - статистикой коммуникации (частоты, длины, реакции, ответы, эмодзи,
     активность по часам/дням недели — сигналы для определения психотипа);
-  - текстовой лентой сообщений (chronological transcript, ПОЛНОЙ по
-    умолчанию; лимит символов включается только явно: --max-msg-chars N);
+  - текстовой лентой сообщений (chronological transcript; лимит — КОЛИЧЕСТВО
+    СТРОК чата, берутся самые свежие: EXPORT_MAX_LINES в .env или --max-lines N;
+    0 = полная лента без среза);
   - медиа-сигналами (картинки: локальные пути/URL).
 
 Выход:
@@ -19,13 +20,21 @@
 
 Запуск:
   python export_profiles.py [--db data/profiling.db] [--out out]
-        [--users id1,id2] [--min-messages 5] [--max-msg-chars 0]
+        [пользователь] [--users id1,id2] [--min-messages 5] [--max-lines N]
         [--per-user-json] [--no-prompts]
+
+Настройки выгрузки по умолчанию читаются из .env (файл подгружается сам):
+  EXPORT_MAX_LINES=300          — максимум СТРОК чата в транскрипте; берутся
+                                  самые СВЕЖИЕ (срез от нового к старому),
+                                  строки текста не обрезаются. 0 = полная лента.
+  EXPORT_CONTEXT_WINDOW=120     — окно временной связности диалога, сек.
+Флаг командной строки (--max-lines / --context-window) переопределяет .env.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -33,6 +42,32 @@ import unicodedata
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def load_env_file(path: str = ".env") -> None:
+    """Минималистичный загрузчик .env (stdlib, без зависимостей).
+
+    Значения из самого файла НЕ перекрывают переменные окружения процесса.
+    Используется для EXPORT_* настроек выгрузки (например EXPORT_MAX_LINES).
+    """
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return
+        for raw in p.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.split(" #", 1)[0].strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = val
+    except OSError:
+        pass
+
+
+load_env_file()
 
 # ---------------------------------------------------------------------------
 # Утилиты
@@ -450,12 +485,12 @@ def analyze_messages(msgs: list[dict], all_user_ids: set[int]) -> dict:
 
 def make_transcript(
     msgs: list[dict],
-    max_chars: int | None,
+    max_lines: int | None,
     redact_pii: bool,
     target_uid: int | None = None,
     names: dict[int, str] | None = None,
 ) -> tuple[str, bool]:
-    """Компактная диалоговая лента (экономию токенов — приоритет).
+    """Компактная диалоговая лента (экономия токенов — приоритет).
 
     Без контекста (target_uid=None) — старый формат «[дата время] текст».
     С контекстом — строки вида:
@@ -463,10 +498,12 @@ def make_transcript(
         O2 14:04 >2 текст           — собеседник O2 (имя — один раз в шапке)
         *                             — начало новой темы/ветки
     Флаги: >N — ответ на реплику N, e/d — edit/delete, [img]/[emb] — медиа.
-    Обрезка с ХВОСТА ленты (последние сообщения приоритетнее).
+    Лимит — КОЛИЧЕСТВО СТРОК ЧАТА (не символов): берутся самые СВЕЖИЕ
+    max_lines строк (срез от нового к старому), старые отбрасываются.
+    max_lines <= 0 / None — полная лента без среза.
     """
     if target_uid is None or names is None:
-        return _make_transcript_plain(msgs, max_chars, redact_pii)
+        return _make_transcript_plain(msgs, max_lines, redact_pii)
 
     header_rows = list(msgs)
     labels: dict[int, str] = {}
@@ -532,34 +569,28 @@ def make_transcript(
         lines.append(f"{parts[0]} {body}".strip() if parts else body)
         prev_ts_dt = ts
 
-    # обрезка по лимиту: берём ХВОСТ (свежие диалоги информативнее), шапка всегда цела
-    if max_chars and max_chars > 0:
-        # явный лимит задан: берём ХВОСТ ленты (свежие диалоги информативнее)
-        tail: list[str] = []
-        total = len(head) + 1
-        truncated = False
-        for line in reversed(lines):
-            if total + len(line) + 1 > max_chars:
-                truncated = True
-                break
-            tail.append(line)
-            total += len(line) + 1
-        body_lines = list(reversed(tail))
+    # срез по КОЛИЧЕСТВУ СТРОК чата: берём самые СВЕЖИЕ (конец ленты),
+    # старые строки отбрасываются; шапка-легенда всегда сохраняется.
+    if max_lines and max_lines > 0 and len(lines) > max_lines:
+        body_lines = lines[-max_lines:]
+        truncated = True
     else:
-        body_lines, truncated = lines, False   # лимит снят: полная лента
+        body_lines, truncated = lines, False   # лимит не задан: полная лента
     out_lines = [head] + body_lines
     if redact_pii:
         out_lines = [redact(l) for l in out_lines]
     return "\n".join(out_lines), truncated
 
 
-def _make_transcript_plain(msgs: list[dict], max_chars: "int | None", redact_pii: bool) -> tuple[str, bool]:
-    """Старый одиночный формат: [2026-10-07 14:03] текст. Обрезка с хвоста."""
+def _make_transcript_plain(msgs: list[dict], max_lines: "int | None", redact_pii: bool) -> tuple[str, bool]:
+    """Старый одиночный формат: [2026-10-07 14:03] текст.
+
+    Лимит — количество строк чата; берутся самые свежие (срез от нового
+    к старому). max_lines <= 0 / None — полная лента без среза.
+    """
     lines = []
-    total = 0
-    truncated = False
-    limit_on = bool(max_chars) and max_chars > 0
-    for m in reversed(msgs):  # последние сообщения приоритетнее при обрезке
+    limit_on = bool(max_lines) and max_lines > 0
+    for m in reversed(msgs):  # идём от свежих к старым
         ts = parse_ts(m["timestamp"])
         text = (m["clean_content"] or m["content"] or "").strip()
         if not text and not m["has_attachment"]:
@@ -575,11 +606,10 @@ def _make_transcript_plain(msgs: list[dict], max_chars: "int | None", redact_pii
         line = f"[{ts.strftime('%Y-%m-%d %H:%M')}] {text}{tag}"
         if redact_pii:
             line = redact(line)
-        if limit_on and total + len(line) > max_chars:
-            truncated = True
-            break
         lines.append(line)
-        total += len(line) + 1
+        if limit_on and len(lines) >= max_lines:
+            break
+    truncated = limit_on and len(msgs) > len(lines)
     return "\n".join(reversed(lines)), truncated
 
 
@@ -646,11 +676,11 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
     stats = analyze_messages(msgs, all_user_ids)
     if dialog_msgs is not None and not args.no_context:
         transcript, truncated = make_transcript(
-            dialog_msgs, args.max_msg_chars, args.redact_pii,
+            dialog_msgs, args.max_lines, args.redact_pii,
             target_uid=user["user_id"], names=names or {},
         )
     else:
-        transcript, truncated = make_transcript(msgs, args.max_msg_chars, args.redact_pii)
+        transcript, truncated = make_transcript(msgs, args.max_lines, args.redact_pii)
 
     attachments_summary = []
     images = []
@@ -675,6 +705,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             "source": "discord_profiler collection DB",
             "purpose": "LLM profiling input (psychotype, communication style)",
             "transcript_truncated": truncated,
+            "transcript_lines": max(0, transcript.count("\n")),
+            "line_limit": int(args.max_lines) if args.max_lines else None,
             "pii_redacted": bool(args.redact_pii),
         },
         "identity": {
@@ -761,10 +793,11 @@ def render_prompt_md(dossier: dict) -> str:
         "```",
         "",
         f"Всего сообщений в деле: {st['messages_total']}. "
-        + ("Транскрипт ПОЛНЫЙ (лимит символов не задавался). "
+        + (f"Транскрипт ПОЛНЫЙ, строк чата: {d['meta']['transcript_lines']}. "
            if not d["meta"]["transcript_truncated"]
-           else "ВНИМАНИЕ: транскрипт обрезан по явному --max-msg-chars; "
-                "в ленте только самая свежая часть. ")
+           else f"ВНИМАНИЕ: лента срезана по лимиту строк "
+                f"({d['meta']['line_limit']}), показаны только самые свежие "
+                f"{d['meta']['transcript_lines']} строк чата; старые дни отброшены. ")
         + f"Период данных: {st.get('first_message_at')} .. "
         f"{st.get('last_message_at')}, {st.get('span_days')} дн.",
         "Ответь только валидным JSON по схеме из системной инструкции.",
@@ -782,12 +815,25 @@ def slug(name: str) -> str:
     return name[:40] or "unknown"
 
 
+def _env_int(name: str, default: int) -> int:
+    """Чтение целого из ENV (.env уже подгружен); некорректное значение -> default."""
+    try:
+        return int(str(os.environ.get(name, "")).strip() or default)
+    except ValueError:
+        return default
+
+
 def parse_args():
+    # настройки по умолчанию берутся из .env (EXPORT_MAX_LINES / EXPORT_CONTEXT_WINDOW),
+    # их может переопределить флаг командной строки
+    env_max_lines = _env_int("EXPORT_MAX_LINES", 0)
+    env_ctx_window = _env_int("EXPORT_CONTEXT_WINDOW", CONTEXT_WINDOW_SEC)
     p = argparse.ArgumentParser(
         description="Экспорт данных для LLM-профайлинга.\n"
                     "Без аргументов — выгрузка ВСЕХ участников канала.\n"
                     "Позиционный аргумент — фильтр одного пользователя по username,\n"
-                    "display-имени или user_id: python export_profiles.py fluff")
+                    "display-имени или user_id: python export_profiles.py fluff\n"
+                    "Лимиты ленты читаются из .env: EXPORT_MAX_LINES, EXPORT_CONTEXT_WINDOW")
     p.add_argument("target", nargs="?", default="",
                    help="username / имя / user_id одного пользователя (пусто = все)")
     p.add_argument("--db", default="data/profiling.db", help="путь к SQLite базе")
@@ -795,9 +841,14 @@ def parse_args():
     p.add_argument("--users", default="", help="список user_id через запятую (по умолчанию все)")
     p.add_argument("--min-messages", type=int, default=1,
                    help="минимум сообщений, чтобы экспортить пользователя")
-    p.add_argument("--max-msg-chars", type=int, default=0, metavar="N",
-                   help="лимит символов транскрипта на пользователя; "
-                        "0/пусто (ПО МОЛЧАНИЮ) = БЕЗ лимита, полная лента")
+    p.add_argument("--max-lines", type=int, default=env_max_lines, metavar="N",
+                   dest="max_lines",
+                   help=f"лимит КОЛИЧЕСТВА СТРОК чата на транскрипт; берутся самые "
+                        f"СВЕЖИЕ N строк (срез от нового к старому), строки текста "
+                        f"не обрезаются. 0 = без лимита (полная лента). "
+                        f"По умолчанию из .env EXPORT_MAX_LINES={env_max_lines}")
+    p.add_argument("--max-msg-chars", type=int, default=None, metavar="N",
+                   dest="legacy_max_msg_chars", help=argparse.SUPPRESS)  # deprecated
     p.add_argument("--per-user-json", action="store_true",
                    help="класть дела в out/profiles/*.json, а не только dataset.jsonl")
     p.add_argument("--no-prompts", action="store_true", help="не генерировать .md промпты")
@@ -805,13 +856,19 @@ def parse_args():
                    help="вырезать телефоны/email/IP/IBAN из текста перед экспортом")
     p.add_argument("--no-context", action="store_true",
                    help="не включать реплики собеседников (старый формат: только монолог целевого)")
-    p.add_argument("--context-window", type=int, default=CONTEXT_WINDOW_SEC,
-                   metavar="SEC", help="окно временной связности диалога в секундах (по умолчанию 120)")
+    p.add_argument("--context-window", type=int, default=env_ctx_window,
+                   metavar="SEC", dest="context_window",
+                   help=f"окно временной связности диалога в секундах "
+                        f"(по умолчанию из .env EXPORT_CONTEXT_WINDOW={env_ctx_window})")
     p.add_argument("--since", default="", metavar="YYYY-MM-DD[THH:MM]",
                    help="включать в транскрипт только сообщения с этой даты/времени (UTC)")
     p.add_argument("--until", default="", metavar="YYYY-MM-DD[THH:MM]",
                    help="включать в транскрипт только сообщения до этой даты/времени (UTC)")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.legacy_max_msg_chars is not None:
+        print("[WARN] --max-msg-chars устарел и игнорируется: лимит теперь "
+              "по КОЛИЧЕСТВУ СТРОК чата (--max-lines N или EXPORT_MAX_LINES в .env).")
+    return args
 
 
 def parse_bound(value: str, end_of_day: bool = False) -> datetime | None:
