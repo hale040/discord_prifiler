@@ -29,31 +29,32 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
         cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
+    fresh = not inspect_tables(engine)  # фиксируем ДО создания таблиц
     Base.metadata.create_all(engine)
 
-    # Лёгкая миграция для существующих БД: create_all не добавляет колонки.
-    with engine.begin() as conn:
-        from sqlalchemy import inspect, text
+    # Версионируемые миграции (app.models.migrations): доводят старые БД,
+    # созданные ещё ad-hoc ALTER'ами, до актуальной схемы; новые БД просто
+    # помечаются текущей версией. Любое изменение моделей требует записи
+    # в список MIGRATIONS — см. модуль migrations.
+    from app.models.migrations import LATEST_VERSION, migrate, stamp_baseline
 
-        cols = {c["name"] for c in inspect(engine).get_columns("channel_states")}
-        if "oldest_message_id" not in cols:
-            conn.execute(
-                text("ALTER TABLE channel_states ADD COLUMN oldest_message_id BIGINT")
+    if fresh:
+        stamp_baseline(engine)
+    else:
+        n = migrate(engine)
+        if n:
+            import logging
+
+            logging.getLogger("app.db").info(
+                "Схема БД обновлена: применено миграций: %d (версия v%s)",
+                n,
+                LATEST_VERSION,
             )
-        mcols = {c["name"] for c in inspect(engine).get_columns("messages")}
-        if "deleted_at" not in mcols:
-            conn.execute(text("ALTER TABLE messages ADD COLUMN deleted_at DATETIME"))
-        if "reply_to_author_id" not in mcols:
-            conn.execute(
-                text("ALTER TABLE messages ADD COLUMN reply_to_author_id BIGINT")
-            )
-            conn.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS ix_messages_reply_to_author_id "
-                    "ON messages (reply_to_author_id)"
-                )
-            )
-        if "reference_id" not in mcols:
-            conn.execute(text("ALTER TABLE messages ADD COLUMN reference_id BIGINT"))
 
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)
+
+
+def inspect_tables(engine) -> list[str]:
+    from sqlalchemy import inspect as sa_inspect
+
+    return sa_inspect(engine).get_table_names()
