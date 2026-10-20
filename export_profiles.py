@@ -571,9 +571,35 @@ def make_transcript(
 
     # срез по КОЛИЧЕСТВУ СТРОК чата: берём самые СВЕЖИЕ (конец ленты),
     # старые строки отбрасываются; шапка-легенда всегда сохраняется.
+    # Гарантии: 1) строки целевого пользователя (T) никогда не вырезаются —
+    # если свежих T-реплик больше лимита, берутся последние max_lines из них;
+    # 2) транскрипт не бывает пустым при наличии сообщений (минимум одна
+    # самая свежая строка).
+    tgt_idx = [i for i, m in enumerate(header_rows) if m["author_id"] == target_uid]
+    # строки-разделители дней («# 2026-10-05») не считаем контентом: при
+    # жёстком лимите они не должны вытеснять реплики целевого пользователя
+    day_row = {i for i, l in enumerate(lines) if l.startswith("# ")}
     if max_lines and max_lines > 0 and len(lines) > max_lines:
-        body_lines = lines[-max_lines:]
-        truncated = True
+        content_budget = max(max_lines - 1, 1)  # 1 слот резервируем под дату
+        keep = set(tgt_idx[-content_budget:])    # свежие реплики целевого — приоритет
+        extra = [i for i in range(len(lines))
+                 if i not in keep and i not in day_row][-max(content_budget - len(keep), 0):]
+        keep.update(extra)
+        if not keep:
+            keep = {len(lines) - 1}
+        # самая свежая дата в рамках лимита (иначе «Период» потеряет день);
+        # при нехватке места уступают чужие строки, реплики T — в последнюю очередь
+        hdrs = [i for i in sorted(day_row) if i <= (max(keep) if keep else -1)]
+        freshest_day = hdrs[-1] if hdrs else None
+        if freshest_day is not None and len(keep) + 1 <= max_lines:
+            keep.add(freshest_day)
+        elif freshest_day is not None and keep:
+            droppable = [i for i in keep if i not in tgt_idx and i != freshest_day]
+            if droppable:
+                keep.discard(min(droppable))
+                keep.add(freshest_day)
+        body_lines = [lines[i] for i in sorted(keep)]
+        truncated = len(keep) < len(lines)
     else:
         body_lines, truncated = lines, False   # лимит не задан: полная лента
     out_lines = [head] + body_lines
@@ -611,6 +637,25 @@ def _make_transcript_plain(msgs: list[dict], max_lines: "int | None", redact_pii
             break
     truncated = limit_on and len(msgs) > len(lines)
     return "\n".join(reversed(lines)), truncated
+
+
+def ensure_nonempty_transcript(transcript: str, msgs: list[dict],
+                               redact_pii: bool) -> str:
+    """Гарантия: если у пользователя есть сообщения, транскрипт не пустой.
+    Вставка самого свежего сообщения в однопользовательской ленте."""
+    if transcript.strip():
+        return transcript
+    fresh = next((m for m in reversed(msgs)
+                  if (m.get("clean_content") or m.get("content") or "").strip()
+                  or m.get("has_attachment")), None)
+    if fresh is None:
+        return transcript
+    ts = parse_ts(fresh["timestamp"])
+    text = strip_urls_text((fresh["clean_content"] or fresh["content"] or "").strip())
+    line = f"[{ts.strftime('%Y-%m-%d %H:%M')}] {text or '[msg]'}"
+    if redact_pii:
+        line = redact(line)
+    return line
 
 
 PII_PATTERNS = [
@@ -688,8 +733,16 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             dialog_msgs, args.max_lines, args.redact_pii,
             target_uid=user["user_id"], names=names or {},
         )
+        # защита от «(нет сообщений)» при 1000+ реплик: в диалоге всегда
+        # присутствуют строки целевого (T), но на всякий случай проверяем
+        if not transcript.strip():
+            transcript = ensure_nonempty_transcript("", msgs, args.redact_pii)
     else:
         transcript, truncated = make_transcript(msgs, args.max_lines, args.redact_pii)
+        # max_lines<=0 не должен обнулять ленту: если транскрипт пуст при
+        # наличии сообщений — вставляем самую свежую реплику
+        if not transcript.strip() and msgs:
+            transcript = ensure_nonempty_transcript("", msgs, args.redact_pii)
 
     # Ссылки на картинки/вложения (cdn.discordapp.com — временные токены, лишние
     # токены LLM) в промпт не попадают: только filename/type/флаги. Полный
@@ -1214,6 +1267,9 @@ def main():
                 (prompts_dir / f"{fname}.md").write_text(
                     render_prompt_md(dossier), encoding="utf-8")
             st = dossier["statistics"]
+            if not (dossier["transcript"] or "").strip():
+                print(f"  [WARN] {u['username']}: транскрипт пуст при "
+                      f"{st['messages_total']} сообщ. — проверьте EXPORT_MAX_LINES/--max-lines")
             index.append({
                 "user_id": str(uid),
                 "display_name": u["global_name"] or u["username"],
