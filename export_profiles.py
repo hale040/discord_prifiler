@@ -691,6 +691,9 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
     else:
         transcript, truncated = make_transcript(msgs, args.max_lines, args.redact_pii)
 
+    # Ссылки на картинки/вложения (cdn.discordapp.com — временные токены, лишние
+    # токены LLM) в промпт не попадают: только filename/type/флаги. Полный
+    # список с url остаётся в JSON-досье (--per-user-json) для локального использования.
     attachments_summary = []
     images = []
     for m in msgs:
@@ -925,8 +928,30 @@ def compact_dossier(d: dict) -> dict:
             "stats": stats_c, "dlg": dcc, "media": mc}
 
 
+def strip_urls_deep(obj):
+    """Рекурсивно удаляет из структуры значения-ссылки (http/https) — в промпт
+    LLM не должны попадать URL картинок/аватаров (мёртвые токены CDN и лишние
+    токены модели). Полные досье с url остаются в JSON-выгрузке."""
+    if isinstance(obj, dict):
+        return {k: v for k, v in
+                ((k, strip_urls_deep(v)) for k, v in obj.items())
+                if not (isinstance(v, str) and URL_RE.search(v))}
+    if isinstance(obj, list):
+        return [strip_urls_deep(x) for x in obj]
+    return obj
+
+
+def strip_urls_text(text: str) -> str:
+    """Убирает голые http(s)-ссылки из текста (картинки/CDN-URL не нужны LLM;
+    сам факт вложения остаётся виден по флагу [img])."""
+    return re.sub(r"https?://\S+", "", text or "")
+
+
 def render_prompt_md(dossier: dict) -> str:
-    d = dossier
+    d = strip_urls_deep(dossier)
+    # транскрипт чистим отдельно: ссылки бывают внутри текста сообщений
+    t = d.get("transcript") or ""
+    d["transcript"] = strip_urls_text(t)
     ident = d["identity"]
     st = d["statistics"]
     lines = [
