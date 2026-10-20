@@ -34,6 +34,7 @@ import hashlib
 import os
 import re
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -48,12 +49,17 @@ from flask import (
     session,
     url_for,
 )
-from sqlalchemy import MetaData, Table, create_engine, func, inspect, select as sa_select, text
+from sqlalchemy import Boolean, MetaData, Table, create_engine, func, inspect, select as sa_select, text
 from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update
 from markupsafe import Markup
 from sqlalchemy.engine import Engine
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def utcnow() -> datetime:
+    """Текущее время UTC (совпадает с helpers.utcnow в моделях)."""
+    return datetime.now(timezone.utc)
 
 # --------------------------------------------------------------------------- #
 # Какие столбцы показывать в лентах таблиц («только нужные»).                 #
@@ -124,12 +130,21 @@ def create_app(database_url: str) -> Flask:
     def audit(action: str, target: str = "", details: str = "", result: str = "ok") -> None:
         try:
             with engine.begin() as conn:
+                # created_at передаём явно: default=utcnow в модели работает
+                # только через ORM/Core-insert, а мы пишем raw SQL — иначе
+                # колонка остаётся NULL и журнал выглядит пустым.
                 conn.execute(
                     text(
-                        "INSERT INTO audit_log (actor, action, target, details, result) "
-                        "VALUES ('admin', :a, :t, :d, :r)"
+                        "INSERT INTO audit_log (created_at, actor, action, target, details, result) "
+                        "VALUES (:ts, 'admin', :a, :t, :d, :r)"
                     ),
-                    {"a": action, "t": target[:256], "d": (details or "")[:4000], "r": result[:512]},
+                    {
+                        "ts": utcnow(),
+                        "a": action,
+                        "t": target[:256],
+                        "d": (details or "")[:4000],
+                        "r": result[:512],
+                    },
                 )
         except Exception:  # журнал не должен ронять админку
             pass
@@ -215,9 +230,6 @@ def create_app(database_url: str) -> Flask:
 
     def editable_fields(sa_tbl: Table) -> list[dict]:
         """Редактируемые поля записи по схеме SQLAlchemy (тип/nullable/PK)."""
-        from sqlalchemy.sql.visitors import traverse_single
-        from sqlalchemy.engine import interfaces
-
         fields = []
         for col in sa_tbl.columns:
             t = col.type
