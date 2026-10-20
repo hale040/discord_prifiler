@@ -772,7 +772,13 @@ def slug(name: str) -> str:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Экспорт данных для LLM-профайлинга")
+    p = argparse.ArgumentParser(
+        description="Экспорт данных для LLM-профайлинга.\n"
+                    "Без аргументов — выгрузка ВСЕХ участников канала.\n"
+                    "Позиционный аргумент — фильтр одного пользователя по username,\n"
+                    "display-имени или user_id: python export_profiles.py fluff")
+    p.add_argument("target", nargs="?", default="",
+                   help="username / имя / user_id одного пользователя (пусто = все)")
     p.add_argument("--db", default="data/profiling.db", help="путь к SQLite базе")
     p.add_argument("--out", default="out", help="каталог результата")
     p.add_argument("--users", default="", help="список user_id через запятую (по умолчанию все)")
@@ -809,6 +815,8 @@ def main():
     # связи ответов + полная лента канала для сборки диалогов с собеседниками
     rebuild_links(msg_map)
     names = build_names(conn, users)
+    usernames = {u["user_id"]: (u["username"] or "").lower() for u in users}
+
     if args.no_context:
         flat_all: list[dict] | None = None
     else:
@@ -819,6 +827,29 @@ def main():
         rebuild_links({uid: ms for uid, ms in by_author.items()})
 
     wanted = {int(x) for x in args.users.split(",") if x.strip()} if args.users else None
+
+    # позиционный аргумент: один пользователь по username / имени / id (пусто = все)
+    target_arg = (args.target or "").strip().lower()
+    if target_arg:
+        ids: set[int] = set()
+        if target_arg.isdigit():
+            ids.add(int(target_arg))
+        for uid in all_user_ids:
+            if usernames.get(uid) == target_arg:
+                ids.add(uid)
+        if not ids:  # нестрогое совпадение по username или отображаемому имени
+            for uid in all_user_ids:
+                disp = (names.get(uid) or "").lower()
+                uname = usernames.get(uid) or ""
+                if target_arg in uname or target_arg in disp:
+                    ids.add(uid)
+        if not ids:
+            conn.close()
+            sys.exit(f"[FATAL] Пользователь '{args.target}' не найден в базе "
+                     f"(всего участников: {len(all_user_ids)}). "
+                     f"Укажите username, часть имени или user_id.")
+        print(f"[FILTER] '{args.target}' -> user_id: {', '.join(map(str, sorted(ids)))}")
+        wanted = ids if wanted is None else (wanted & ids)
 
     profiles_dir = out_dir / "profiles"
     prompts_dir = out_dir / "prompts"
