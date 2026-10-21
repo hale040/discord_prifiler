@@ -108,10 +108,59 @@ def _v03_user_priority(engine: Engine) -> None:
             )
 
 
+def _v04_compact_raw_json(engine: Engine) -> None:
+    """v4: очистка messages.raw_json от полного дампа Discord-объектов.
+
+    Исторически в каждую строку messages писался полный ``msg.to_dict()``
+    (десятки КБ на сообщение) — база раздувалась в разы, а анализ использует
+    только смапленные колонки. Теперь raw_json сообщений не сохраняется вовсе
+    (STORE_RAW_JSON=0 по умолчанию), а старые дампы вычищаются этим шагом
+    (остаются только строки длиннее 4096 байт — типичный размер полного дампa).
+
+    Идемпотентно: повторный запуск ничего не меняет. Перед очисткой БД
+    автоматически резервируется в data/backup_pre_vN_<ts>.db (копия whole-file,
+    поэтому повторный прогон миграции на копии безопасен).
+    """
+    import os
+    import shutil
+    from datetime import datetime, timezone
+
+    url = str(engine.url)
+    if not url.startswith("sqlite"):
+        return  # чистим только SQLite-базы коллектора
+    path = url.split("///", 1)[1] or ":memory:"
+    if path == ":memory:" or not os.path.exists(path):
+        return
+    with engine.begin() as conn:
+        n = conn.execute(
+            text("SELECT COUNT(*) FROM messages WHERE raw_json IS NOT NULL "
+                 "AND LENGTH(raw_json) > 4096")
+        ).scalar() or 0
+        if not n:
+            return
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        backup = os.path.join(os.path.dirname(path) or ".", f"backup_pre_v4_{ts}.db")
+        # Бэкап делаем ДО транзакции: SQLite whole-file copy (файл + -wal),
+        # чтобы на копии можно было повторно прогнать миграцию безопасно.
+        shutil.copy2(path, backup)
+        try:
+            with engine.connect() as wc:
+                wc.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:  # noqa: BLE001
+            pass
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE messages SET raw_json = NULL "
+                 "WHERE raw_json IS NOT NULL AND LENGTH(raw_json) > 4096")
+        )
+    log.info("Миграция v4: очищено raw_json в %s сообщениях; бэкап: %s", n, backup)
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
     ("user_profiles: флаг priority + priority_note + индекс", _v03_user_priority),
+    ("messages: очистка раздутого raw_json (с бэкапом БД перед запуском)", _v04_compact_raw_json),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]
