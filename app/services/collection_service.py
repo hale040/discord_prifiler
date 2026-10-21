@@ -70,6 +70,12 @@ class CollectionService:
         # курсоры в рамках процесса: куда догружали историю (после restart —
         # резюм по oldest_message_id из БД)
         self._backfill_cursor: int | None = None
+        # предыдущий poll-обход был усечён лимитом API (429/retry_after):
+        # следующий проход выполняется немедленно, без паузы POLL_INTERVAL_SEC
+        self._poll_incomplete = False
+        # backfill идёт (история ещё не догружена) — live-события впереди
+        # курсора это норма, gap-детектор молчит
+        self._backfill_running = False
 
     def _notify(self, method: str, *args) -> None:
         if self.view is not None:
@@ -154,19 +160,25 @@ class CollectionService:
         # Первый проход — полная выгрузка истории от старых к новым,
         # затем переходим в режим инкрементальной «досылки».
         try:
+            self._backfill_running = True
             await self._backfill_history(channel, guild_id)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
             log.exception("Ошибка первичной выгрузки истории")
+        finally:
+            self._backfill_running = False
 
         consecutive_errors = 0
         first_pass = True  # при запуске не спим: первая проверка — сразу
         while self._running:
-            if not first_pass:
+            if not first_pass and not self._poll_incomplete:
                 interval = self.s.poll_interval_sec * random.uniform(0.85, 1.25)
                 log.debug("Ожидание перед следующим обходом: ~%.0f сек.", interval)
                 await asyncio.sleep(interval)  # пауза между обходами (~5 мин)
+            elif self._poll_incomplete:
+                # предыдущий обход был усечён лимитом API — догоняем сразу
+                log.info("Предыдущий обход оборвался на лимите — немедленное продолжение.")
             first_pass = False
             try:
                 await self._fetch_new_messages(channel, guild_id)
@@ -192,7 +204,14 @@ class CollectionService:
 
     # ----------------------------------------------------------- history ops
     async def _fetch_new_messages(self, channel: discord.abc.Messageable, guild_id: int | None) -> int:
-        """Достаём сообщения после последнего известного курсора (как скролл вниз)."""
+        """Достаём сообщения после последнего известного курсора (как скролл вниз).
+
+        Обход оборван по лимиту API (например, при rate-limit 429) — это НЕ
+        «догнали настоящее»: помечаем ``self._poll_incomplete``, и следующий
+        проход выполнится сразу, без паузы POLL_INTERVAL_SEC, чтобы не терять
+        сообщения из-за усечённой страницы.
+        """
+        self._poll_incomplete = False
         state = self.repo.get_state(channel.id)
         after = state.last_message_id
         new_count = 0
@@ -202,8 +221,16 @@ class CollectionService:
             kwargs["after"] = _to_snowflake(after)
 
         batch: list[discord.Message] = []
-        async for msg in channel.history(**kwargs):
-            batch.append(msg)
+        truncated = False
+        try:
+            async for msg in channel.history(**kwargs):
+                batch.append(msg)
+        except discord.HTTPException as exc:
+            # обрыв страницы (429/retry_after/сбой CDN): сохраняем то, что уже
+            # успели получить, и продолжаем немедленно с новой точки курсора
+            truncated = True
+            log.warning("Обход истории прерван (%s) — сохраняю %s полученных, "
+                        "следующая проверка будет немедленной", exc, len(batch))
         batch.sort(key=lambda m: m.id)
         # всю пачку пишем в БД одним коммитом — меньше fsync/WAL-чреды
         for msg in batch:
@@ -220,6 +247,8 @@ class CollectionService:
         else:
             log.debug("Новых сообщений нет.")
         self._notify("on_new_messages", new_count, max_id)
+        if truncated and batch:
+            self._poll_incomplete = True
         return new_count
 
     async def _backfill_history(self, channel: discord.abc.Messageable, guild_id: int | None) -> None:
@@ -265,9 +294,22 @@ class CollectionService:
                 "oldest_first": True,
             }
             batch: list[discord.Message] = []
-            async for msg in channel.history(**kwargs):
-                batch.append(msg)
+            truncated = False
+            try:
+                async for msg in channel.history(**kwargs):
+                    batch.append(msg)
+            except discord.HTTPException as exc:
+                # лимит API оборвал страницу: сохраняем полученное, выходим в
+                # poll-режим; там _poll_incomplete заставит продолжить сразу,
+                # без паузы POLL_INTERVAL_SEC (курсор по последнему сохранённому)
+                truncated = True
+                log.warning("Backfill прерван лимитом API (%s) после %s страниц.",
+                            exc, total_pages)
             if not batch:
+                if truncated:
+                    log.info("Backfill: страница пуста и оборвана лимитом — продолжим в poll.")
+                    self._backfill_cursor = after
+                    return
                 log.info(
                     "История догружена до текущего момента (%s страниц, курсор=%s).",
                     total_pages, after,
@@ -342,7 +384,23 @@ class CollectionService:
                 ts = ts.replace(tzinfo=timezone.utc)
             if ts is not None and ts < self.s.start_date:
                 return False
-        data = mappers.message_data(msg, guild_id)
+        # Защита от потери сообщений при простое: live-событие может прийти,
+        # когда poll-курсор отстаёт (сервис стоял, лимиты API). Прыжок
+        # last_message_id через пропуск закрыл бы дыру навсегда — вместо этого
+        # фиксируем gap и запускаем немедленный догон-обход (_fetch_new_messages
+        # прочитает всё после старого курсора; дедупликация вставки безопасна).
+        state = self.repo.get_state(msg.channel.id)
+        if (
+            state is not None
+            and state.last_message_id
+            and msg.id > state.last_message_id + 4096
+            and not self._backfill_running
+        ):
+            if not self._poll_incomplete:
+                log.info("Gap после курсора %s (новое %s) — немедленный догон истории.",
+                         state.last_message_id, msg.id)
+            self._poll_incomplete = True
+        data = mappers.message_data(msg, guild_id, store_raw=self.s.store_raw_json)
         atts = mappers.attachments_data(msg)
         saved = self.repo.insert_message(data, atts)
         if not saved:

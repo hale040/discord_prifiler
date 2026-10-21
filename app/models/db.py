@@ -27,6 +27,9 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=5000")
+        # Ограничение размера WAL-файла (64 МБ): без него -wal разрастался
+        # бесконечно при долгих чтениях админки на фоне пишущего коллектора.
+        cursor.execute("PRAGMA journal_size_limit=67108864")
         cursor.close()
 
     fresh = not inspect_tables(engine)  # фиксируем ДО создания таблиц

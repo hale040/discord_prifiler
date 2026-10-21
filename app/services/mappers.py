@@ -187,7 +187,9 @@ def guild_and_roles_from_member(member: discord.Member) -> tuple[dict[str, Any],
 # ---------------------------------------------------------------------------
 # Сообщения
 # ---------------------------------------------------------------------------
-def message_data(msg: discord.Message, channel_guild_id: int | None) -> dict[str, Any]:
+def message_data(
+    msg: discord.Message, channel_guild_id: int | None, *, store_raw: bool = True
+) -> dict[str, Any]:
     author = msg.author
     clean = msg.clean_content if hasattr(msg, "clean_content") else msg.content
     data: dict[str, Any] = {
@@ -245,10 +247,13 @@ def message_data(msg: discord.Message, channel_guild_id: int | None) -> dict[str
         rid = _safe(lambda: int(ref.resolved.author.id))
         if rid is not None and rid != msg.author.id:
             data["reply_to_author_id"] = rid
-    # сырой дамп — на случай полей, которые мы ещё не маппим
-    raw = _safe(lambda: msg.to_dict())
-    if raw:
-        data["raw_json"] = to_json(raw)
+    # сырой дамп — на случай полей, которые мы ещё не маппим.
+    # По умолчанию НЕ сохраняется (STORE_RAW_JSON=0): полный to_dict() каждого
+    # сообщения раздувал SQLite в разы; все нужные поля уже смаплены выше.
+    if store_raw:
+        raw = _safe(lambda: msg.to_dict())
+        if raw:
+            data["raw_json"] = to_json(raw)
     return data
 
 

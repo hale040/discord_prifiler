@@ -46,6 +46,13 @@ class Settings:
 
     # Периодичность опроса канала, сек
     poll_interval_sec: int = field(default_factory=lambda: _env_int("POLL_INTERVAL_SEC", 300))
+    # Сохранять полный сырой JSON сообщений в messages.raw_json (диск).
+    # По умолчанию ВЫКЛЮЧЕНО: все нужные поля уже смаплены в колонки, а
+    # raw_json раздувал базу в разы. Включить: STORE_RAW_JSON=1.
+    store_raw_json: bool = field(
+        default_factory=lambda: os.getenv("STORE_RAW_JSON", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
 
     # Максимум сообщений за один проход history-запроса
     fetch_limit: int = field(default_factory=lambda: _env_int("FETCH_LIMIT", 100))
