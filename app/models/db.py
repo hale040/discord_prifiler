@@ -24,7 +24,10 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
         cursor = dbapi_connection.cursor()
         # WAL лучше для конкурентного чтения/записи; нормальные таймауты блокировок
         cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
+        # synchronous=FULL: каждый коммит ждёт fsync WAL+базы — максимальная
+        # защита от повреждения файла БД при обрыве питания/kill -9.
+        # (NORMAL допускал потерю последних транзакций и риск malformed image.)
+        cursor.execute("PRAGMA synchronous=FULL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=5000")
         # Ограничение размера WAL-файла (64 МБ): без него -wal разрастался
