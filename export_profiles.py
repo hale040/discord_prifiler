@@ -984,11 +984,23 @@ def compact_dossier(d: dict) -> dict:
 def strip_urls_deep(obj):
     """Рекурсивно удаляет из структуры значения-ссылки (http/https) — в промпт
     LLM не должны попадать URL картинок/аватаров (мёртвые токены CDN и лишние
-    токены модели). Полные досье с url остаются в JSON-выгрузке."""
+    токены модели). Полные досье с url остаются в JSON-выгрузке.
+
+    Поле "transcript" — многострочный текст ленты: его НЕ трогаем (URL из
+    строк чата вырезаются отдельно функцией strip_urls_text; раньше deep-strip
+    удалял весь транскрипт целиком, если в любой строке была ссылка, —
+    нейросеть получала «(нет сообщений)»)."""
     if isinstance(obj, dict):
-        return {k: v for k, v in
-                ((k, strip_urls_deep(v)) for k, v in obj.items())
-                if not (isinstance(v, str) and URL_RE.search(v))}
+        out = {}
+        for k, v in obj.items():
+            if k == "transcript" and isinstance(v, str):
+                out[k] = v
+                continue
+            nv = strip_urls_deep(v)
+            if isinstance(nv, str) and URL_RE.search(nv):
+                continue
+            out[k] = nv
+        return out
     if isinstance(obj, list):
         return [strip_urls_deep(x) for x in obj]
     return obj
