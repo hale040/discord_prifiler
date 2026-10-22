@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -96,7 +97,48 @@ VIEW_COLUMNS: dict[str, list[str]] = {
     "audit_log": [
         "id", "created_at", "action", "target", "result",
     ],
+    # --- новый функционал (миграции v5..v8) ---------------------------------
+    "user_games": [
+        "id", "user_id", "name", "kind", "details", "state",
+        "first_seen", "last_seen",
+    ],
+    "profile_snapshots": [
+        "id", "user_id", "taken_at", "about", "status_text",
+        "avatar_hash", "banner_hash", "changed",
+    ],
+    "psych_profiles": [
+        "id", "user_id", "model", "mbti_type", "mbti_confidence",
+        "enneagram_type", "confidence_overall", "severity_max",
+        "messages_analyzed", "period_from", "period_to",
+        "is_current", "created_at",
+    ],
+    "psych_signals": [
+        "id", "user_id", "signal_key", "quote", "message_id",
+        "severity", "created_at",
+    ],
+    "user_interests": [
+        "id", "user_id", "topic", "evidence_count", "evidence",
+        "first_seen_at", "last_seen_at",
+    ],
 }
+
+# Ссылки «кто это?» — колонки, по которым строится ссылка на user_profiles.
+USER_LINK_COLS = ("user_id",)
+
+
+def _json_pretty(v) -> str:
+    """Красивый JSON для textarea в карточке записи (если значение — JSON)."""
+    if v is None:
+        return ""
+    s = str(v)
+    try:
+        return json.dumps(json.loads(s), ensure_ascii=False, indent=2)
+    except Exception:
+        return s
+
+
+def _is_json_field(name: str) -> bool:
+    return name.endswith("_json") or name in ("result_json", "connections_json")
 
 
 def _sync_url(url: str) -> str:
@@ -228,6 +270,56 @@ def create_app(database_url: str) -> Flask:
         hidden = ENV_HIDE.get(table, set())
         return [c for c in chosen if c not in hidden]
 
+    # --- ссылки на пользователя и связанные записи ---------------------------
+    def user_names_for(ids: set) -> dict:
+        """user_id -> 'username' для подписи ссылок в лентах (graceful)."""
+        ids = {i for i in ids if i is not None}
+        if not ids or "user_profiles" not in tables():
+            return {}
+        try:
+            up = Table("user_profiles", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    sa_select(up.columns.user_id, up.columns.username,
+                              up.columns.global_name)
+                    .where(up.columns.user_id.in_(list(ids)))
+                ).all()
+            return {r[0]: (r[1] or r[2] or str(r[0])) for r in rows}
+        except Exception:
+            return {}
+
+    def related_counts(user_id) -> dict:
+        """Сколько связанных записей в новых таблицах (для кнопки в ленте)."""
+        out = {}
+        if user_id is None:
+            return out
+        for t in ("psych_profiles", "psych_signals", "user_interests",
+                  "user_games", "profile_snapshots"):
+            if t not in tables():
+                continue
+            try:
+                tb = Table(t, MetaData(), autoload_with=engine)
+                with engine.connect() as conn:
+                    n = conn.execute(
+                        sa_select(func.count()).select_from(tb).where(
+                            tb.columns.user_id == user_id
+                        )
+                    ).scalar() or 0
+                if n:
+                    out[t] = n
+            except Exception:
+                continue
+        return out
+
+    def profile_view_url(pid) -> str | None:
+        """Ссылка на просмотр результата LLM (если есть tab/profile)."""
+        if pid is None:
+            return None
+        try:
+            return url_for("profile_view", pid=int(pid))
+        except Exception:
+            return None
+
     def editable_fields(sa_tbl: Table) -> list[dict]:
         """Редактируемые поля записи по схеме SQLAlchemy (тип/nullable/PK)."""
         fields = []
@@ -338,6 +430,7 @@ def create_app(database_url: str) -> Flask:
       {% for tb in nav_tables %}<a href="{{ url_for('browse', table=tb) }}"
          class="{{ 'on' if page=='browse' and table==tb }}">{{ tb }}</a>{% endfor %}
       <a href="{{ url_for('sql_page') }}" class="{{ 'on' if page=='sql' }}">SQL</a>
+      {% if has_psych %}<a href="{{ url_for('profile_import') }}" class="{{ 'on' if page=='profimport' }}">🧠 Импорт LLM</a>{% endif %}
       <a href="{{ url_for('audit_page') }}" class="{{ 'on' if page=='audit' }}">Аудит</a>
       <a href="{{ url_for('actions_page') }}" class="{{ 'on' if page=='actions' }}">⚙️ Действия</a>
       <a href="{{ url_for('logout') }}">Выйти</a>
@@ -378,12 +471,16 @@ def create_app(database_url: str) -> Flask:
       {% if has_priority %}<label style='white-space:nowrap;padding-bottom:.45rem'>
         <input type='checkbox' name='prio' value='1' {{ 'checked' if prio=='1' }}>
         только ★ приоритетные</label>{% endif %}
+      {% if is_psych_profiles %}<label style='white-space:nowrap;padding-bottom:.45rem'>
+        <input type='checkbox' name='cur' value='1' {{ 'checked' if cur=='1' }}>
+        только активные версии</label>{% endif %}
       <button class='btn'>Применить</button>
       <a class='btn gray' href='{{ url_for('browse', table=table) }}'>сброс</a>
     </form>
     <p class='muted'>В ленте только нужные столбцы{% if hidden_count %} · {{ hidden_count }}
     скрытых (raw/json) см. в карточке записи{% endif %}. Клик по id — открыть/править.
-    {% if has_priority %}★ — отметить/снять приоритет одним кликом.{% endif %}</p>
+    {% if has_priority %}★ — отметить/снять приоритет одним кликом.{% endif %}
+    {% if is_psych_profiles %}👁 — читаемое представление результата LLM.{% endif %}</p>
     <div style='overflow:auto'><table><tr>
       {% if has_priority %}<th title='приоритетный пользователь'>★</th>{% endif %}
       {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr>
@@ -396,8 +493,13 @@ def create_app(database_url: str) -> Flask:
         {% for cell in row.cells %}<td class='{{ 'json' if cell[1] }}' title='{{ cell[0] }}'>
           {% if loop.index0 == 0 %}<a href="{{ url_for('record', table=table, pk=row.pk) }}">{{ cell[0] }}</a>
           {% elif has_priority and cols[loop.index0] == 'priority' %}{# колонка priority не дублируется — показ через ★ #}
+          {% elif cols[loop.index0] == 'user_id' and uid_map.get(cell[0]) %}<a href="/browse/user_profiles?col=user_id&val={{ cell[0] }}" title="профиль пользователя">{{ cell[0] }}</a> <span class='muted'>@{{ uid_map.get(cell[0]) }}</span>
+          {% elif cols[loop.index0] == 'mbti_type' and cell[0] != '—' %}<b>{{ cell[0] }}</b>
+          {% elif cols[loop.index0] == 'severity_max' and cell[0] == 'high' %}<span style='color:#c62828;font-weight:700'>high</span>
           {% else %}{{ cell[0] }}{% endif %}</td>{% endfor %}
         <td style='white-space:nowrap'>
+          {% if is_psych_profiles %}<a class='btn gray' title='читаемый вид результата LLM'
+             href="{{ url_for('profile_view', pid=row.pk) }}">👁</a>{% endif %}
           <a class='btn' href="{{ url_for('record', table=table, pk=row.pk) }}">✎</a>
           <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
                 onsubmit="return confirm('Удалить строку {{ table }}={{ row.pk }}?');">
@@ -438,7 +540,22 @@ def create_app(database_url: str) -> Flask:
       </tr>{% endfor %}</table>
       <br><button class='btn'>💾 Сохранить изменения</button>
       <a class='btn gray' href='{{ url_for("browse", table=table) }}'>отмена</a>
-    </form>"""
+    </form>
+    {% if related %}
+    <div class='card'><h4>Связанные данные пользователя {{ uid }}</h4>
+      {% if related[0].count is defined %}
+        <p>{% for r in related %}<a href="{{ url_for('browse', table=r.table) }}?col=user_id&val={{ uid }}">{{ r.table }}: {{ r.count }}</a>{{ ' · ' if not loop.last }}{% endfor %}</p>
+      {% else %}
+        {% for block in related %}
+        <h5><a href="{{ url_for('browse', table=block.table) }}?col=user_id&val={{ uid }}">{{ block.table }}</a> <span class='muted'>(до {{ block.rows|length }})</span></h5>
+        <div style='overflow:auto'><table><tr>{% for c in block.cols %}<th>{{ c }}</th>{% endfor %}</tr>
+          {% for row2 in block.rows %}<tr>
+            {% for v in row2 %}<td title='{{ v }}'>{% if loop.index0 == 0 %}<a href="{{ url_for('record', table=block.table, pk=block.pks[loop.index0]) }}">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
+          </tr>{% endfor %}</table></div>
+        {% endfor %}
+      {% endif %}
+    </div>
+    {% endif %}"""
 
     PAGE_SQL = """<h2>SQL-редактор</h2>
     <div class='card muted'>SELECT выполняется сразу. UPDATE/DELETE требуют WHERE и подтверждения.
@@ -483,6 +600,79 @@ def create_app(database_url: str) -> Flask:
     <button class='btn warn'>Выполнить</button></form></div>
     {% if last %}<div class='card'><h4>Последний результат</h4><pre>{{ last }}</pre></div>{% endif %}"""
 
+    PAGE_PROF_IMPORT = """<h2>Импорт ответа нейросети</h2>
+    <p class='muted'>JSON-ответ LLM сохраняется как новая версия психопрофиля:
+    метрики — в колонки, полный ответ — в result_json, evidence — в psych_signals
+    (дедуп по цитате), interests — в user_interests (накопление между срезами).
+    Дисклеймер не хранится: фиксируется период и число сообщений.</p>
+    {% if users %}
+    <form method='post' class='card'>
+      <label>Пользователь:</label>
+      <select name='user_id'>{% for u in users %}
+        <option value='{{ u.id }}' {{ 'selected' if sel==u.id|string }}>{{ u.username }} ({{ u.id }}){% if u.priority %} ★{% endif %}</option>
+      {% endfor %}</select>
+      <br><br><label>Модель анализа (model):</label>
+      <input type='text' name='model' value='{{ model or "" }}' placeholder='openrouter:deepseek/deepseek-chat-v3.1:free'>
+      <div style='display:flex;gap:.5rem'>
+        <div style='flex:1'><label class='muted'>период с (ГГГГ-ММ-ДД):</label>
+          <input type='text' name='period_from' value='{{ period_from or "" }}'></div>
+        <div style='flex:1'><label class='muted'>период по:</label>
+          <input type='text' name='period_to' value='{{ period_to or "" }}'></div>
+        <div style='flex:1'><label class='muted'>сообщений проанализировано:</label>
+          <input type='text' name='messages' value='{{ messages or "" }}'></div>
+      </div>
+      <br><label>JSON-ответ нейросети:</label>
+      <textarea name='answer' placeholder='{&quot;big_five&quot;: {...}, &quot;mbti&quot;: {...}}'>{{ answer or "" }}</textarea>
+      <br><br><button class='btn'>💾 Импортировать профиль</button>
+    </form>
+    {% else %}
+    <div class='flash err'>Нет пользователей в базе — сначала запустите сбор (python main.py).</div>
+    {% endif %}"""
+
+    PAGE_PROFILE_VIEW = """<h2>Психопрофиль · запись {{ p.id }}</h2>
+    <p class='muted'><a href="{{ url_for('browse', table='psych_profiles') }}">← к списку</a> ·
+       <a href="{{ url_for('record', table='psych_profiles', pk=p.id) }}">редактировать сырые поля</a> ·
+       <a href="/browse/user_profiles?col=user_id&val={{ p.user_id }}">профиль пользователя</a></p>
+    <div class='card'>
+      <b>{{ username or p.user_id }}</b> · модель: {{ p.model or '?' }} ·
+      анализ за {{ p.period_from or '?' }} .. {{ p.period_to or '?' }},
+      сообщений: {{ p.messages_analyzed if p.messages_analyzed is not none else '?' }} ·
+      версия: {{ 'актуальная' if p.is_current else 'архивная' }} · создано {{ p.created_at }}
+    </div>
+    <div class='card'><h4>Big Five</h4>
+      <table><tr><th>открытость</th><th>добросовестность</th><th>экстраверсия</th><th>доброжелательность</th><th>нейротизм</th></tr>
+      <tr><td>{{ bf.openness }}</td><td>{{ bf.conscientiousness }}</td><td>{{ bf.extraversion }}</td>
+          <td>{{ bf.agreeableness }}</td><td>{{ bf.neuroticism }}</td></tr></table></div>
+    <div class='card'><h4>Типологии (гипотезы)</h4>
+      <p><b>MBTI:</b> {{ res.mbti.type if res.get('mbti') else p.mbti_type }}
+         alt: {{ (res.mbti.alt or [])|join(', ') if res.get('mbti') else '—' }}
+         confidence: {{ p.mbti_confidence }}</p>
+      <p><b>Эннеаграмма:</b> {{ res.enneagram.type if res.get('enneagram') else p.enneagram_type }}
+         alt: {{ (res.enneagram.alt or [])|join(', ') if res.get('enneagram') else '—' }}
+         confidence: {{ p.enneagram_confidence }}</p>
+      <p><b>Style:</b> {{ res.style or '—' }}</p>
+      <p><b>Tone:</b> {{ (res.tone or {}).get('dominant','—') }} ·
+         triggers: {{ ((res.tone or {}).get('triggers') or [])|join('; ') }}</p>
+      <p><b>Confidence overall:</b> {{ p.confidence_overall }} · max severity: {{ p.severity_max or '—' }}</p></div>
+    <div class='card'><h4>Интересы</h4>
+      {% if interests %}<ul>{% for i in interests %}
+        <li><b>{{ i.topic }}</b> (×{{ i.evidence_count }}) — {{ i.evidence or '' }}</li>{% endfor %}</ul>
+      {% else %}<p class='muted'>пусто</p>{% endif %}</div>
+    <div class='card'><h4>Риск-флаги</h4>
+      {% if risks %}<table><tr><th>флаг</th><th>severity</th><th>пример</th></tr>
+        {% for r in risks %}<tr><td>{{ r.flag }}</td>
+        <td style='{{ "color:#c62828;font-weight:700" if r.severity=="high" else ("color:#e65100" if r.severity=="med" else "") }}'>{{ r.severity }}</td>
+        <td class='json'>{{ r.evidence }}</td></tr>{% endfor %}</table>
+      {% else %}<p class='muted'>нет</p>{% endif %}</div>
+    <div class='card'><h4>Сигналы (psych_signals, дедуп)</h4>
+      {% if signals %}<table><tr><th>signal</th><th>цитата</th><th>сообщение</th><th>context</th></tr>
+        {% for s in signals %}<tr><td>{{ s.signal_key }}</td><td class='json'>{{ s.quote }}</td>
+        <td>{% if s.message_id %}<a href="/browse/messages/{{ s.message_id }}">{{ s.message_id }}</a>{% else %}—{% endif %}</td>
+        <td>{{ s.context or '' }}</td></tr>{% endfor %}</table>
+      {% else %}<p class='muted'>пусто</p>{% endif %}</div>
+    <div class='card'><h4>Полный JSON ответа</h4>
+      <pre class='sql' style='max-height:500px'>{{ raw_json_pretty }}</pre></div>"""
+
     # --- auth -----------------------------------------------------------------
     @app.before_request
     def require_login():
@@ -493,7 +683,8 @@ def create_app(database_url: str) -> Flask:
 
     @app.context_processor
     def inject_nav():
-        return {"nav_tables": tables(), "page": ""}
+        return {"nav_tables": tables(), "page": "",
+                "has_psych": "psych_profiles" in tables()}
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -553,6 +744,7 @@ def create_app(database_url: str) -> Flask:
         col = safe_ident(request.args.get("col") or "") if request.args.get("col") else ""
         val = request.args.get("val") or ""
         prio = (request.args.get("prio") or "").strip()  # '1' только приоритетные
+        cur = (request.args.get("cur") or "").strip()    # '1' только активные версии (psych_profiles)
         star_pk = request.args.get("star")              # быстрый переключатель ★
         page = max(1, int(request.args.get("page") or 1))
         per = 50
@@ -592,6 +784,10 @@ def create_app(database_url: str) -> Flask:
         # Фильтр «только приоритетные» (для таблиц с колонкой priority).
         if prio == "1" and "priority" in all_cols:
             where_parts.append(sa_tbl.columns.priority.is_not(None) & (sa_tbl.columns.priority != 0))
+        # psych_profiles: фильтр «только активная версия профиля».
+        if cur == "1" and table == "psych_profiles" and "is_current" in all_cols:
+            where_parts.append(sa_tbl.columns.is_current.is_not(None)
+                               & (sa_tbl.columns.is_current != 0))
         wclause = sa_and(*where_parts) if where_parts else None
 
         sel = sa_select(sa_tbl).order_by(sa_tbl.columns[pk].desc()).limit(per).offset((page - 1) * per)
@@ -606,6 +802,15 @@ def create_app(database_url: str) -> Flask:
             {"pk": r[pk], "cells": [fmt_cell(r[c]) for c in cols]}
             for r in rows_raw
         ]
+        # Подписи user_id -> @username для колонок-ссылок (одним запросом).
+        uids = {r["cells"][cols.index("user_id")][0] for r in rows} \
+            if "user_id" in cols else set()
+        uid_map = {}
+        if uids:
+            try:
+                uid_map = user_names_for({int(u) for u in uids if u.isdigit()})
+            except Exception:
+                uid_map = {}
 
         def href(p: int) -> str:
             base = f"/browse/{quote_plus(table)}?page={p}"
@@ -615,6 +820,8 @@ def create_app(database_url: str) -> Flask:
                 base += "&col=" + quote_plus(col) + "&val=" + quote_plus(val)
             if prio:
                 base += "&prio=" + quote_plus(prio)
+            if cur:
+                base += "&cur=" + cur
             return base
 
         return render(
@@ -623,6 +830,8 @@ def create_app(database_url: str) -> Flask:
             pages=max(1, -(-total // per)), href=href,
             hidden_count=len(all_cols) - len(cols),
             prio=prio, has_priority="priority" in all_cols, pk_col=pk,
+            cur=cur, is_psych_profiles=(table == "psych_profiles"),
+            uid_map=uid_map,
         )
 
     # --- карточка записи: просмотр + редактирование -------------------------
@@ -702,12 +911,60 @@ def create_app(database_url: str) -> Flask:
             {"name": f["name"], "kind": f["kind"], "pk": f["pk"],
              "nullable": f["nullable"],
              "type": str(sa_tbl.columns[f["name"]].type.compile()).split()[0],
-             "value": values.get(f["name"]),
+             "value": (_json_pretty(values.get(f["name"]))
+                       if f["kind"] == "textarea" and _is_json_field(f["name"])
+                       else values.get(f["name"])),
              "error": errors.get(f["name"])}
             for f in fields
         ]
+
+        # --- связанные данные (новый функционал v5..v8) -----------------------
+        related: list[dict] = []
+        uid_val = row.get("user_id")
+        if table != "user_profiles" and uid_val is not None:
+            # все таблицы-источники, где есть user_id
+            for t in ("psych_profiles", "psych_signals", "user_interests",
+                      "user_games", "profile_snapshots"):
+                if t not in tables() or t == table:
+                    continue
+                try:
+                    tb2 = Table(t, MetaData(), autoload_with=engine)
+                    if "user_id" not in [c["name"] for c in inspect(engine).get_columns(t)]:
+                        continue
+                    with engine.connect() as conn:
+                        rs = conn.execute(
+                            sa_select(tb2).where(tb2.columns.user_id == uid_val)
+                            .order_by(tb2.columns[pk_of(t)].desc()).limit(10)
+                        ).mappings().all()
+                    cols2 = view_cols_of(t)
+                    related.append({
+                        "table": t, "cols": cols2,
+                        "rows": [[fmt_cell(r[c])[0] for c in cols2] for r in rs],
+                        "pks": [r[pk_of(t)] for r in rs],
+                    })
+                except Exception:
+                    continue
+        elif table == "user_profiles":
+            uid_val = row.get("user_id")
+            for t in ("psych_profiles", "psych_signals", "user_interests",
+                      "user_games", "profile_snapshots", "messages"):
+                if t not in tables():
+                    continue
+                try:
+                    tb2 = Table(t, MetaData(), autoload_with=engine)
+                    with engine.connect() as conn:
+                        n = conn.execute(
+                            sa_select(func.count()).select_from(tb2).where(
+                                tb2.columns.user_id == uid_val
+                            )
+                        ).scalar() or 0
+                    related.append({"table": t, "count": n})
+                except Exception:
+                    continue
+
         return render(PAGE_RECORD, page="browse", table=table, pk=pk,
-                      fields=form_fields)
+                      fields=form_fields, related=related,
+                      uid=uid_val)
 
     @app.post("/browse/<table>/delete")
     def delete_row(table: str):
@@ -816,6 +1073,104 @@ def create_app(database_url: str) -> Flask:
             ).mappings().all()
         return render(
             PAGE_AUDIT, page="audit", rows=rows, cur_page=page, pages=max(1, -(-total // per)),
+        )
+
+    # --- импорт ответа нейросети (психопрофиль) ------------------------------
+    @app.route("/profile/import", methods=["GET", "POST"])
+    def profile_import():
+        if "user_profiles" not in tables():
+            flash("Таблица user_profiles отсутствует — сначала запустите сбор.", "error")
+            return render(PAGE_PROF_IMPORT, page="profimport", users=[],
+                          sel=None, model=None, period_from=None,
+                          period_to=None, messages=None, answer=None)
+        with engine.connect() as conn:
+            users = conn.execute(text(
+                "SELECT id, username, priority FROM user_profiles "
+                "ORDER BY priority DESC, username"
+            )).mappings().all()
+        form = {k: request.form.get(k, "") for k in
+                ("user_id", "model", "period_from", "period_to", "messages", "answer")}
+        if request.method == "POST":
+            try:
+                from app.services.analysis_importer import (
+                    import_analysis, parse_llm_answer,
+                )
+
+                parsed = parse_llm_answer(form["answer"])
+                pid = import_analysis(
+                    engine,
+                    user_id=int(form["user_id"]),
+                    answer=parsed,
+                    model=form["model"] or None,
+                    period_from=(parse_field("datetime", form["period_from"], True)
+                                 if form["period_from"] else None),
+                    period_to=(parse_field("datetime", form["period_to"], True)
+                               if form["period_to"] else None),
+                    messages_analyzed=(int(form["messages"])
+                                       if form["messages"].isdigit() else None),
+                )
+                audit("psych_import", target=f"user={form['user_id']}",
+                      details=f"profile_id={pid}")
+                flash(f"Импортировано: профиль #{pid}.", "ok")
+                return redirect(url_for("profile_view", pid=pid))
+            except Exception as e:
+                flash(f"Ошибка импорта: {e}", "error")
+        return render(PAGE_PROF_IMPORT, page="profimport", users=users,
+                      sel=form.get("user_id"), model=form.get("model"),
+                      period_from=form.get("period_from"),
+                      period_to=form.get("period_to"),
+                      messages=form.get("messages"), answer=form.get("answer"))
+
+    # --- читаемый вид психопрофиля -------------------------------------------
+    @app.route("/profile/<int:pid>")
+    def profile_view(pid: int):
+        if "psych_profiles" not in tables():
+            abort(404)
+        pp = Table("psych_profiles", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            p = conn.execute(sa_select(pp).where(pp.columns.id == pid)).mappings().first()
+        if p is None:
+            abort(404)
+        try:
+            res = json.loads(p.result_json) if p.result_json else {}
+        except Exception:
+            res = {}
+        bf = {
+            "openness": p.big_five_openness,
+            "conscientiousness": p.big_five_conscientiousness,
+            "extraversion": p.big_five_extraversion,
+            "agreeableness": p.big_five_agreeableness,
+            "neuroticism": p.big_five_neuroticism,
+        }
+        username = None
+        try:
+            up = Table("user_profiles", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                r = conn.execute(sa_select(up.columns.username).where(
+                    up.columns.user_id == p.user_id)).scalar()
+            username = r
+        except Exception:
+            pass
+        signals, interests = [], []
+        if "psych_signals" in tables():
+            t2 = Table("psych_signals", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                signals = conn.execute(
+                    sa_select(t2).where(t2.columns.profile_id == pid)
+                    .order_by(t2.columns.id)
+                ).mappings().all()
+        if "user_interests" in tables():
+            t3 = Table("user_interests", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                interests = conn.execute(
+                    sa_select(t3).where(t3.columns.user_id == p.user_id)
+                    .order_by(t3.columns.evidence_count.desc())
+                ).mappings().all()
+        risks = (res.get("risk_flags") or []) if isinstance(res, dict) else []
+        return render(
+            PAGE_PROFILE_VIEW, page="browse", p=p, res=res, bf=bf,
+            username=username, signals=signals, interests=interests, risks=risks,
+            raw_json_pretty=_json_pretty(p.result_json),
         )
 
     # --- действия ---------------------------------------------------------------------
