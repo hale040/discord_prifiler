@@ -99,7 +99,7 @@ def user_fields(user: discord.abc.User) -> dict[str, Any]:
         "global_name": _safe(lambda: user.global_name),
         "mention": _safe(lambda: user.mention),
         "bot": bool(getattr(user, "bot", False)),
-        "system_user": bool(getattr(user, "system", False)),
+        "is_system": bool(getattr(user, "system", False)),  # колонка переименована: system_user — синтаксическая ошибка в PG (см. entities.py)
         "avatar_url": _safe(lambda: str(user.display_avatar.url)),
         "banner_url": _safe(lambda: str(user.banner.url)) if getattr(user, "banner", None) else None,
         "accent_color": _safe(lambda: int(user.accent_color.value) if user.accent_color else None),

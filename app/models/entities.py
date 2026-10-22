@@ -68,7 +68,11 @@ class UserProfile(Base):
 
     # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
     id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    # user_id ссылается на UserProfile.user_id (snowflake Discord), а не на
+    # суррогатный id — поэтому UNIQUE на user_id обязателен для FK.
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, unique=True, index=True
+    )  # см. выше: unique + index для ForeignKey(user_profiles.user_id)
 
     username: Mapped[str] = mapped_column(String(256), default="")
     discriminator: Mapped[str] = mapped_column(String(32), default="0")
@@ -76,7 +80,12 @@ class UserProfile(Base):
     mention: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     bot: Mapped[bool] = mapped_column(Boolean, default=False)
-    system_user: Mapped[bool] = mapped_column(Boolean, default=False)
+    # ВАЖНО: колонка называется is_system, а не system_user: в PostgreSQL
+    # USER/SYSTEM — зарезервированные слова (зарезервированы для использования
+    # в качестве функций), и CREATE TABLE ... system_user BOOLEAN падает с
+    # "syntax error at or near". SQLAlchemy экранирует только полностью
+    # зарезервированные имена (USER -> "user"), для *_user она этого не делает.
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
 
     avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     banner_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
