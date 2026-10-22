@@ -19,6 +19,7 @@ from app.models.entities import (
     ChannelState,
     GuildMemberProfile,
     Message,
+    UserGame,
     UserRoleTag,
     UserProfile,
 )
@@ -85,6 +86,64 @@ class Repository:
     def get_user(self, user_id: int) -> UserProfile | None:
         with self._sf() as s:
             return s.scalars(select(UserProfile).where(UserProfile.user_id == user_id)).first()
+
+    # ------------------------------------------------------------------ games
+    def replace_user_games(self, user_id: int, games: list[dict[str, Any]]) -> int:
+        """Upsert списка игр/активностей пользователя. Обновляет last_seen у
+        совпавших по имени, добавляет новые; старые НЕ удаляет (история игр
+        полезна для анализа). Возвращает число новых записей."""
+        if not games:
+            return 0
+        now = datetime.now(timezone.utc)
+        added = 0
+        with self._sf() as s:
+            existing = {
+                g.name.lower(): g
+                for g in s.scalars(select(UserGame).where(UserGame.user_id == user_id))
+            }
+            for g in games:
+                name = (g.get("name") or "").strip()[:256]
+                if not name:
+                    continue
+                row = existing.get(name.lower())
+                if row is None:
+                    s.add(
+                        UserGame(
+                            user_id=user_id,
+                            name=name,
+                            kind=g.get("kind"),
+                            details=(g.get("details") or "")[:512] or None,
+                            state=(g.get("state") or "")[:512] or None,
+                            url=g.get("url"),
+                            application_id=g.get("application_id"),
+                        )
+                    )
+                    existing[name.lower()] = True  # защита от дублей внутри пачки
+                    added += 1
+                elif isinstance(row, UserGame):
+                    row.last_seen = now
+                    if g.get("details") and not row.details:
+                        row.details = (g["details"] or "")[:512]
+                    if g.get("url") and not row.url:
+                        row.url = g["url"]
+            s.commit()
+        return added
+
+    def all_user_ids(self) -> list[int]:
+        """Все известные user_id — для периодического рефреша профилей."""
+        with self._sf() as s:
+            return list(s.scalars(select(UserProfile.user_id).order_by(UserProfile.user_id)))
+
+    def profile_needs_refresh(self, user_id: int, days: float) -> bool:
+        """True, если профиль не обновлялся дольше `days` дней (или никогда)."""
+        u = self.get_user(user_id)
+        if u is None or u.last_updated is None:
+            return True
+        ts = u.last_updated
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0
+        return age_days >= days
 
     # -------------------------------------------------------------- messages
     def message_exists(self, message_id: int) -> bool:

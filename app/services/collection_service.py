@@ -140,6 +140,7 @@ class CollectionService:
             asyncio.create_task(self._poll_loop(channel, guild_id), name="poll-loop"),
             asyncio.create_task(self._profile_worker(), name="profile-worker"),
             asyncio.create_task(self._attachment_worker(), name="attachment-worker"),
+            asyncio.create_task(self._refresh_loop(), name="profile-refresh-loop"),
         ]
 
     async def stop(self) -> None:
@@ -430,11 +431,40 @@ class CollectionService:
     async def _handle_message(self, msg: discord.Message, guild_id: int | None) -> bool:
         return self._handle_message_sync(msg, guild_id)
 
-    def _queue_profile(self, user_id: int) -> None:
-        if user_id in self._profiled or user_id in self._queued_profiles:
+    def _queue_profile(self, user_id: int, force: bool = False) -> None:
+        if user_id in self._queued_profiles:
+            return
+        if not force and user_id in self._profiled:
             return
         self._queued_profiles.add(user_id)
         self._profile_queue.put_nowait(user_id)
+
+    # ------------------------------------------------- profile refresh loop
+    async def _refresh_loop(self) -> None:
+        """Раз в PROFILE_REFRESH_DAYS (по умолчанию 14) пере-запрашивает
+        профили всех известных пользователей: обновляются bio/бейджи/
+        connections (в т.ч. Steam-логин), presence -> игры (user_games)."""
+        days = max(0.01, float(getattr(self.s, "profile_refresh_days", 14)))
+        while self._running:
+            try:
+                ids = await asyncio.to_thread(self.repo.all_user_ids)
+                stale = [
+                    uid for uid in ids
+                    if await asyncio.to_thread(self.repo.profile_needs_refresh, uid, days)
+                ]
+                if stale:
+                    log.info(
+                        "REFRESH: %s профилей старше %.0f дн. — в очередь переопроса.",
+                        len(stale), days,
+                    )
+                    for uid in stale:
+                        self._profiled.discard(uid)  # разрешаем повторный опрос
+                        self._queue_profile(uid, force=True)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("refresh loop: %s", exc)
+            # проверка расписания раз в час; реальный фильтр — last_updated
+            await asyncio.sleep(3600)
+
 
     # ------------------------------------------------------- profile worker
     async def _profile_worker(self) -> None:
@@ -484,6 +514,7 @@ class CollectionService:
                 log.debug("fetch_user(%s): %s", user_id, exc)
 
         # 3) Серверный участник: nick/joined_at/роли/таймауты/права
+        member = None
         state = self.repo.get_state(self.s.channel_id)
         gid = state.guild_id
         if gid is not None:
@@ -497,10 +528,31 @@ class CollectionService:
                 for k, v in mappers.user_fields(member).items():
                     fields.setdefault(k, v)
 
-        # 4) Локаль/таймзон — доступны только о себе через profile.metadata;
+        # 4) Игры/активности: из Member (presence) и из profile, если отдали.
+        #    Steam-логин — из connections (сам Steam не трогаем).
+        games: list[dict[str, Any]] = []
+        if prof is not None:
+            games.extend(mappers.games_from_activities(prof))
+        steam_login = None
+        if prof is not None:
+            steam_login = mappers.steam_login_from(prof)
+        if member is not None:
+            for g in mappers.games_from_activities(member):
+                if not any(g["name"].lower() == e["name"].lower() for e in games):
+                    games.append(g)
+            if steam_login is None:
+                steam_login = mappers.steam_login_from(member)
+        if steam_login and fields.get("connections_json"):
+            pass  # логин уже внутри connections_json; отдельного поля не заводим
+
+        # 5) Локаль/таймзон — доступны только о себе через profile.metadata;
         #    сохраняем всё, что удалось получить.
         if fields or guild_fields:
             self.repo.upsert_user_profile(user_id, fields or {}, guild_fields, roles)
+            if games:
+                added = self.repo.replace_user_games(user_id, games)
+                if added:
+                    log.info("GAMES user %s: +%s игр/активностей", user_id, added)
             self._profiled.add(user_id)
             log.debug("Профиль сохранён: %s (+roles=%s)", user_id, len(roles or []))
             self._notify(

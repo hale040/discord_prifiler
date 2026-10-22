@@ -81,6 +81,12 @@ class Settings:
     )
     attachments_dir: str = os.getenv("ATTACHMENTS_DIR", "data/attachments")
 
+    # Рефреш профилей: раз в N дней пере-запрашивать профили всех известных
+    # пользователей (bio, бейджи, connections/Steam-логин, presence -> игры).
+    profile_refresh_days: float = field(
+        default_factory=lambda: float(os.getenv("PROFILE_REFRESH_DAYS", "14") or 14)
+    )
+
     # База данных
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///data/profiling.db")
 
