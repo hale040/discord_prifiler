@@ -19,7 +19,7 @@
     валидация типов, UPDATE только по PK, запись старого значения в audit_log.
   * SQL-редактор: SELECT всегда; UPDATE/DELETE — только с WHERE и после
     подтверждения (count-before), в транзакции, с записью в audit_log.
-  * Админ-действия: перезапуск миграций схемы, VACUUM/ANALYZE SQLite.
+  * Админ-действия: перезапуск миграций схемы, VACUUM/ANALYZE PostgreSQL.
 
 Миграции: любое изменение схемы идёт через app/models/migrations.py
 (эта админка добавила v2 -> таблицу audit_log).
@@ -142,9 +142,10 @@ def _is_json_field(name: str) -> bool:
 
 
 def _sync_url(url: str) -> str:
-    if url.startswith("sqlite+aiosqlite"):
-        url = url.replace("sqlite+aiosqlite", "sqlite")
-    return url
+    # PostgreSQL-only: нормализация драйвера + fail-fast на чужих диалектах.
+    from app.models.db import _to_sync_url, require_postgres
+
+    return _to_sync_url(require_postgres(url))
 
 
 # --------------------------------------------------------------------------- #
@@ -594,8 +595,9 @@ def create_app(database_url: str) -> Flask:
     <div class='card'><h4>Перезапустить миграции схемы</h4>
     <p class='muted'>Применяет отсутствующие шаги app/models/migrations.py (идемпотентно).</p>
     <form method='post'><button class='btn'>Запустить миграции</button></form></div>
-    <div class='card'><h4>VACUUM + ANALYZE (SQLite)</h4>
-    <p class='muted'>Дефрагментация и пересчёт статистики планировщика.</p>
+    <div class='card'><h4>VACUUM + ANALYZE (PostgreSQL)</h4>
+    <p class='muted'>Очистка мёртвых кортежей и пересчёт статистики планировщика
+    (VACUUM выполняется вне транзакции).</p>
     <form method='post'><input type='hidden' name='op' value='vacuum'>
     <button class='btn warn'>Выполнить</button></form></div>
     {% if last %}<div class='card'><h4>Последний результат</h4><pre>{{ last }}</pre></div>{% endif %}"""
@@ -759,7 +761,7 @@ def create_app(database_url: str) -> Flask:
                         sa_tbl.columns[pk] == star_pk
                     )
                 ).scalar()
-                newv = 0 if cur else 1
+                newv = bool(cur) is False  # Boolean-колонка на PG
                 conn.execute(
                     sa_update(sa_tbl)
                     .where(sa_tbl.columns[pk] == star_pk)
@@ -783,11 +785,10 @@ def create_app(database_url: str) -> Flask:
             where_parts.append(sa_tbl.columns[col] == val)
         # Фильтр «только приоритетные» (для таблиц с колонкой priority).
         if prio == "1" and "priority" in all_cols:
-            where_parts.append(sa_tbl.columns.priority.is_not(None) & (sa_tbl.columns.priority != 0))
+            where_parts.append(sa_tbl.columns.priority.is_(True))
         # psych_profiles: фильтр «только активная версия профиля».
         if cur == "1" and table == "psych_profiles" and "is_current" in all_cols:
-            where_parts.append(sa_tbl.columns.is_current.is_not(None)
-                               & (sa_tbl.columns.is_current != 0))
+            where_parts.append(sa_tbl.columns.is_current.is_(True))
         wclause = sa_and(*where_parts) if where_parts else None
 
         sel = sa_select(sa_tbl).order_by(sa_tbl.columns[pk].desc()).limit(per).offset((page - 1) * per)
@@ -880,8 +881,8 @@ def create_app(database_url: str) -> Flask:
             if not errors:
                 for name, new_val in parsed.items():
                     old_val = row[name]
-                    # Сравнение по строковому представлению (SQLite хранит
-                    # datetime как текст; bool/int приходят из формы строками).
+                    # Сравнение по строковому представлению: из формы значения
+                    # приходят строками, а bool/datetime приводятся parse_field.
                     if str(old_val if old_val is not None else "") != \
                        str(new_val if new_val is not None else ""):
                         updates[name] = new_val
@@ -1180,7 +1181,11 @@ def create_app(database_url: str) -> Flask:
         if request.method == "POST":
             op = request.form.get("op", "migrate")
             if op == "vacuum":
-                with engine.connect() as conn:
+                # PostgreSQL: VACUUM нельзя выполнять внутри транзакции —
+                # отдельное соединение в режиме AUTOCOMMIT.
+                with engine.connect().execution_options(
+                    isolation_level="AUTOCOMMIT"
+                ) as conn:
                     conn.execute(text("VACUUM"))
                     conn.execute(text("ANALYZE"))
                 audit("vacuum_analyze", result="ok")
@@ -1201,16 +1206,16 @@ def create_app(database_url: str) -> Flask:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Веб-админка поверх БД профайлера")
-    ap.add_argument("--db", default=None, help="путь к sqlite или URL (ENV DATABASE_URL)")
+    ap.add_argument("--db", default=None, help="PostgreSQL URL (иначе ENV DATABASE_URL)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8777)
     args = ap.parse_args()
 
     load_dotenv(BASE_DIR / ".env")
-    db = args.db or os.getenv("DATABASE_URL", "sqlite:///data/profiling.db")
-    if not db.startswith(("sqlite:", "postgresql", "mysql")):
-        db = "sqlite:///" + quote_plus(str(Path(db).resolve()))
-    app = create_app(db)
+    from app.models.db import DEFAULT_DATABASE_URL
+
+    db = args.db or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
+    app = create_app(db)  # внутри — fail-fast, если это не PostgreSQL
     print(f"Admin UI: http://{args.host}:{args.port}  (db={db})")
     app.run(host=args.host, port=args.port, debug=False)
 

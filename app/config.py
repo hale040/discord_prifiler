@@ -88,7 +88,11 @@ class Settings:
     )
 
     # База данных
-    database_url: str = os.getenv("DATABASE_URL", "sqlite:///data/profiling.db")
+    database_url: str = os.getenv(
+        "DATABASE_URL",
+        # PostgreSQL — единственная поддерживаемая СУБД (см. app/models/db.py)
+        "postgresql+psycopg://profiler:profiler@localhost:5432/profiling",
+    )
 
     # Синхронный URL для SQLAlchemy (driver переключается в db.py)
     log_level: str = os.getenv("LOG_LEVEL", "INFO")

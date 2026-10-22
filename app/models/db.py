@@ -1,6 +1,7 @@
 """Инициализация БД (PostgreSQL + SQLAlchemy 2.x)."""
 from __future__ import annotations
 
+import os
 import re
 
 from sqlalchemy import create_engine
@@ -13,10 +14,15 @@ from app.models.entities import Base
 DEFAULT_DATABASE_URL = "postgresql+psycopg://profiler:profiler@localhost:5432/profiling"
 
 
+def default_database_url() -> str:
+    """DATABASE_URL из окружения либо PG-дефолт (для CLI-скриптов)."""
+    return os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
+
+
 def _to_sync_url(url: str) -> str:
     """Приводит URL к синхронному драйверу psycopg(3).
 
-    aiosqlite/asyncpg-варианты не используем: коллектор выполняет БД-операции
+    asyncpg-вариант не используем: коллектор выполняет БД-операции
     в отдельных потоках (asyncio.to_thread), поэтому нужен sync-движок.
     """
     url = re.sub(r"\+asyncpg$", "+psycopg", url)
@@ -26,13 +32,24 @@ def _to_sync_url(url: str) -> str:
     return url
 
 
+def require_postgres(url: str) -> str:
+    """Fail-fast: SQLite/прочие диалекты больше не поддерживаются."""
+    if not url.startswith(("postgresql://", "postgresql+", "postgres://")):
+        raise SystemExit(
+            f"[FATAL] DATABASE_URL должен быть PostgreSQL "
+            f"(postgresql://... или postgresql+psycopg://...), получено: {url!r}. "
+            f"SQLite больше не поддерживается."
+        )
+    return url
+
+
 def create_db_engine(url: str):
     """Создать sync-engine для произвольного DATABASE_URL (используется CLI-скриптами)."""
-    return create_engine(_to_sync_url(url), echo=False, future=True, pool_pre_ping=True)
+    return create_engine(_to_sync_url(require_postgres(url)), echo=False, future=True, pool_pre_ping=True)
 
 
 def init_db(settings: Settings) -> sessionmaker[Session]:
-    sync_url = _to_sync_url(settings.database_url)
+    sync_url = _to_sync_url(require_postgres(settings.database_url))
     engine = create_engine(
         sync_url,
         echo=False,
