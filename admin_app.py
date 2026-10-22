@@ -19,10 +19,11 @@
     валидация типов, UPDATE только по PK, запись старого значения в audit_log.
   * SQL-редактор: SELECT всегда; UPDATE/DELETE — только с WHERE и после
     подтверждения (count-before), в транзакции, с записью в audit_log.
-  * Админ-действия: перезапуск миграций схемы, VACUUM/ANALYZE PostgreSQL.
+  * Админ-действия: VACUUM/ANALYZE PostgreSQL.
 
-Миграции: любое изменение схемы идёт через app/models/migrations.py
-(эта админка добавила v2 -> таблицу audit_log).
+Схема: база новая, создаётся целиком из моделей (app/models/db.py ->
+create_all). Версионируемые миграции (app/models/migrations.py) пока
+отключены — модуль сохранён для будущих изменений схемы живой базы.
 
 ВАЖНО: не выставляйте админку в интернет без HTTPS reverse-proxy и
 настоящего SECRET_KEY; она работает с БД напрямую.
@@ -450,7 +451,7 @@ def create_app(database_url: str) -> Flask:
         "<br><br><button class='btn'>Войти</button></form></div>"""
 
     PAGE_DASH = """<h2>Дашборд</h2>
-    <p class='muted'>БД: {{ db }} · схема v{{ ver }} · всего строк: {{ total }}</p>
+    <p class='muted'>БД: {{ db }} · всего строк: {{ total }}</p>
     <div class='grid'>{% for name, cnt in counts %}
       <div class='card'><b>{{ name }}</b><br><span style='font-size:1.4rem'>{{ cnt }}</span><br>
       <a href="{{ url_for('browse', table=name) }}">просмотр →</a></div>{% endfor %}</div>
@@ -592,9 +593,6 @@ def create_app(database_url: str) -> Flask:
     {% if cur_page<pages %}<a class='btn gray' href='?page={{ cur_page+1 }}'>→</a>{% endif %}</p>"""
 
     PAGE_ACT = """<h2>Админ-действия</h2>
-    <div class='card'><h4>Перезапустить миграции схемы</h4>
-    <p class='muted'>Применяет отсутствующие шаги app/models/migrations.py (идемпотентно).</p>
-    <form method='post'><button class='btn'>Запустить миграции</button></form></div>
     <div class='card'><h4>VACUUM + ANALYZE (PostgreSQL)</h4>
     <p class='muted'>Очистка мёртвых кортежей и пересчёт статистики планировщика
     (VACUUM выполняется вне транзакции).</p>
@@ -709,8 +707,6 @@ def create_app(database_url: str) -> Flask:
     # --- дашборд ----------------------------------------------------------------
     @app.route("/")
     def dashboard():
-        from app.models.migrations import get_current_version
-
         ts = tables()
         counts = []
         total = 0
@@ -730,7 +726,7 @@ def create_app(database_url: str) -> Flask:
                 ).mappings().all()
         return render(
             PAGE_DASH, page="dash", db=app.config["DATABASE_URL"],
-            ver=get_current_version(engine), counts=counts, total=total, recent=recent,
+            counts=counts, total=total, recent=recent,
         )
 
     # --- просмотр таблиц ----------------------------------------------------------
@@ -1179,7 +1175,7 @@ def create_app(database_url: str) -> Flask:
     def actions_page():
         last = session.get("last_action")
         if request.method == "POST":
-            op = request.form.get("op", "migrate")
+            op = request.form.get("op", "vacuum")
             if op == "vacuum":
                 # PostgreSQL: VACUUM нельзя выполнять внутри транзакции —
                 # отдельное соединение в режиме AUTOCOMMIT.
@@ -1190,12 +1186,6 @@ def create_app(database_url: str) -> Flask:
                     conn.execute(text("ANALYZE"))
                 audit("vacuum_analyze", result="ok")
                 last = "VACUUM/ANALYZE выполнены."
-            else:
-                from app.models.migrations import run_migrations
-
-                n = run_migrations(engine)
-                audit("run_migrations", result=f"applied={n}")
-                last = f"Миграции: применено шагов — {n}."
             session["last_action"] = last
             flash(last, "ok")
             return redirect(url_for("actions_page"))
