@@ -64,8 +64,10 @@ from flask import (
     session,
     url_for,
 )
-from sqlalchemy import Boolean, MetaData, Table, create_engine, func, inspect, select as sa_select, text
+from sqlalchemy import Boolean, MetaData, Table, Text, cast as sa_cast, create_engine, func, inspect, select as sa_select, text
 from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update
+from sqlalchemy import String
+from sqlalchemy.dialects.postgresql import CHAR, VARCHAR
 from markupsafe import Markup
 from sqlalchemy.engine import Engine
 
@@ -848,11 +850,34 @@ def create_app(database_url: str) -> Flask:
         # Таблица через SQLAlchemy Core (autoload) — используется в выражениях ниже.
         where_parts = []
         if q:
+            # LIKE осмысленна только для текстовых колонок; numeric/bool/timestamp/jsonb
+            # в PG не поддерживают оператор ~~ (bigint ~~ text -> ошибка). Для них —
+            # приведение к тексту через cast, чтобы поиск работал и по id/датам/флагам.
             like = "%" + q.replace("%", "\\%").replace("_", "\\_") + "%"
-            conds = [sa_tbl.columns[c].like(like, escape="\\") for c in cols]
+            texty = (String, Text, VARCHAR, CHAR)
+            conds = []
+            for c in cols:
+                col_type = sa_tbl.columns[c].type
+                if isinstance(col_type, texty):
+                    conds.append(sa_tbl.columns[c].like(like, escape="\\"))
+                else:
+                    conds.append(
+                        sa_cast(sa_tbl.columns[c], Text).like(like, escape="\\")
+                    )
             where_parts.append(sa_or(*conds))
         if col and val:
-            where_parts.append(sa_tbl.columns[col] == val)
+            # Равнение по нетекстовым колонкам так же требует приведения строки из URL.
+            ctype = sa_tbl.columns[col].type
+            if isinstance(ctype, (String, Text, VARCHAR, CHAR)):
+                where_parts.append(sa_tbl.columns[col] == val)
+            elif isinstance(ctype, Boolean):
+                where_parts.append(
+                    sa_tbl.columns[col] == val.strip().lower() in ("1", "true", "да", "yes", "on")
+                )
+            else:
+                where_parts.append(
+                    sa_cast(sa_tbl.columns[col], Text) == val
+                )
         # Фильтр «только приоритетные» (для таблиц с колонкой priority).
         if prio == "1" and "priority" in all_cols:
             where_parts.append(sa_tbl.columns.priority.is_(True))
