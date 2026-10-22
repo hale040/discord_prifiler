@@ -9,12 +9,14 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
-from sqlalchemy.dialects.postgresql import BIGINT
+from sqlalchemy.dialects.postgresql import BIGINT, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -90,13 +92,13 @@ class UserProfile(Base):
 
     # Публичные флаги аккаунта (DISCORD_EMPLOYEE, NITRO и т.п.)
     public_flags: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    flags_raw: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-список строк
+    flags_raw: Mapped[str | None] = mapped_column(JSONB, nullable=True)  # JSON-список строк
 
     # Бейджи (JSON: name/description)
-    badges_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    badges_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
 
     # Социальные сети из профиля (Discord profile connections)
-    connections_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    connections_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
 
     # Premium/подписка
     premium_type: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -107,7 +109,7 @@ class UserProfile(Base):
     timezone_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     # Полный сырой дамп объекта (на случай полей, которые ORM не раскрыла)
-    raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
 
     # Приоритетный пользователь: вручную ставится в админке; экспорт/фильтры
     # умеют выбирать только таких (см. export_profiles.py --priority-only).
@@ -185,7 +187,7 @@ class GuildMemberProfile(Base):
     color: Mapped[int | None] = mapped_column(Integer, nullable=True)
     top_role: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
-    raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
 
     user: Mapped[UserProfile] = relationship(back_populates="guild_profiles")
 
@@ -223,6 +225,20 @@ class UserRoleTag(Base):
 class Message(Base):
     __tablename__ = "messages"
 
+    # Индексы под типовые запросы профилирования (PostgreSQL):
+    # - транскрипт одного автора за период (ORDER BY timestamp);
+    # - лента канала при поллинге/backfill;
+    # - частичный индекс: удалённые сообщения в выборках не участвуют.
+    __table_args__ = (
+        Index("ix_messages_author_ts", "author_id", "timestamp"),
+        Index("ix_messages_channel_ts", "channel_id", "timestamp"),
+        Index(
+            "ix_messages_live_ts",
+            "timestamp",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
     # PK = snowflake Discord (явный id, без sequence) — plain BIGINT на PG
     id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True)
     channel_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -257,15 +273,15 @@ class Message(Base):
     mention_count: Mapped[int] = mapped_column(Integer, default=0)
     hashtag_count: Mapped[int] = mapped_column(Integer, default=0)
     reaction_total: Mapped[int] = mapped_column(Integer, default=0)
-    reactions_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reactions_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
 
     # Упоминания ролей/каналов/пользователей (JSON-массивы id)
-    mention_users_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    mention_roles_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    mention_channels_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mention_users_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
+    mention_roles_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
+    mention_channels_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
 
-    stickers_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stickers_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
+    raw_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)
 
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -315,7 +331,7 @@ class ProfileSnapshot(Base):
     status_text: Mapped[str | None] = mapped_column(String(256), nullable=True)  # кастомный статус
     banner_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)   # смена баннера по хешу URL
     avatar_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    connections_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # привязки на момент снимка
+    connections_json: Mapped[str | None] = mapped_column(JSONB, nullable=True)  # привязки на момент снимка
     changed: Mapped[bool] = mapped_column(Boolean, default=True)  # отличается ли от предыдущего снимка
 
     user: Mapped[UserProfile] = relationship()
@@ -356,9 +372,14 @@ class PsychProfile(Base):
     enneagram_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence_overall: Mapped[float | None] = mapped_column(Float, nullable=True)
     severity_max: Mapped[str | None] = mapped_column(String(8))  # high|med|low
-    result_json: Mapped[str | None] = mapped_column(Text)        # полный ответ LLM
+    result_json: Mapped[str | None] = mapped_column(JSONB)        # полный ответ LLM
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        # список текущих профилей одного пользователя (админка/экспорт)
+        Index("ix_psych_current_user", "user_id", "created_at"),
+    )
 
 
 class PsychSignal(Base):
@@ -385,7 +406,12 @@ class PsychSignal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "signal_key", "quote_norm", name="uq_psych_signals_dedup"),
+        UniqueConstraint(
+        "user_id",
+        text("signal_key varchar_pattern_ops"),
+        text("quote_norm varchar_pattern_ops"),
+        name="uq_psych_signals_dedup",
+    ),
     )
 
 
@@ -405,7 +431,11 @@ class UserInterest(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "topic_norm", name="uq_user_interests_norm"),
+        UniqueConstraint(
+        "user_id",
+        text("topic_norm varchar_pattern_ops"),
+        name="uq_user_interests_norm",
+    ),
     )
 
 

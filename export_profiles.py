@@ -111,8 +111,13 @@ GRATITUDE_WORDS = {"спасибо", "thanks", "thx", "благодарю", "tha
 
 
 def load_json(raw):
-    if not raw:
+    """Разбор JSON-колонки. Колонки *_json — PostgreSQL JSONB, драйвер
+    возвращает уже разобранные list/dict; строковые значения поддержаны для
+    совместимости со старыми дампами."""
+    if raw is None or raw == "":
         return None
+    if isinstance(raw, (list, dict)):
+        return raw
     try:
         return json.loads(raw)
     except (TypeError, json.JSONDecodeError):
@@ -230,7 +235,7 @@ def fetch_psych_profiles(conn) -> dict[int, dict]:
     for r in rows:
         uid = int(r["user_id"])
         try:
-            res = json.loads(r["result_json"] or "{}")
+            res = load_json(r["result_json"]) or {}
         except (ValueError, TypeError):
             res = {}
         entry = {
@@ -483,7 +488,6 @@ def fetch_profile_history(conn) -> dict[int, dict]:
         )
     except SQLAlchemyError:
         snaps = []
-    import json as _json
     for r in snaps:
         e = out.setdefault(int(r["user_id"]), {"snaps": [], "roles_hist": []})
         item: dict = {"at": str(r["taken_at"] or "")[:10]}
@@ -493,7 +497,7 @@ def fetch_profile_history(conn) -> dict[int, dict]:
             item["status"] = r["status_text"]
         if r["connections_json"]:
             try:
-                cs = _json.loads(r["connections_json"])
+                cs = load_json(r["connections_json"]) or []
                 item["conns"] = [
                     f"{c.get('platform', '?')}: {c.get('name', '')}".strip(": ")
                     for c in cs if isinstance(c, dict)

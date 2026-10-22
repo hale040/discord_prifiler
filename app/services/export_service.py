@@ -163,7 +163,7 @@ class DialogExporter:
                 atts += "[img]"
             if m.embed_count:
                 atts += "[emb]"
-            if m.stickers_json and m.stickers_json not in ("[]", "null"):
+            if m.stickers_json and (m.stickers_json if isinstance(m.stickers_json, str) else len(m.stickers_json)) not in ("[]", "null", 0):
                 atts += "[stk]"
             line = " ".join(x for x in (meta[0], flags, text, atts) if x)
             lines.append(line)
