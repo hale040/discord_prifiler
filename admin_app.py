@@ -128,9 +128,18 @@ USER_LINK_COLS = ("user_id",)
 
 
 def _json_pretty(v) -> str:
-    """Красивый JSON для textarea в карточке записи (если значение — JSON)."""
+    """Красивый JSON для textarea в карточке записи (если значение — JSON).
+
+    Колонки *_json на PostgreSQL — JSONB: psycopg возвращает уже разобранные
+    list/dict; строковые значения поддержаны для совместимости.
+    """
     if v is None:
         return ""
+    if isinstance(v, (dict, list)):
+        try:
+            return json.dumps(v, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            return str(v)
     s = str(v)
     try:
         return json.dumps(json.loads(s), ensure_ascii=False, indent=2)
@@ -234,6 +243,11 @@ def create_app(database_url: str) -> Flask:
         """(текст, is_json) для отображения; длинные значения сворачиваются."""
         if v is None:
             return "—", False
+        if isinstance(v, (dict, list)):  # JSONB-колонки приходят уже разобранными
+            s = json.dumps(v, ensure_ascii=False, default=str)
+            if len(s) > 400:
+                return s[:400] + "…", True
+            return s, True
         s = str(v)
         if len(s) > 400:
             return s[:400] + "…", True
@@ -349,6 +363,8 @@ def create_app(database_url: str) -> Flask:
                     kind = "bigint"      # текстовый ввод -> int (snowflake не влезает в JS-число)
                 elif cls in ("Float", "Numeric", "DECIMAL"):
                     kind = "float"
+                elif impl_name.upper().startswith("JSONB") or cls == "JSON":
+                    kind = "json"        # JSONB: ввод/вывод в виде JSON-текста
                 elif cls in ("Text", "CLOB"):
                     kind = "textarea"
                 elif getattr(t, "length", None) and t.length > 64:
@@ -383,6 +399,12 @@ def create_app(database_url: str) -> Flask:
                 return float(raw)
             except ValueError:
                 raise ValueError(f"ожидается число, получено {raw!r}")
+        if kind == "json":
+            # JSONB-колонки: принимаем JSON-текст из textarea, храним объект
+            try:
+                return json.loads(raw)
+            except ValueError:
+                raise ValueError(f"ожидается корректный JSON, получено {raw[:60]!r}")
         if kind == "datetime":
             from datetime import datetime as _dt
             s = raw.replace("T", " ").replace("Z", "")
@@ -877,6 +899,20 @@ def create_app(database_url: str) -> Flask:
             if not errors:
                 for name, new_val in parsed.items():
                     old_val = row[name]
+                    # JSONB: сравниваем канонизированный JSON (dict/list),
+                    # иначе textarea с тем же содержимым ложно «изменяется».
+                    if kind_by_name.get(name) == "json":
+                        def _canon(v):
+                            if isinstance(v, str):
+                                try:
+                                    v = json.loads(v)
+                                except ValueError:
+                                    return v
+                            return json.dumps(v, sort_keys=True, ensure_ascii=False, default=str) \
+                                if v is not None else ""
+                        if _canon(old_val) != _canon(new_val):
+                            updates[name] = new_val
+                        continue
                     # Сравнение по строковому представлению: из формы значения
                     # приходят строками, а bool/datetime приводятся parse_field.
                     if str(old_val if old_val is not None else "") != \

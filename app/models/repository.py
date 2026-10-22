@@ -1,4 +1,4 @@
-"""Repository-слой (Model): персист данных через SQLAlchemy поверх SQLite.
+"""Repository-слой (Model): персист данных через SQLAlchemy поверх PostgreSQL.
 
 Вся работа с БД сосредоточена здесь — контроллеры и сервисы не пишут
 SQL/ORM-запросы напрямую.
