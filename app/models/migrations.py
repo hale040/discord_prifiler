@@ -219,6 +219,35 @@ def _v07_role_dynamics_and_attach_kind(engine: Engine) -> None:
                              {"k": k, "i": rid})
 
 
+def _v08_psych_profiles(engine: Engine) -> None:
+    """Психологические профили от нейросети-аналитика.
+
+    - psych_profiles: полный JSON ответа (result_json) + ключевые метрики
+      отдельными колонками для фильтрации; история версий, активна одна;
+    - psych_signals: атомарные evidence с дедупом по нормализованной цитате
+      (уникальный индекс user_id+signal_key+quote_norm) — повторный импорт
+      не раздувает базу;
+    - user_interests: интересы накапливаются между срезами диалога
+      (уникальный индекс user_id+topic_norm, evidence_count).
+    Идемпотентно: таблицы создаются через модели, индексы — если их нет."""
+    from app.models.entities import Base
+
+    created = []
+    for tname in ("psych_profiles", "psych_signals", "user_interests"):
+        if not _table_exists(engine, tname):
+            with engine.begin() as conn:
+                Base.metadata.tables[tname].create(bind=conn, checkfirst=True)
+            created.append(tname)
+    # частичный индекс «активный профиль» (одна активная версия на пользователя)
+    if _table_exists(engine, "psych_profiles") and "ix_psych_profiles_current" not in _indexes(engine, "psych_profiles"):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE INDEX ix_psych_profiles_current ON psych_profiles (user_id, is_current)"
+            ))
+    if created:
+        log.info("Миграция v8: созданы таблицы %s", ", ".join(created))
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
@@ -227,6 +256,7 @@ MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("user_games: таблица игр/активностей пользователя (FK на user_profiles)", _v05_user_games),
     ("profile_snapshots: история изменений профиля (bio/status/banner/connections)", _v06_profile_snapshots),
     ("user_roles: first/last_seen + last_lost_at; attachments: kind", _v07_role_dynamics_and_attach_kind),
+    ("psych_profiles/psych_signals/user_interests: психопрофиль от LLM (миграция v8)", _v08_psych_profiles),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

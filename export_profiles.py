@@ -160,6 +160,60 @@ def fetch_roles(conn) -> dict[int, list[dict]]:
     return out
 
 
+def fetch_psych_profiles(conn) -> dict[int, dict]:
+    """user_id -> компактный активный психопрофиль от LLM (psych_profiles +
+    signals + interests). Таблиц может не быть в старых БД — пусто."""
+    try:
+        rows = conn.execute(
+            "SELECT user_id, model, mbti_type, enneagram_type, confidence_overall,"
+            " period_from, period_to, messages_analyzed, result_json"
+            " FROM psych_profiles WHERE is_current = 1").fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict[int, dict] = {}
+    for r in rows:
+        uid = int(r["user_id"])
+        try:
+            res = json.loads(r["result_json"] or "{}")
+        except (ValueError, TypeError):
+            res = {}
+        entry = {
+            "model": r["model"], "mbti": r["mbti_type"],
+            "enneagram": r["enneagram_type"], "conf": r["confidence_overall"],
+            "period": [str(r["period_from"])[:10], str(r["period_to"])[:10]]
+                      if r["period_from"] and r["period_to"] else None,
+            "msgs": r["messages_analyzed"],
+            "big_five": (res.get("big_five") or {}),
+            "style": res.get("style"),
+        }
+        out[uid] = {k: v for k, v in entry.items() if v not in (None, {}, [])}
+    try:
+        sig = conn.execute(
+            "SELECT user_id, signal_key, quote FROM psych_signals s"
+            " WHERE s.user_id IN (SELECT user_id FROM psych_profiles WHERE is_current = 1)"
+            " ORDER BY created_at DESC LIMIT 200").fetchall()
+        for r in sig:
+            e = out.setdefault(int(r["user_id"]), {})
+            e.setdefault("signals", [])
+            if len(e["signals"]) < 6:
+                e["signals"].append({"k": r["signal_key"], "q": r["quote"][:80]})
+    except sqlite3.Error:
+        pass
+    try:
+        it = conn.execute(
+            "SELECT user_id, topic, evidence_count FROM user_interests i"
+            " WHERE i.user_id IN (SELECT user_id FROM psych_profiles WHERE is_current = 1)"
+            " ORDER BY evidence_count DESC LIMIT 200").fetchall()
+        for r in it:
+            e = out.setdefault(int(r["user_id"]), {})
+            e.setdefault("interests", [])
+            if len(e["interests"]) < 12:
+                e["interests"].append({"t": r["topic"], "n": int(r["evidence_count"] or 1)})
+    except sqlite3.Error:
+        pass
+    return out
+
+
 def fetch_games(conn) -> dict[int, list[str]]:
     """user_id -> список названий игр/активностей (таблица user_games).
     Таблицы может не быть в старых БД до миграции v5 — тогда пустой словарь."""
@@ -807,7 +861,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   dialog_mode: str | None = None,
                   names: dict[int, str] | None = None,
                   games: list[str] | None = None,
-                  history: dict | None = None) -> dict:
+                  history: dict | None = None,
+                  psych: dict | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
     if dialog_msgs is not None and not args.no_context:
@@ -917,6 +972,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
         # история профиля: снимки (bio/status/привязки по датам) и динамика ролей
         # (получение/потеря). Пусто, если таблиц ещё нет или рефреш не проводился.
         "history": history or {"snaps": [], "roles_hist": []},
+        # активный психопрофиль от нейросети (если импортировался)
+        "psych_profile": psych or {},
         "transcript": transcript,
     }
     return dossier
@@ -1073,12 +1130,26 @@ def compact_dossier(d: dict) -> dict:
         if stats_c.get(dk):
             stats_c[dk] = _date_only(stats_c[dk])
 
+    # активный психопрофиль от нейросети -> компактный блок psych
+    psy_in = d.get("psych_profile") or {}
+    pc2 = {k: psy_in[k] for k in ("model", "mbti", "enneagram", "conf", "msgs", "period")
+           if psy_in.get(k) not in (None, [], {})}
+    if psy_in.get("big_five"):
+        pc2["big5"] = psy_in["big_five"]
+    if psy_in.get("style"):
+        pc2["style"] = str(psy_in["style"])[:160]
+    if psy_in.get("interests"):
+        pc2["int"] = psy_in["interests"][:12]
+    if psy_in.get("signals"):
+        pc2["sig"] = psy_in["signals"][:6]
+
     return {"meta": metac, "id": idc,
             **({"p": pc} if pc else {}),
             **({"guilds": gp} if gp else {}),
             **({"roles": roles} if roles else {}),
             "stats": stats_c, "dlg": dcc, "media": mc,
-            **({"hist": hc} if hc else {})}
+            **({"hist": hc} if hc else {}),
+            **({"psych": pc2} if pc2 else {})}
 
 
 def strip_urls_deep(obj):
@@ -1131,6 +1202,8 @@ def render_prompt_md(dossier: dict) -> str:
         "top_role высшая роль), roles — роли, stats — метрики,",
         "dlg — режим контекста диалога, media — вложения,",
         "hist — история профиля: snaps снимки (at дата, bio/status/conns),",
+        "roles_hist динамика ролей; psych — активный психопрофиль от LLM:",
+        "model mbti enneagram conf big5 int интересы(t тема,n подтверждения)",
         "roles_hist динамика ролей (role, from получена, lost потеряна))",
         "```json",
         json.dumps(compact_dossier(d), ensure_ascii=False, separators=(",", ":"),
@@ -1270,6 +1343,7 @@ def main():
     att_map = fetch_attachments(conn)
     games_map = fetch_games(conn)
     history_map = fetch_profile_history(conn)
+    psych_map = fetch_psych_profiles(conn)
     all_user_ids = set(u["user_id"] for u in users)
 
     # связи ответов + полная лента канала для сборки диалогов с собеседниками
@@ -1373,6 +1447,7 @@ def main():
                 msgs, att_map, all_user_ids, args, generated_at,
                 dialog_msgs=dialog_msgs, dialog_mode=dialog_mode, names=names,
                 games=games_map.get(uid), history=history_map.get(uid),
+                psych=psych_map.get(uid),
             )
             fname = f"{uid}_{slug(u['username'])}"
             jl.write(json.dumps(dossier, ensure_ascii=False, default=str) + "\n")

@@ -307,6 +307,88 @@ class ProfileSnapshot(Base):
 # ---------------------------------------------------------------------------
 # Состояние опроса канала (курсор last fetched message)
 # ---------------------------------------------------------------------------
+class PsychProfile(Base):
+    """Психологический профиль пользователя — ответ нейросети-аналитика.
+
+    Полный JSON ответа хранится в result_json (без разбивки на поля);
+    ключевые числовые/категориальные метрики дублируются в колонки для
+    фильтрации и сравнений. Дисклеймер не сохраняется: вместо него
+    фиксируются период анализа и число записей (period_from/to,
+    messages_analyzed). Старые версии не удаляются — активна одна (is_current).
+    """
+
+    __tablename__ = "psych_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    model: Mapped[str | None] = mapped_column(Text)            # id модели LLM
+    prompt_hash: Mapped[str | None] = mapped_column(Text)      # контроль транскрипта
+    source_lines: Mapped[int | None] = mapped_column(Integer)  # строк чата в промпте
+    period_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    period_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    messages_analyzed: Mapped[int | None] = mapped_column(Integer)
+    big_five_openness: Mapped[float | None] = mapped_column(nullable=True)
+    big_five_conscientiousness: Mapped[float | None] = mapped_column(nullable=True)
+    big_five_extraversion: Mapped[float | None] = mapped_column(nullable=True)
+    big_five_agreeableness: Mapped[float | None] = mapped_column(nullable=True)
+    big_five_neuroticism: Mapped[float | None] = mapped_column(nullable=True)
+    mbti_type: Mapped[str | None] = mapped_column(String(8))
+    mbti_confidence: Mapped[float | None] = mapped_column(nullable=True)
+    enneagram_type: Mapped[str | None] = mapped_column(String(8))
+    enneagram_confidence: Mapped[float | None] = mapped_column(nullable=True)
+    confidence_overall: Mapped[float | None] = mapped_column(nullable=True)
+    severity_max: Mapped[str | None] = mapped_column(String(8))  # high|med|low
+    result_json: Mapped[str | None] = mapped_column(Text)        # полный ответ LLM
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PsychSignal(Base):
+    """Атомарные сигналы/примеры из ответа LLM (evidence).
+
+    Дедуп по нормализованной цитате на уровне пользователя: повторный
+    импорт того же анализа не раздувает базу (INSERT OR IGNORE).
+    """
+
+    __tablename__ = "psych_signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("psych_profiles.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    signal_key: Mapped[str | None] = mapped_column(Text)   # slug(signal)
+    quote_norm: Mapped[str] = mapped_column(Text)          # нормализованная цитата
+    quote: Mapped[str | None] = mapped_column(Text)        # исходная цитата <=200 симв.
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    context: Mapped[str | None] = mapped_column(Text)
+    severity: Mapped[str | None] = mapped_column(String(8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "signal_key", "quote_norm", name="uq_psych_signals_dedup"),
+    )
+
+
+class UserInterest(Base):
+    """Интересы: накапливаются между срезами диалога (merge UPSERT)."""
+
+    __tablename__ = "user_interests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    topic: Mapped[str] = mapped_column(Text)
+    topic_norm: Mapped[str] = mapped_column(Text)           # lower+collapse для дедупа
+    evidence: Mapped[str | None] = mapped_column(Text)      # последняя цитата
+    evidence_count: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "topic_norm", name="uq_user_interests_norm"),
+    )
+
+
 class ChannelState(Base):
     __tablename__ = "channel_states"
 
