@@ -25,6 +25,11 @@
     и после подтверждения (count-before), в транзакции, с записью в audit_log.
   * Импорт ответа нейросети (/profile/import): JSON LLM -> psych_profiles +
     psych_signals + user_interests через app.services.analysis_importer.
+  * Автосборка психопрофиля (кнопка «🧠 Обновить психо профиль» в ленте
+    user_profiles и карточке профиля, POST /psych/refresh/<user_id>):
+    дело+промпт из PostgreSQL (export_profiles.build_prompt_for_user) ->
+    бесплатный OpenRouter API (app/services/llm_client) -> import_analysis.
+    Настройки: LLM_API_KEY / LLM_MODEL / LLM_BASE_URL в .env (см. README).
   * Читаемый вид психопрофиля (/profile/<id>) со сигналами и интересами.
   * Журнал аудита (/audit) всех действий админки.
   * Админ-действия: VACUUM/ANALYZE PostgreSQL.
@@ -344,6 +349,24 @@ def create_app(database_url: str) -> Flask:
         except Exception:
             return None
 
+    def current_psych(user_id) -> dict | None:
+        """Актуальная версия психопрофиля пользователя: {id, model, created_at}."""
+        if user_id is None or "psych_profiles" not in tables():
+            return None
+        try:
+            pp = Table("psych_profiles", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                r = conn.execute(
+                    sa_select(pp.columns.id, pp.columns.model, pp.columns.created_at)
+                    .where(pp.columns.user_id == int(user_id),
+                           pp.columns.is_current.is_(True))
+                    .order_by(pp.columns.created_at.desc())
+                    .limit(1)
+                ).first()
+            return {"id": r[0], "model": r[1], "created_at": r[2]} if r else None
+        except Exception:
+            return None
+
     def editable_fields(sa_tbl: Table) -> list[dict]:
         """Редактируемые поля записи по схеме SQLAlchemy (тип/nullable/PK)."""
         fields = []
@@ -530,6 +553,17 @@ def create_app(database_url: str) -> Flask:
           {% elif cols[loop.index0] == 'severity_max' and cell[0] == 'high' %}<span style='color:#c62828;font-weight:700'>high</span>
           {% else %}{{ cell[0] }}{% endif %}</td>{% endfor %}
         <td style='white-space:nowrap'>
+          {% if table == 'user_profiles' %}
+            {% set ps = psych_map.get(row.cells[cols.index('user_id')][0]) %}
+            <form method='post' action='/psych/refresh/{{ row.cells[cols.index('user_id')][0] }}'
+                  style='display:inline'
+                  onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.');">
+              <button class='btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
+              >🧠 {{ 'Обновить психо профиль' if ps else 'Построить психо профиль' }}</button>
+            </form>
+            {% if ps %}<a class='btn gray' title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
+               href="{{ url_for('profile_view', pid=ps.id) }}">👁</a>{% endif %}
+          {% endif %}
           {% if is_psych_profiles %}<a class='btn gray' title='читаемый вид результата LLM'
              href="{{ url_for('profile_view', pid=row.pk) }}">👁</a>{% endif %}
           <a class='btn' href="{{ url_for('record', table=table, pk=row.pk) }}">✎</a>
@@ -663,6 +697,13 @@ def create_app(database_url: str) -> Flask:
     <p class='muted'><a href="{{ url_for('browse', table='psych_profiles') }}">← к списку</a> ·
        <a href="{{ url_for('record', table='psych_profiles', pk=p.id) }}">редактировать сырые поля</a> ·
        <a href="/browse/user_profiles?col=user_id&val={{ p.user_id }}">профиль пользователя</a></p>
+    {% if can_refresh %}
+    <form method='post' action='/psych/refresh/{{ p.user_id }}' style='margin:.4rem 0'
+          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Пересобрать дело, отправить в бесплатный LLM API и сохранить новую версию профиля? Текущая станет архивной.');">
+      <button class='btn'>🧠 Обновить психо профиль</button>
+      <span class='muted'> — заново собрать дело из БД и получить ответ модели по API</span>
+    </form>
+    {% endif %}
     <div class='card'>
       <b>{{ username or p.user_id }}</b> · модель: {{ p.model or '?' }} ·
       анализ за {{ p.period_from or '?' }} .. {{ p.period_to or '?' }},
@@ -829,6 +870,15 @@ def create_app(database_url: str) -> Flask:
             {"pk": r[pk], "cells": [fmt_cell(r[c]) for c in cols]}
             for r in rows_raw
         ]
+        # «Обновить психо профиль»: user_id -> актуальная версия профиля (для ленты)
+        psych_map: dict[str, dict | None] = {}
+        if table == "user_profiles" and "user_id" in cols:
+            for r in rows_raw:
+                try:
+                    uid_key = str(r["user_id"])
+                except Exception:
+                    continue
+                psych_map[uid_key] = current_psych(uid_key) if uid_key.isdigit() else None
         # Подписи user_id -> @username для колонок-ссылок (одним запросом).
         uids = {r["cells"][cols.index("user_id")][0] for r in rows} \
             if "user_id" in cols else set()
@@ -858,7 +908,7 @@ def create_app(database_url: str) -> Flask:
             hidden_count=len(all_cols) - len(cols),
             prio=prio, has_priority="priority" in all_cols, pk_col=pk,
             cur=cur, is_psych_profiles=(table == "psych_profiles"),
-            uid_map=uid_map,
+            uid_map=uid_map, psych_map=psych_map,
         )
 
     # --- карточка записи: просмотр + редактирование -------------------------
@@ -1162,7 +1212,65 @@ def create_app(database_url: str) -> Flask:
                       period_to=form.get("period_to"),
                       messages=form.get("messages"), answer=form.get("answer"))
 
-    # --- читаемый вид психопрофиля -------------------------------------------
+    # --- автообновление психопрофиля через LLM API ----------------------------
+    @app.route("/psych/refresh/<int:user_id>", methods=["POST"])
+    def psych_refresh(user_id: int):
+        """Кнопка «Обновить психо профиль»: БД -> промпт -> бесплатный LLM API -> запись.
+
+        1) export_profiles.build_prompt_for_user собирает «дело» пользователя
+           из PostgreSQL и готовый markdown-промпт (та же сборка, что и CLI);
+        2) app.services.llm_client.analyze_prompt прогоняет его через OpenRouter
+           (модель из LLM_MODEL, по умолчанию deepseek/deepseek-chat-v3.1:free);
+        3) analysis_importer.import_analysis сохраняет ответ как новую версию
+           psych_profiles (старая -> архив), сигналы и интересы — с дедупом.
+        """
+        if "user_profiles" not in tables():
+            abort(404)
+        up = Table("user_profiles", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            uname = conn.execute(sa_select(up.columns.username).where(
+                up.columns.user_id == user_id)).scalar()
+        if uname is None:
+            abort(404)
+        audit("psych_refresh_start", target=f"user={user_id}", result="start")
+        try:
+            import importlib.util as _ilu
+
+            from app.services import llm_client
+
+            # экспортёр лежит файлом в корне проекта (не пакет) — грузим по пути
+            ep = BASE_DIR / "export_profiles.py"
+            spec = _ilu.spec_from_file_location("export_profiles_api", ep)
+            epmod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(epmod)
+
+            info = epmod.build_prompt_for_user(
+                app.config["DATABASE_URL"], user_id)
+            answer, model_used, ph = llm_client.analyze_prompt(info["prompt"])
+
+            from app.services.analysis_importer import import_analysis
+
+            pid = import_analysis(
+                engine, user_id, answer,
+                model=model_used, prompt_hash=ph,
+                source_lines=info["messages_total"],
+                period_from=info["period_from"], period_to=info["period_to"],
+                messages_analyzed=info["messages_total"],
+            )
+            audit("psych_refresh", target=f"user={user_id}",
+                  details=f"profile_id={pid} model={model_used} "
+                          f"msgs={info['messages_total']}",
+                  result="ok")
+            flash(f"Психо профиль обновлён: запись #{pid} "
+                  f"(модель {model_used}, сообщений {info['messages_total']}).",
+                  "ok")
+            return redirect(url_for("profile_view", pid=pid))
+        except Exception as e:  # noqa: BLE001
+            audit("psych_refresh", target=f"user={user_id}", result=f"error: {e}")
+            flash(f"Не удалось обновить психо профиль: {e}", "error")
+            return redirect(url_for("browse", table="user_profiles",
+                                    col="user_id", val=str(user_id)))
+
     @app.route("/profile/<int:pid>")
     def profile_view(pid: int):
         if "psych_profiles" not in tables():
@@ -1216,6 +1324,7 @@ def create_app(database_url: str) -> Flask:
             PAGE_PROFILE_VIEW, page="browse", p=p, res=res, bf=bf,
             username=username, signals=signals, interests=interests, risks=risks,
             raw_json_pretty=_json_pretty(p.result_json),
+            can_refresh=("user_profiles" in tables()),
         )
 
     # --- действия ---------------------------------------------------------------------
