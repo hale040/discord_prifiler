@@ -39,6 +39,66 @@ def _indexes(engine: Engine, table: str) -> set[str]:
     return {i["name"] for i in inspect(engine).get_indexes(table)}
 
 
+def _sqlite_ddl(engine: Engine, table: str) -> str:
+    """Сырой SQL CREATE TABLE из sqlite_master (пустая строка, если таблицы нет)."""
+    from sqlalchemy import text as _t  # noqa: PLC0415
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            _t("SELECT sql FROM sqlite_master WHERE type='table' AND name=:n"),
+            {"n": table},
+        ).first()
+    return (row[0] or "") if row else ""
+
+
+def _autoincrement_ok(engine: Engine, table: str) -> bool:
+    """Может ли SQLite сам подставлять id при INSERT в таблицу.
+
+    Автоинкремент rowid работает ТОЛЬКО если PK — одиночная колонка типа
+    INTEGER с inline-объявлением «id INTEGER PRIMARY KEY» и таблица не
+    WITHOUT ROWID. SQLAlchemy генерирует DDL как
+    `id BIGINT NOT NULL, ..., PRIMARY KEY (id)` — для SQLite это НЕ даёт
+    автоинкремента, поэтому такие таблицы чинятся пересозданием с явным DDL
+    (_create_table_with_rowid_pk).
+    """
+    import re
+
+    ddl = _sqlite_ddl(engine, table).lower()
+    if not ddl:
+        return False
+    if "without rowid" in ddl:
+        return False
+    return bool(re.search(r'(?:^|[(,\s])"?id"?\s+integer\s+primary\s+key', ddl))
+
+
+def _create_table_with_rowid_pk(engine: Engine, table_name: str) -> None:
+    """Создать таблицу по метаданным модели, но с корректным для SQLite PK:
+    `id INTEGER PRIMARY KEY` (inline) — иначе SQLite не подставляет id при
+    INSERT без явного значения («NOT NULL constraint failed»). Индексы
+    модели создаются отдельно."""
+    from app.models.entities import Base
+
+    model_table = Base.metadata.tables[table_name]
+    coldefs: list[str] = []
+    for col in model_table.columns:
+        type_sql = col.type.compile(dialect=engine.dialect)
+        parts = [f'"{col.name}"', type_sql]
+        if col.primary_key and col.name == "id":
+            parts.append("PRIMARY KEY")  # inline: включает rowid-автоинкремент
+        else:
+            if not col.nullable:
+                parts.append("NOT NULL")
+            fk = next(iter(col.foreign_keys), None)
+            if fk is not None:
+                parts.append(f'REFERENCES "{fk.column.table.name}" ("{fk.column.name}")')
+        coldefs.append(" ".join(parts))
+    ddl = f'CREATE TABLE "{table_name}" (\n\t{", ".join(coldefs)}\n)'
+    with engine.begin() as conn:
+        conn.execute(text(ddl))
+    for idx in model_table.indexes:
+        idx.create(bind=engine, checkfirst=True)
+
+
 # --------------------------------------------------------------------------- #
 # Собственно миграции. Версия N = длина списка (все применены).               #
 # --------------------------------------------------------------------------- #
@@ -174,14 +234,55 @@ def _v06_profile_snapshots(engine: Engine) -> None:
     """Таблица profile_snapshots (история изменений био/статуса/баннера/ссылок).
 
     Новая схема создаётся через Base.metadata.create_all; этот шаг добавляет
-    таблицу в старые БД, созданные до появления модели."""
-    if _table_exists(engine, "profile_snapshots"):
-        return
+    таблицу в старые БД, созданные до появления модели.
+
+    Само-восстановление: если таблица уже есть, но SQLite не может сам
+    подставлять id при INSERT (PK без inline «INTEGER PRIMARY KEY» — так
+    генерирует DDL SQLAlchemy для BigInteger-ключа), вставки падают с
+    «NOT NULL constraint failed». ALTER TABLE не может починить PK, поэтому
+    проблемная таблица пересоздаётся с корректным rowid-PK. Если в старой
+    таблице есть строки — они сохраняются через временную."""
     from app.models.entities import Base
 
+    def _create(conn):
+        # drop old + create fresh (inline `id INTEGER PRIMARY KEY` = автоинкремент)
+        model_table = Base.metadata.tables["profile_snapshots"]
+        model_table.drop(bind=conn, checkfirst=True)
+    _create_table_with_rowid_pk(engine, "profile_snapshots")
+
+    if not _table_exists(engine, "profile_snapshots"):
+        with engine.begin() as conn:
+            Base.metadata.tables["profile_snapshots"].drop(bind=conn, checkfirst=True)
+        _create_table_with_rowid_pk(engine, "profile_snapshots")
+        return
+
+    if _autoincrement_ok(engine, "profile_snapshots"):
+        return  # всё в порядке
+
+    log.warning(
+        "Миграция v6: у profile_snapshots битый PK (нет rowid-автоинкремента) "
+        "— пересоздаю таблицу."
+    )
+    model_table = Base.metadata.tables["profile_snapshots"]
     with engine.begin() as conn:
-        table = Base.metadata.tables["profile_snapshots"]
-        table.create(bind=conn, checkfirst=True)
+        n = conn.execute(text("SELECT COUNT(*) FROM profile_snapshots")).scalar()
+        if n:
+            conn.execute(text("ALTER TABLE profile_snapshots RENAME TO _ps_broken_backup"))
+            conn.execute(text(model_table.drop().compile(dialect=engine.dialect).compile()))
+            common = [c["name"] for c in inspect(engine).get_columns("profile_snapshots")]
+            cols_sql = ", ".join(f'"{c}"' for c in common)
+            conn.execute(text(
+                f"INSERT INTO profile_snapshots ({cols_sql}) "
+                f"SELECT {cols_sql} FROM _ps_broken_backup"
+            ))
+            conn.execute(text("DROP TABLE _ps_broken_backup"))
+        else:
+            _create(conn)
+    # индексы модели (ix_profile_snapshots_user_id и т.п.) могли не пересоздаться
+    for idx in model_table.indexes:
+        if idx.name not in _indexes(engine, "profile_snapshots"):
+            with engine.begin() as conn:
+                idx.create(bind=conn)
 
 
 def _v07_role_dynamics_and_attach_kind(engine: Engine) -> None:
