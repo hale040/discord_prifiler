@@ -1,7 +1,14 @@
 # PostgreSQL 18 для проекта профайлинга.
 # Запуск:  docker compose up -d
-# Останов: docker compose down  (данные остаются в volume pgdata)
-# Полная очистка БД: docker compose down -v  (схема пересоздаётся при следующем запуске main.py)
+# Останов: docker compose down  (данные остаются в ./data/db)
+# Полная очистка БД: удалить каталог ./data/db и заново docker compose up -d
+#   (схема пересоздаётся при следующем запуске main.py)
+#
+# ВАЖНО про PG18+ : официальные образы postgres начиная с 18 хранят данные
+# в версионном подкаталоге (PGDATA=/var/lib/postgresql/18/docker), поэтому
+# монтировать нужно /var/lib/postgresql, а НЕ /var/lib/postgresql/data —
+# иначе контейнер падает с ошибкой "there appears to be PostgreSQL data in
+# /var/lib/postgresql/data (unused mount/volume)".
 services:
   postgres:
     image: postgres:18-alpine
@@ -16,7 +23,9 @@ services:
     ports:
       - "5682:5432"             # хост: 5682 -> контейнер: стандартные 5432
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # данные лежат рядом с проектом: ./data/db (внутри — версионный
+      # подкаталог 18/docker, создаётся образом автоматически)
+      - ./data/db:/var/lib/postgresql
     command:
       # параметры производительности под типичную нагрузку проекта
       # (вставка сообщений + выборки по user/channel/ts)
@@ -42,6 +51,3 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-volumes:
-  pgdata:
