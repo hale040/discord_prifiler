@@ -156,11 +156,26 @@ def _v04_compact_raw_json(engine: Engine) -> None:
     log.info("Миграция v4: очищено raw_json в %s сообщениях; бэкап: %s", n, backup)
 
 
+def _v05_user_games(engine: Engine) -> None:
+    """Таблица user_games (игры/активности пользователя) — для старых БД,
+    созданных до появления модели UserGame. Новая схема создаётся через
+    Base.metadata.create_all автоматически."""
+    if _table_exists(engine, "user_games"):
+        return
+    from app.models.entities import Base
+
+    with engine.begin() as conn:
+        # создаём только эту таблицу (остальные уже есть)
+        table = Base.metadata.tables["user_games"]
+        table.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
     ("user_profiles: флаг priority + priority_note + индекс", _v03_user_priority),
     ("messages: очистка раздутого raw_json (с бэкапом БД перед запуском)", _v04_compact_raw_json),
+    ("user_games: таблица игр/активностей пользователя (FK на user_profiles)", _v05_user_games),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

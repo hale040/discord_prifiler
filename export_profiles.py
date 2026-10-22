@@ -160,6 +160,27 @@ def fetch_roles(conn) -> dict[int, list[dict]]:
     return out
 
 
+def fetch_games(conn) -> dict[int, list[str]]:
+    """user_id -> список названий игр/активностей (таблица user_games).
+    Таблицы может не быть в старых БД до миграции v5 — тогда пустой словарь."""
+    out: dict[int, list[str]] = {}
+    try:
+        rows = conn.execute(
+            "SELECT user_id, name, kind FROM user_games ORDER BY user_id, last_seen DESC"
+        ).fetchall()
+    except sqlite3.Error:
+        return out
+    for r in rows:
+        label = str(r["name"])
+        kind = str(r["kind"] or "")
+        if kind and kind not in ("playing",):
+            label = f"{label} ({kind})"
+        lst = out.setdefault(int(r["user_id"]), [])
+        if label not in lst:
+            lst.append(label)
+    return out
+
+
 def fetch_messages(conn) -> dict[int, list[dict]]:
     out: dict[int, list[dict]] = {}
     q = """SELECT id, channel_id, guild_id, author_id, content, clean_content,
@@ -725,7 +746,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   all_user_ids, args, generated_at,
                   dialog_msgs: list[dict] | None = None,
                   dialog_mode: str | None = None,
-                  names: dict[int, str] | None = None) -> dict:
+                  names: dict[int, str] | None = None,
+                  games: list[str] | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
     if dialog_msgs is not None and not args.no_context:
@@ -793,6 +815,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             "flags": load_json(row_get(user, "flags_raw")),
             "public_flags": row_get(user, "public_flags"),
             "connections": load_json(row_get(user, "connections_json")),
+            # игры/активности из таблицы user_games (собираются при рефреше профилей)
+            "games": games or [],
             "premium_type": row_get(user, "premium_type"),
             "mutual": row_get(user, "mutual"),
             # приоритет (ставится вручную в админке; NULL в старых БД до миграции v3)
@@ -919,6 +943,8 @@ def compact_dossier(d: dict) -> dict:
     conns = _connection_summary(prof.get("connections"))
     if conns:
         pc["conns"] = conns
+    if prof.get("games"):
+        pc["games"] = prof["games"][:20]  # игры из user_games (не более 20 в промпт)
     if prof.get("premium_type"):
         pc["nitro"] = prof["premium_type"]
     if prof.get("priority"):

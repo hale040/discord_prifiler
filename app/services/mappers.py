@@ -294,3 +294,60 @@ def extract_user_ids(msg: discord.Message) -> set[int]:
     if rid:
         ids.add(rid)
     return ids
+
+
+# ---------------------------------------------------------------------------
+# Игры / активности пользователя (таблица user_games)
+# ---------------------------------------------------------------------------
+_ACTIVITY_KINDS = {
+    0: "playing", 1: "streaming", 2: "listening", 3: "watching", 5: "custom",
+}
+
+
+def games_from_activities(obj: Any) -> list[dict[str, Any]]:
+    """Извлекает список игр/активностей из User/Member/UserProfile объекта.
+
+    discord.py-self: activities живёт только на Member (presence) и иногда на
+    UserProfile; для обычного User может отсутствовать — тогда пустой список.
+    Steam-логин берётся из connections (platform == steam) — сам профиль Steam
+    НЕ тянется, сохраняется только логин (он уже есть в connections_json).
+    """
+    out: list[dict[str, Any]] = []
+    acts = _safe(lambda: list(getattr(obj, "activities", None) or [])) or []
+    for a in acts:
+        name = _safe(lambda a=a: str(a.name)) or ""
+        if not name:
+            continue
+        kind_num = _safe(lambda a=a: int(a.type))
+        kind = _ACTIVITY_KINDS.get(kind_num, str(_safe(lambda a=a: a.type) or ""))
+        url = _safe(lambda a=a: str(a.url)) if getattr(a, "url", None) else None
+        details = _safe(lambda a=a: str(a.details)) if getattr(a, "details", None) else None
+        state_txt = _safe(lambda a=a: str(a.state)) if getattr(a, "state", None) else None
+        app_id = _safe(lambda a=a: int(a.application_id)) if getattr(a, "application_id", None) else None
+        # кастомный статус с эмодзи — имя часто пустое, берём state
+        if kind == "custom" and not details and state_txt:
+            details = state_txt
+        out.append(
+            {
+                "name": name[:256],
+                "kind": kind,
+                "details": details,
+                "state": state_txt,
+                "url": url,
+                "application_id": app_id,
+            }
+        )
+    return out
+
+
+def steam_login_from(obj: Any) -> str | None:
+    """Логин Steam из connections профиля (без обращения к самому Steam)."""
+    conns = _safe(lambda: list(getattr(obj, "connections", None) or [])) or []
+    for c in conns:
+        platform = str(_safe(lambda c=c: c.platform) or "").lower()
+        if platform in ("steam",):
+            name = _safe(lambda c=c: str(c.name))
+            if name:
+                return name
+    return None
+

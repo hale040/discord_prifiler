@@ -114,6 +114,37 @@ class UserProfile(Base):
     roles: Mapped[list[UserRoleTag]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    games: Mapped[list["UserGame"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Игры пользователя (активности из профиля Discord: Playing/Streaming и т.п.)
+# Отдельная таблица со связью к user_profiles; обновляется при рефреше
+# профилей (PROFILE_REFRESH_DAYS). Steam-логин хранится в connections_json
+# у user_profiles (ссылку на профиль Steam не тянем — только логин).
+# ---------------------------------------------------------------------------
+class UserGame(Base):
+    __tablename__ = "user_games"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_game"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("user_profiles.user_id", ondelete="CASCADE"), index=True
+    )
+
+    name: Mapped[str] = mapped_column(String(256))  # название игры/активности
+    kind: Mapped[str | None] = mapped_column(String(32), nullable=True)  # playing/streaming/listening/watching/custom
+    details: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    state: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)  # стрим-ссылка (не в промпт)
+    application_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[UserProfile] = relationship(back_populates="games")
 
 
 # ---------------------------------------------------------------------------
