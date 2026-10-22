@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Экспорт собранных данных в формат, подготовленный для нейросетевого профайлинга.
 
-Скрипт работает автономно (только SQLite + stdlib), к Discord НЕ подключается.
+Скрипт работает автономно (только PostgreSQL через SQLAlchemy + stdlib),
+к Discord НЕ подключается.
 Для каждого пользователя формирует «дело» — структурированный JSON с:
   - профилем (bio, бейджи, connections, flags, аккаунт-метаданные);
   - серверными атрибутами (ник, роли/теги, дата вступления, таймауты);
@@ -19,7 +20,7 @@
   out/index.json                            — сводка по всем пользователям
 
 Запуск:
-  python export_profiles.py [--db data/profiling.db] [--out out]
+  python export_profiles.py [--db postgresql://user:pass@host/db] [--out out]
         [пользователь] [--users id1,id2] [--min-messages 5] [--max-lines N]
         [--per-user-json] [--no-prompts]
 
@@ -36,12 +37,21 @@ import argparse
 import json
 import os
 import re
-import sqlite3
 import sys
 import unicodedata
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+# PostgreSQL-доступ через SQLAlchemy; импорт вынесен в try/except, чтобы при
+# отсутствии пакета выдать понятную ошибку, а не ImportError в рантайме.
+try:
+    from sqlalchemy import create_engine, inspect as sa_inspect, text
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy.engine import Engine
+except ImportError:  # pragma: no cover
+    sys.exit("[FATAL] Не установлен SQLAlchemy: pip install 'SQLAlchemy>=2.0' "
+             "'psycopg[binary]' (БД — PostgreSQL)")
 
 
 def load_env_file(path: str = ".env") -> None:
@@ -119,7 +129,7 @@ def iso(dt):
 
 
 def parse_ts(value) -> datetime:
-    """datetime (SQLAlchemy) или ISO-строка (raw sqlite3) -> aware datetime (UTC)."""
+    """datetime/datetime.date (PostgreSQL) или ISO-строка -> aware datetime (UTC)."""
     if isinstance(value, datetime):
         dt = value
     else:
@@ -133,30 +143,76 @@ def parse_ts(value) -> datetime:
 # Загрузка из БД
 # ---------------------------------------------------------------------------
 
-def open_db(db_path: Path) -> sqlite3.Connection:
-    if not db_path.exists():
-        sys.exit(f"База не найдена: {db_path}. Сначала запустите сбор (python main.py).")
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+class ReadOnlyDb:
+    """Тонкий read-only слой поверх SQLAlchemy-engine (экс-sqlite3.Connection).
+
+    .execute(sql) возвращает список dict-строк (как раньше sqlite3.Row);
+    ошибки СУБД (в т.ч. отсутствующие таблицы/колонки в старых схемах)
+    поднимаются как sqlalchemy.exc.SQLAlchemyError — вызывающий код ловит
+    их для graceful-деградации.
+    """
+
+    def __init__(self, engine: Engine):
+        self._engine = engine
+
+    def execute(self, sql: str) -> list[dict]:
+        with self._engine.connect() as conn:
+            return [dict(r._mapping) for r in conn.execute(text(sql))]
+
+    def columns(self, table: str) -> set[str]:
+        """Аналог PRAGMA table_info: имена колонок таблицы (пустое — нет таблицы)."""
+        try:
+            return {c["name"] for c in sa_inspect(self._engine).get_columns(table)}
+        except SQLAlchemyError:
+            return set()
+
+    def close(self) -> None:
+        self._engine.dispose()
+
+
+def _to_psycopg_url(url: str) -> str:
+    """Нормализация DATABASE_URL под sync-драйвер psycopg(3)."""
+    url = re.sub(r"\+asyncpg$", "+psycopg", url)
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if not url.startswith(("postgresql:", "postgresql+")):
+        sys.exit(
+            f"[FATAL] Ожидался PostgreSQL URL, получено: {url!r}. "
+            "SQLite больше не поддерживается."
+        )
+    return url
+
+
+def open_db(db_arg: str) -> tuple[ReadOnlyDb, str]:
+    """Открыть БД по URL (или из env DATABASE_URL). Возвращает (conn, label)."""
+    url = db_arg or os.getenv("DATABASE_URL")
+    if not url:
+        sys.exit("[FATAL] База не задана: передайте --db <postgresql://...> "
+                 "или DATABASE_URL в окружении/.env.")
+    engine = create_engine(_to_psycopg_url(url), future=True, pool_pre_ping=True)
+    try:
+        with engine.connect():
+            pass
+    except SQLAlchemyError as exc:
+        sys.exit(f"[FATAL] Не удалось подключиться к PostgreSQL ({url}): {exc}")
+    return ReadOnlyDb(engine), url
 
 
 def fetch_users(conn) -> list[dict]:
-    rows = conn.execute("SELECT * FROM user_profiles ORDER BY user_id").fetchall()
-    return [dict(r) for r in rows]
+    return conn.execute("SELECT * FROM user_profiles ORDER BY user_id")
 
 
 def fetch_guild_profiles(conn) -> dict[int, list[dict]]:
     out: dict[int, list[dict]] = {}
     for r in conn.execute("SELECT * FROM guild_member_profiles ORDER BY user_id"):
-        out.setdefault(r["user_id"], []).append(dict(r))
+        out.setdefault(r["user_id"], []).append(r)
     return out
 
 
 def fetch_roles(conn) -> dict[int, list[dict]]:
     out: dict[int, list[dict]] = {}
     for r in conn.execute("SELECT * FROM user_roles ORDER BY user_id, position DESC"):
-        out.setdefault(r["user_id"], []).append(dict(r))
+        out.setdefault(r["user_id"], []).append(r)
     return out
 
 
@@ -167,8 +223,8 @@ def fetch_psych_profiles(conn) -> dict[int, dict]:
         rows = conn.execute(
             "SELECT user_id, model, mbti_type, enneagram_type, confidence_overall,"
             " period_from, period_to, messages_analyzed, result_json"
-            " FROM psych_profiles WHERE is_current = 1").fetchall()
-    except sqlite3.Error:
+            " FROM psych_profiles WHERE is_current = TRUE")
+    except SQLAlchemyError:
         return {}
     out: dict[int, dict] = {}
     for r in rows:
@@ -191,25 +247,25 @@ def fetch_psych_profiles(conn) -> dict[int, dict]:
         sig = conn.execute(
             "SELECT user_id, signal_key, quote FROM psych_signals s"
             " WHERE s.user_id IN (SELECT user_id FROM psych_profiles WHERE is_current = 1)"
-            " ORDER BY created_at DESC LIMIT 200").fetchall()
+            " ORDER BY created_at DESC LIMIT 200")
         for r in sig:
             e = out.setdefault(int(r["user_id"]), {})
             e.setdefault("signals", [])
             if len(e["signals"]) < 6:
                 e["signals"].append({"k": r["signal_key"], "q": r["quote"][:80]})
-    except sqlite3.Error:
+    except SQLAlchemyError:
         pass
     try:
         it = conn.execute(
             "SELECT user_id, topic, evidence_count FROM user_interests i"
             " WHERE i.user_id IN (SELECT user_id FROM psych_profiles WHERE is_current = 1)"
-            " ORDER BY evidence_count DESC LIMIT 200").fetchall()
+            " ORDER BY evidence_count DESC LIMIT 200")
         for r in it:
             e = out.setdefault(int(r["user_id"]), {})
             e.setdefault("interests", [])
             if len(e["interests"]) < 12:
                 e["interests"].append({"t": r["topic"], "n": int(r["evidence_count"] or 1)})
-    except sqlite3.Error:
+    except SQLAlchemyError:
         pass
     return out
 
@@ -221,8 +277,8 @@ def fetch_games(conn) -> dict[int, list[str]]:
     try:
         rows = conn.execute(
             "SELECT user_id, name, kind FROM user_games ORDER BY user_id, last_seen DESC"
-        ).fetchall()
-    except sqlite3.Error:
+        )
+    except SQLAlchemyError:
         return out
     for r in rows:
         label = str(r["name"])
@@ -245,7 +301,7 @@ def fetch_messages(conn) -> dict[int, list[dict]]:
                   mention_users_json, stickers_json
            FROM messages WHERE deleted_at IS NULL ORDER BY timestamp ASC"""
     for r in conn.execute(q):
-        d = dict(r)
+        d = r
         # старые БД без колонки reply_to_author_id -> None (достроим позже)
         d.setdefault("reply_to_author_id", None)
         out.setdefault(d["author_id"], []).append(d)
@@ -261,7 +317,7 @@ def fetch_all_messages_flat(conn) -> list[dict]:
                   mention_count, hashtag_count, reaction_total, reactions_json,
                   mention_users_json, stickers_json
            FROM messages WHERE deleted_at IS NULL ORDER BY timestamp ASC, id ASC"""
-    rows = [dict(r) for r in conn.execute(q)]
+    rows = list(conn.execute(q))
     for d in rows:
         d.setdefault("reply_to_author_id", None)
     return rows
@@ -275,7 +331,7 @@ def build_names(conn, users: list[dict]) -> dict[int, str]:
         for g in conn.execute("SELECT user_id, nick FROM guild_member_profiles"):
             if g["nick"]:
                 names[g["user_id"]] = g["nick"]
-    except sqlite3.Error:
+    except SQLAlchemyError:
         pass
     return names
 
@@ -403,14 +459,14 @@ def fetch_attachments(conn) -> dict[int, list[dict]]:
             "SELECT message_id, filename, url, proxy_url, content_type, width, height,"
             " is_image, is_spoiler, downloaded, stored_path, kind FROM attachments"
         )
-    except sqlite3.Error:
+    except SQLAlchemyError:
         # старая БД без колонки kind (до миграции v7) — берём без неё
         rows = conn.execute(
             "SELECT message_id, filename, url, proxy_url, content_type, width, height,"
             " is_image, is_spoiler, downloaded, stored_path FROM attachments"
         )
     for r in rows:
-        d = dict(r)
+        d = r
         d.setdefault("kind", None)
         out.setdefault(d["message_id"], []).append(d)
     return out
@@ -424,8 +480,8 @@ def fetch_profile_history(conn) -> dict[int, dict]:
         snaps = conn.execute(
             "SELECT user_id, taken_at, about, status_text, connections_json, changed"
             " FROM profile_snapshots ORDER BY user_id, taken_at DESC"
-        ).fetchall()
-    except sqlite3.Error:
+        )
+    except SQLAlchemyError:
         snaps = []
     import json as _json
     for r in snaps:
@@ -446,12 +502,12 @@ def fetch_profile_history(conn) -> dict[int, dict]:
                 pass
         e["snaps"].append(item)
     try:
-        role_cols = {c[1] for c in conn.execute("PRAGMA table_info(user_roles)")}
+        role_cols = conn.columns("user_roles")
         if "first_seen" in role_cols and "last_lost_at" in role_cols:
             rh = conn.execute(
                 "SELECT user_id, role_name, first_seen, last_seen, last_lost_at"
                 " FROM user_roles WHERE last_lost_at IS NOT NULL OR first_seen IS NOT NULL"
-            ).fetchall()
+            )
             for r in rh:
                 e = out.setdefault(int(r["user_id"]), {"snaps": [], "roles_hist": []})
                 he: dict = {"role": r["role_name"]}
@@ -460,7 +516,7 @@ def fetch_profile_history(conn) -> dict[int, dict]:
                 if r["last_lost_at"]:
                     he["lost"] = str(r["last_lost_at"])[:10]
                 e["roles_hist"].append(he)
-    except sqlite3.Error:
+    except SQLAlchemyError:
         pass
     return out
 
@@ -1263,7 +1319,8 @@ def parse_args():
                     "Лимиты ленты читаются из .env: EXPORT_MAX_LINES, EXPORT_CONTEXT_WINDOW")
     p.add_argument("target", nargs="?", default="",
                    help="username / имя / user_id одного пользователя (пусто = все)")
-    p.add_argument("--db", default="data/profiling.db", help="путь к SQLite базе")
+    p.add_argument("--db", default=os.getenv("DATABASE_URL", ""),
+                   help="PostgreSQL URL (по умолчанию из DATABASE_URL в .env/окружении)")
     p.add_argument("--out", default="out", help="каталог результата")
     p.add_argument("--users", default="", help="список user_id через запятую (по умолчанию все)")
     p.add_argument("--priority-only", action="store_true",
@@ -1331,9 +1388,8 @@ def main():
     until_dt = parse_bound(args.until, end_of_day=True)
     if since_dt and until_dt and since_dt > until_dt:
         sys.exit(f"[FATAL] --since ({args.since}) позже --until ({args.until}).")
-    db_path = Path(args.db)
     out_dir = Path(args.out)
-    conn = open_db(db_path)
+    conn, db_label = open_db(args.db)
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     users = fetch_users(conn)
@@ -1364,13 +1420,13 @@ def main():
 
     # --priority-only: экспорт только приоритетных (флаг ставится в админке).
     if getattr(args, "priority_only", False):
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(user_profiles)")]
+        cols = conn.columns("user_profiles")
         if "priority" not in cols:
             sys.exit("[FATAL] В базе нет колонки user_profiles.priority. "
                      "Обновите код и запустите коллектор/админку — миграция v3 "
                      "добавит её автоматически (или: python -m app.models.migrations).")
         prio_ids = {r["user_id"] for r in conn.execute(
-            "SELECT user_id FROM user_profiles WHERE priority IS NOT NULL AND priority != 0")}
+            "SELECT user_id FROM user_profiles WHERE priority IS TRUE")}
         print(f"[FILTER] приоритетных пользователей: {len(prio_ids)}")
         if not prio_ids:
             sys.exit("[FATAL] Приоритетных пользователей нет — отметьте хотя бы одного "
@@ -1477,7 +1533,7 @@ def main():
 
     summary = {
         "generated_at": generated_at,
-        "db": str(db_path),
+        "db": db_label,
         "users_total": len(users),
         "exported": exported,
         "skipped_low_data": skipped,

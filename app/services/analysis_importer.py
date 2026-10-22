@@ -8,7 +8,7 @@ messages_analyzed). Сигналы (evidence) пишутся атомарно с
 
 CLI:
     python -m app.services.analysis_importer --user <user_id> --model deepseek \
-        --json-file answer.json [--db sqlite:///data/profiling.db] \
+        --json-file answer.json [--db postgresql+psycopg://user:pass@host:5432/db] \
         [--period-from 2026-09-28 --period-to 2026-10-20 --messages 1058]
 """
 from __future__ import annotations
@@ -112,7 +112,7 @@ def import_analysis(
     with engine.begin() as conn:
         # старые версии -> неактивные
         conn.execute(
-            text("UPDATE psych_profiles SET is_current = 0 WHERE user_id = :u AND is_current = 1"),
+            text("UPDATE psych_profiles SET is_current = FALSE WHERE user_id = :u AND is_current = TRUE"),
             {"u": user_id},
         )
         res = conn.execute(
@@ -124,7 +124,7 @@ def import_analysis(
                     mbti_type, mbti_confidence, enneagram_type, enneagram_confidence,
                     confidence_overall, severity_max, result_json, is_current, created_at)
                    VALUES (:user_id,:model,:ph,:sl,:pf,:pt,:ma,:bo,:bc,:be,:ba,:bn,
-                           :mt,:mc,:et,:ec,:co,:sm,:rj,1,:ca)"""
+                           :mt,:mc,:et,:ec,:co,:sm,:rj,TRUE,:ca)"""
             ),
             {
                 "user_id": user_id, "model": model, "ph": prompt_hash, "sl": source_lines,
@@ -142,7 +142,9 @@ def import_analysis(
                 "ca": _utcnow(),
             },
         )
-        profile_id = res.lastrowid
+        # psycopg не поддерживает lastrowid — берём вставленный PK из
+        # inserted_primary_key (BIGINT/bigserial на PostgreSQL).
+        profile_id = res.inserted_primary_key[0]
 
         # ---- сигналы: атомарно, с дедупом, лимит MAX_SIGNALS ----
         n_sig = 0
@@ -158,10 +160,11 @@ def import_analysis(
             ).scalar()
             ins = conn.execute(
                 text(
-                    """INSERT OR IGNORE INTO psych_signals
+                    """INSERT INTO psych_signals
                        (profile_id, user_id, signal_key, quote_norm, quote, message_id,
                         context, severity, created_at)
-                       VALUES (:p,:u,:sk,:qn,:q,:m,:c,:s,:t)"""
+                       VALUES (:p,:u,:sk,:qn,:q,:m,:c,:s,:t)
+                       ON CONFLICT (user_id, signal_key, quote_norm) DO NOTHING"""
                 ),
                 {"p": profile_id, "u": user_id, "sk": sig, "qn": qn, "q": quote,
                  "m": mid, "c": str(ev.get("context") or "")[:MAX_QUOTE_CHARS],
@@ -203,7 +206,7 @@ def get_active_profile(engine: Engine, user_id: int) -> dict | None:
 
 def _get_active_profile(conn, user_id: int) -> dict | None:
     row = conn.execute(
-        text("SELECT * FROM psych_profiles WHERE user_id = :u AND is_current = 1 "
+        text("SELECT * FROM psych_profiles WHERE user_id = :u AND is_current = TRUE "
              "ORDER BY created_at DESC LIMIT 1"),
         {"u": user_id},
     ).mappings().first()
@@ -235,11 +238,12 @@ def _get_active_profile(conn, user_id: int) -> dict | None:
 
 if __name__ == "__main__":  # CLI
     import argparse
+    import os
 
-    from app.models.db import create_db_engine
+    from app.models.db import DEFAULT_DATABASE_URL, create_db_engine
 
     ap = argparse.ArgumentParser(description="Импорт ответа LLM-аналитика в БД")
-    ap.add_argument("--db", default="sqlite:///data/profiling.db")
+    ap.add_argument("--db", default=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL))
     ap.add_argument("--user", type=int, required=True, help="user_id")
     ap.add_argument("--model", default=None, help="id модели (deepseek/qwen/claude…)")
     ap.add_argument("--json-file", required=True, help="файл с JSON-ответом нейросети")

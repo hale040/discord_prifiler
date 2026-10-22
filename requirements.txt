@@ -3,8 +3,9 @@
 # Ставится как пакет `discord.py-self`, импортируется как `discord`.
 discord.py-self>=2.0.0
 
-# ORM + SQLite
+# ORM + PostgreSQL-драйвер
 SQLAlchemy>=2.0
+psycopg[binary]>=3.1
 
 # HTTP-транспорт (зависимость discord.py-self, указана явно)
 aiohttp>=3.9
