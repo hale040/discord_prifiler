@@ -265,7 +265,7 @@ class Message(Base):
 class Attachment(Base):
     __tablename__ = "attachments"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # snowflake id вложения Discord
     message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), index=True)
 
     filename: Mapped[str] = mapped_column(String(512), default="")
@@ -291,7 +291,7 @@ class Attachment(Base):
 class ProfileSnapshot(Base):
     __tablename__ = "profile_snapshots"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # INTEGER inline-PK = rowid-автоинкремент SQLite
     user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), index=True)
     taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     about: Mapped[str | None] = mapped_column(Text, nullable=True)        # bio

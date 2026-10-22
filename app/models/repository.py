@@ -106,7 +106,7 @@ class Repository:
             if snapshot:
                 prev = s.scalars(
                     select(ProfileSnapshot)
-                    .where(ProfileSnapshot.user_id == user_id)
+                    .where(ProfileSnapshot.user_id == user.id)
                     .order_by(ProfileSnapshot.id.desc())
                     .limit(1)
                 ).first()
@@ -121,7 +121,7 @@ class Repository:
                 if not same:
                     s.add(
                         ProfileSnapshot(
-                            user_id=user_id, taken_at=now, changed=True,
+                            user_id=user.id, taken_at=now, changed=True,
                             about=snapshot.get("about"),
                             status_text=snapshot.get("status_text"),
                             banner_hash=snapshot.get("banner_hash"),

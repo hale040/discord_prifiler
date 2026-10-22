@@ -230,59 +230,63 @@ def _v05_user_games(engine: Engine) -> None:
         table.create(bind=conn, checkfirst=True)
 
 
+def _recreate_table_rowid_pk(engine: Engine, table_name: str) -> bool:
+    """Пересоздать таблицу с корректным для SQLite rowid-PK
+    («id INTEGER PRIMARY KEY» inline), сохранив общие колонки.
+
+    Возвращает True, если таблица была исправлена (пересоздана).
+    Используется миграцией v6 для САМОВОССТАНОВЛЕНИЯ: даже если база уже
+    помечена как мигрированная (или версия потерялась), кривой PK от
+    SQLAlchemy/BigInteger чинится повторно — проверка идемпотентна.
+    """
+    from app.models.entities import Base
+
+    if not _table_exists(engine, table_name):
+        _create_table_with_rowid_pk(engine, table_name)
+        return True
+    if _autoincrement_ok(engine, table_name):
+        return False
+
+    log.warning(
+        "Миграция v6: у %s битый PK (нет rowid-автоинкремента) — пересоздаю.",
+        table_name,
+    )
+    backup = f"_mig_{table_name}_broken"
+    with engine.begin() as conn:
+        # индексы мешают RENAME/DROP-пересозданию — снимаем и восстановим ниже
+        for idx in list(inspect(engine).get_indexes(table_name)):
+            conn.execute(text(f'DROP INDEX IF EXISTS "{idx["name"]}"'))
+        conn.execute(text(f'ALTER TABLE "{table_name}" RENAME TO "{backup}"'))
+        conn.execute(text(f'DROP TABLE IF EXISTS "{table_name}"'))
+    # создаём заново с inline INTEGER PRIMARY KEY (+ индексы модели)
+    _create_table_with_rowid_pk(engine, table_name)
+    with engine.begin() as conn:
+        new_cols = {c["name"] for c in inspect(engine).get_columns(table_name)}
+        old_cols = [c["name"] for c in inspect(engine).get_columns(backup)]
+        common = [c for c in old_cols if c in new_cols]
+        if common:
+            cols_sql = ", ".join(f'"{c}"' for c in common)
+            conn.execute(text(
+                f'INSERT INTO "{table_name}" ({cols_sql}) '
+                f'SELECT {cols_sql} FROM "{backup}"'
+            ))
+        conn.execute(text(f'DROP TABLE "{backup}"'))
+    return True
+
+
 def _v06_profile_snapshots(engine: Engine) -> None:
     """Таблица profile_snapshots (история изменений био/статуса/баннера/ссылок).
 
     Новая схема создаётся через Base.metadata.create_all; этот шаг добавляет
     таблицу в старые БД, созданные до появления модели.
 
-    Само-восстановление: если таблица уже есть, но SQLite не может сам
-    подставлять id при INSERT (PK без inline «INTEGER PRIMARY KEY» — так
-    генерирует DDL SQLAlchemy для BigInteger-ключа), вставки падают с
-    «NOT NULL constraint failed». ALTER TABLE не может починить PK, поэтому
-    проблемная таблица пересоздаётся с корректным rowid-PK. Если в старой
-    таблице есть строки — они сохраняются через временную."""
-    from app.models.entities import Base
-
-    def _create(conn):
-        # drop old + create fresh (inline `id INTEGER PRIMARY KEY` = автоинкремент)
-        model_table = Base.metadata.tables["profile_snapshots"]
-        model_table.drop(bind=conn, checkfirst=True)
-    _create_table_with_rowid_pk(engine, "profile_snapshots")
-
-    if not _table_exists(engine, "profile_snapshots"):
-        with engine.begin() as conn:
-            Base.metadata.tables["profile_snapshots"].drop(bind=conn, checkfirst=True)
-        _create_table_with_rowid_pk(engine, "profile_snapshots")
-        return
-
-    if _autoincrement_ok(engine, "profile_snapshots"):
-        return  # всё в порядке
-
-    log.warning(
-        "Миграция v6: у profile_snapshots битый PK (нет rowid-автоинкремента) "
-        "— пересоздаю таблицу."
-    )
-    model_table = Base.metadata.tables["profile_snapshots"]
-    with engine.begin() as conn:
-        n = conn.execute(text("SELECT COUNT(*) FROM profile_snapshots")).scalar()
-        if n:
-            conn.execute(text("ALTER TABLE profile_snapshots RENAME TO _ps_broken_backup"))
-            conn.execute(text(model_table.drop().compile(dialect=engine.dialect).compile()))
-            common = [c["name"] for c in inspect(engine).get_columns("profile_snapshots")]
-            cols_sql = ", ".join(f'"{c}"' for c in common)
-            conn.execute(text(
-                f"INSERT INTO profile_snapshots ({cols_sql}) "
-                f"SELECT {cols_sql} FROM _ps_broken_backup"
-            ))
-            conn.execute(text("DROP TABLE _ps_broken_backup"))
-        else:
-            _create(conn)
-    # индексы модели (ix_profile_snapshots_user_id и т.п.) могли не пересоздаться
-    for idx in model_table.indexes:
-        if idx.name not in _indexes(engine, "profile_snapshots"):
-            with engine.begin() as conn:
-                idx.create(bind=conn)
+    Само-восстановление: SQLAlchemy для SQLite генерирует DDL вида
+    «id BIGINT NOT NULL, PRIMARY KEY (id)» — такая таблица НЕ получает
+    rowid-автоинкремент, и ORM-вставки падают с
+    «NOT NULL constraint failed: profile_snapshots.id». ALTER TABLE не может
+    изменить PK, поэтому проблемная таблица пересоздаётся с inline
+    «id INTEGER PRIMARY KEY»; существующие строки сохраняются."""
+    _recreate_table_rowid_pk(engine, "profile_snapshots")
 
 
 def _v07_role_dynamics_and_attach_kind(engine: Engine) -> None:
@@ -405,6 +409,24 @@ def stamp_baseline(engine: Engine) -> None:
             )
 
 
+def _self_heal_rowid_pks(engine: Engine) -> int:
+    """Починка rowid-PK таблиц, независимо от версии схемы.
+
+    SQLAlchemy генерирует для SQLite «BIGINT NOT NULL, PRIMARY KEY (id)» —
+    без автоинкремента. Такие таблицы чинятся пересозданием с inline
+    «INTEGER PRIMARY KEY». Проверка дешёвая и идемпотентная, поэтому
+    выполняется при КАЖДОМ запуске: база может быть помечена LATEST через
+    stamp_baseline (new DB), а PK всё равно битым (DDL из моделей)."""
+    fixed = 0
+    for table in ("profile_snapshots",):
+        try:
+            if _recreate_table_rowid_pk(engine, table):
+                fixed += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Само-восстановление PK для %s не удалось: %s", table, exc)
+    return fixed
+
+
 def run_migrations(engine: Engine) -> int:
     """Применить все отсутствующие миграции; вернуть применённое число шагов."""
     current = get_current_version(engine)
@@ -414,7 +436,13 @@ def run_migrations(engine: Engine) -> int:
             "Обновите приложение — откатывать схему автоматически безопасно нельзя."
         )
     if current == LATEST_VERSION:
-        log.debug("Миграции: схема уже в актуальной версии v%s.", current)
+        # САМОВОССТАНОВЛЕНИЕ: даже на «актуальной» базе чиним битые PK
+        # (свежие БД создаются create_all из моделей -> BIGINT PK без
+        # автоинкремента; миграция v6 при этом уже помечена применённой).
+        if _self_heal_rowid_pks(engine):
+            log.info("Миграции: само-восстановление PK выполнено.")
+        else:
+            log.debug("Миграции: схема уже в актуальной версии v%s.", current)
         return 0
 
     # Создаём таблицу версий, если её нет (миграция с ad-hoc ALTER'ов).
