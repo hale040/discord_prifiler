@@ -84,7 +84,26 @@ DATABASE_URL=postgresql+psycopg://profiler:profiler@localhost:5432/profiling
 То есть: пользователь `profiler`, пароль `profiler`, база `profiling`,
 хост `localhost`, **стандартный порт 5432**.
 
-### Создание базы (Debian/Ubuntu, PostgreSQL 13+)
+### Вариант 1 — Docker Compose (рекомендуется, PostgreSQL 18)
+
+В репозитории лежит `docker-compose.yml` с PostgreSQL 18 (alpine), портом 5432,
+паролями из дефолтного `DATABASE_URL`, volume `pgdata` и tuned-параметрами
+(`shared_buffers`, `work_mem`, `wal_level=minimal`, `synchronous_commit=off`,
+`jit=off`, locale `C.UTF-8`). Роль, база и права создаются образом автоматически.
+
+```bash
+docker compose up -d          # поднять базу
+docker compose ps             # статус (healthcheck: pg_isready)
+
+# проверить подключение
+PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c 'SELECT version();'
+
+docker compose stop           # остановить (данные сохраняются в volume)
+docker compose down           # удалить контейнер, данные остаются
+docker compose down -v        # удалить и данные (схема пересоздаётся при следующем запуске main.py)
+```
+
+### Вариант 2 — локальный сервер (Debian/Ubuntu, PostgreSQL 13+)
 
 ```bash
 # 1. Установить и запустить сервер (если ещё не стоит)
@@ -109,13 +128,6 @@ PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c 'SELECT versio
 
 Если используете другой хост/порт/пароль — просто поправьте `DATABASE_URL`
 в `.env`. Формат: `postgresql+psycopg://USER:PASSWORD@HOST:PORT/DBNAME`.
-
-> Docker-альтернатива (без установки PG в систему):
-> ```bash
-> docker run -d --name profiling-pg -p 5432:5432 \
->   -e POSTGRES_USER=profiler -e POSTGRES_PASSWORD=profiler \
->   -e POSTGRES_DB=profiling postgres:18
-> ```
 
 ### Что собирается (проверка после первого запуска)
 
