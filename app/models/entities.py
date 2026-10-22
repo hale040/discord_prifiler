@@ -405,13 +405,12 @@ class PsychSignal(Base):
     severity: Mapped[str | None] = mapped_column(String(8))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    # Дедуп по (user_id, signal_key, quote_norm): обычный UNIQUE — именно на
+    # эти колонки ссылается ON CONFLICT в analysis_importer.
     __table_args__ = (
         UniqueConstraint(
-        "user_id",
-        text("signal_key varchar_pattern_ops"),
-        text("quote_norm varchar_pattern_ops"),
-        name="uq_psych_signals_dedup",
-    ),
+            "user_id", "signal_key", "quote_norm", name="uq_psych_signals_dedup"
+        ),
     )
 
 
@@ -432,10 +431,8 @@ class UserInterest(Base):
 
     __table_args__ = (
         UniqueConstraint(
-        "user_id",
-        text("topic_norm varchar_pattern_ops"),
-        name="uq_user_interests_norm",
-    ),
+            "user_id", "topic_norm", name="uq_user_interests_norm"
+        ),
     )
 
 
