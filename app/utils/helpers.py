@@ -37,11 +37,19 @@ class DiscordJSONEncoder(json.JSONEncoder):
         return str(o)
 
 
-def to_json(value: Any) -> str | None:
+def to_json(value: Any):
+    """Сериализует значение для колонки JSONB.
+
+    Колонки *_json в PostgreSQL — нативный JSONB: psycopg передаёт Python-
+    структуры (list/dict) напрямую, двойная сериализация в строку запрещена
+    (иначе в БД хранился бы JSON-«строка с JSON внутри»). Discord-объекты
+    предварительно причесываются через тот же DiscordJSONEncoder, что и
+    раньше: datetime -> ISO, объекты с ._json -> их сырой дамп.
+    """
     if value is None:
         return None
     try:
-        return json.dumps(value, cls=DiscordJSONEncoder, ensure_ascii=False)
+        return json.loads(json.dumps(value, cls=DiscordJSONEncoder, ensure_ascii=False))
     except Exception as exc:  # noqa: BLE001
         log.debug("to_json failed: %s", exc)
         return None

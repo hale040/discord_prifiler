@@ -287,11 +287,17 @@ class Repository:
                     if parent_author is not None and parent_author != author_id:
                         target = parent_author
                 elif ref_id is None and mentions_json:
-                    import json
+                    # mention_users_json — JSONB: ORM отдаёт list напрямую;
+                    # строка поддержана для старых данных (двойная сериализация)
+                    mentioned = mentions_json
+                    if isinstance(mentioned, str):
+                        import json
 
-                    try:
-                        mentioned = json.loads(mentions_json)
-                    except (ValueError, TypeError):
+                        try:
+                            mentioned = json.loads(mentioned)
+                        except (ValueError, TypeError):
+                            mentioned = []
+                    if not isinstance(mentioned, list):
                         mentioned = []
                     for uid in mentioned:
                         if int(uid) != author_id:

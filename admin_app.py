@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Админка поверх БД профайлера (Flask + SQLAlchemy Core).
+"""Админка поверх БД профайлера (Flask + SQLAlchemy Core, PostgreSQL).
 
 Запуск:
-    python admin_app.py [--db data/profiling.db] [--port 8777]
+    python admin_app.py [--db postgresql+psycopg://user:pass@localhost:5432/profiling] [--port 8777]
+
+База поднимается из docker-compose.yml (`docker compose up -d`) либо локальным
+сервером PostgreSQL 18 (см. README, раздел «База данных»).
 
 Вход по паролю из ENV/.env: ADMIN_PASSWORD (обязателен — иначе fail-closed).
 Сессии подписываются itsdangerous-ключом из SECRET_KEY (или ADMIN_PASSWORD).
@@ -17,8 +20,13 @@
   * Карточка записи (/browse/<table>/<pk>): просмотр и РЕДАКТИРОВАНИЕ любой
     строки — все редактируемые поля с типами из схемы SQLAlchemy,
     валидация типов, UPDATE только по PK, запись старого значения в audit_log.
-  * SQL-редактор: SELECT всегда; UPDATE/DELETE — только с WHERE и после
-    подтверждения (count-before), в транзакции, с записью в audit_log.
+    Колонки *_json (нативный JSONB) редактируются как pretty-JSON.
+  * SQL-редактор: SELECT всегда; INSERT — сразу; UPDATE/DELETE — только с WHERE
+    и после подтверждения (count-before), в транзакции, с записью в audit_log.
+  * Импорт ответа нейросети (/profile/import): JSON LLM -> psych_profiles +
+    psych_signals + user_interests через app.services.analysis_importer.
+  * Читаемый вид психопрофиля (/profile/<id>) со сигналами и интересами.
+  * Журнал аудита (/audit) всех действий админки.
   * Админ-действия: VACUUM/ANALYZE PostgreSQL.
 
 Схема: база новая, создаётся целиком из моделей (app/models/db.py ->
@@ -1165,7 +1173,11 @@ def create_app(database_url: str) -> Flask:
         if p is None:
             abort(404)
         try:
-            res = json.loads(p.result_json) if p.result_json else {}
+            # result_json — JSONB: psycopg отдаёт dict напрямую; строка поддержана
+            if isinstance(p.result_json, dict):
+                res = p.result_json
+            else:
+                res = json.loads(p.result_json) if p.result_json else {}
         except Exception:
             res = {}
         bf = {

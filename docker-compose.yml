@@ -1,0 +1,47 @@
+# PostgreSQL 18 для проекта профайлинга.
+# Запуск:  docker compose up -d
+# Останов: docker compose down  (данные остаются в volume pgdata)
+# Полная очистка БД: docker compose down -v  (схема пересоздаётся при следующем запуске main.py)
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: profiling-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: profiler
+      POSTGRES_PASSWORD: profiler
+      POSTGRES_DB: profiling
+      # сортировка byte-order — быстрее индексы по text/varchar
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    ports:
+      - "5432:5432"            # стандартный порт
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    command:
+      # параметры производительности под типичную нагрузку проекта
+      # (вставка сообщений + выборки по user/channel/ts)
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+      - "-c"
+      - "wal_level=minimal"          # без репликации — меньше писани в WAL
+      - "-c"
+      - "max_wal_senders=0"
+      - "-c"
+      - "synchronous_commit=off"     # коллектор не теряет данные, но быстрее на in-disk flush
+      - "-c"
+      - "jit=off"                    # короткие OLTP-запросы — JIT только мешает
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U profiler -d profiling"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

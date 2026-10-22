@@ -503,7 +503,7 @@ class CollectionService:
                 old_raw = fields.get("raw_json")
                 base = _load_json(old_raw) if old_raw else {}
                 base.update(merged)
-                fields["raw_json"] = to_json(base)
+                fields["raw_json"] = base
 
         # 2) Объект пользователя (username/avatar/created_at) — если профиль не пришёл
         if not fields:
@@ -659,9 +659,14 @@ def sha256_of_file(path: str) -> str:
     return h.hexdigest()
 
 
-def _load_json(s: str) -> dict:
+def _load_json(s) -> dict:
+    """JSONB возвращает dict напрямую; строка — для старых данных/заглушек."""
     import json
 
+    if isinstance(s, dict):
+        return s
+    if not isinstance(s, str):
+        return {}
     try:
         v = json.loads(s)
         return v if isinstance(v, dict) else {}
@@ -678,6 +683,7 @@ def _safe_attr(fn):
 
 
 def _safe_json(fn):
+    """JSONB-колонки: возвращаем нативную Python-структуру (dict/list)."""
     try:
         return to_json(fn())
     except Exception:  # noqa: BLE001

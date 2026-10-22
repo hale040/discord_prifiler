@@ -18,7 +18,7 @@ import re
 import unicodedata
 from datetime import datetime, timezone
 
-from sqlalchemy import text
+from sqlalchemy import JSON, bindparam, text
 from sqlalchemy.engine import Engine
 
 MAX_SIGNALS = 10          # не забиваем базу: evidence не больше N на профиль
@@ -115,9 +115,9 @@ def import_analysis(
             text("UPDATE psych_profiles SET is_current = FALSE WHERE user_id = :u AND is_current = TRUE"),
             {"u": user_id},
         )
-        res = conn.execute(
+        insert_sql = (
             text(
-                """INSERT INTO psych_profiles
+                    """INSERT INTO psych_profiles
                    (user_id, model, prompt_hash, source_lines, period_from, period_to,
                     messages_analyzed, big_five_openness, big_five_conscientiousness,
                     big_five_extraversion, big_five_agreeableness, big_five_neuroticism,
@@ -125,8 +125,12 @@ def import_analysis(
                     confidence_overall, severity_max, result_json, is_current, created_at)
                    VALUES (:user_id,:model,:ph,:sl,:pf,:pt,:ma,:bo,:bc,:be,:ba,:bn,
                            :mt,:mc,:et,:ec,:co,:sm,:rj,TRUE,:ca)"""
-            ),
-            {
+            )
+            # rj — dict для нативной колонки JSONB: без явного типа
+            # DBAPI-драйвер не умеет адаптировать dict ("can't adapt type 'dict'")
+            .bindparams(bindparam("rj", type_=JSON(none_as_null=True)))
+        )
+        res = conn.execute(insert_sql, {
                 "user_id": user_id, "model": model, "ph": prompt_hash, "sl": source_lines,
                 "pf": _dt(period_from), "pt": _dt(period_to), "ma": messages_analyzed,
                 "bo": _as_float(bf.get("openness")), "bc": _as_float(bf.get("conscientiousness")),
@@ -137,8 +141,8 @@ def import_analysis(
                 "co": _as_float(answer.get("confidence_overall")),
                 "sm": severity_max,
                 # дисклеймер в хранилище не нужен — вырезаем из JSON
-                "rj": json.dumps({k: v for k, v in answer.items() if k != "disclaimer"},
-                                 ensure_ascii=False, separators=(",", ":")),
+                # result_json — нативный JSONB: psycopg принимает dict как есть
+                "rj": {k: v for k, v in answer.items() if k != "disclaimer"},
                 "ca": _utcnow(),
             },
         )
