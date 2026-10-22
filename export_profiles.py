@@ -914,6 +914,9 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             "images_total": len(images),
             "images": images[:200],
         },
+        # история профиля: снимки (bio/status/привязки по датам) и динамика ролей
+        # (получение/потеря). Пусто, если таблиц ещё нет или рефреш не проводился.
+        "history": history or {"snaps": [], "roles_hist": []},
         "transcript": transcript,
     }
     return dossier
@@ -1048,6 +1051,16 @@ def compact_dossier(d: dict) -> dict:
     if dc.get("linked_messages"):
         dcc["linked"] = dc["linked_messages"]
 
+    # история профиля -> компактный блок hist (только непустое, свежие сверху)
+    hist_in = d.get("history") or {}
+    hc: dict = {}
+    snaps = hist_in.get("snaps") or []
+    if snaps:
+        hc["snaps"] = snaps[:12]          # не более 12 снимков в промпт
+    rh = hist_in.get("roles_hist") or []
+    if rh:
+        hc["roles_hist"] = rh[:30]        # и 30 событий ролей
+
     meta = d.get("meta", {})
     metac = {"trunc": bool(meta.get("transcript_truncated")),
             "lines": meta.get("transcript_lines")}
@@ -1064,7 +1077,8 @@ def compact_dossier(d: dict) -> dict:
             **({"p": pc} if pc else {}),
             **({"guilds": gp} if gp else {}),
             **({"roles": roles} if roles else {}),
-            "stats": stats_c, "dlg": dcc, "media": mc}
+            "stats": stats_c, "dlg": dcc, "media": mc,
+            **({"hist": hc} if hc else {})}
 
 
 def strip_urls_deep(obj):
@@ -1115,7 +1129,9 @@ def render_prompt_md(dossier: dict) -> str:
         "bio — о себе, badges — значки, conns — привязки, nitro — тип премиума,",
         "guilds — серверы (joined вступление, timeout_until бан-тайм-аут,",
         "top_role высшая роль), roles — роли, stats — метрики,",
-        "dlg — режим контекста диалога, media — вложения)",
+        "dlg — режим контекста диалога, media — вложения,",
+        "hist — история профиля: snaps снимки (at дата, bio/status/conns),",
+        "roles_hist динамика ролей (role, from получена, lost потеряна))",
         "```json",
         json.dumps(compact_dossier(d), ensure_ascii=False, separators=(",", ":"),
                    default=str),
@@ -1252,6 +1268,8 @@ def main():
     role_map = fetch_roles(conn)
     msg_map = fetch_messages(conn)
     att_map = fetch_attachments(conn)
+    games_map = fetch_games(conn)
+    history_map = fetch_profile_history(conn)
     all_user_ids = set(u["user_id"] for u in users)
 
     # связи ответов + полная лента канала для сборки диалогов с собеседниками
@@ -1354,6 +1372,7 @@ def main():
                 u, guild_map.get(uid, []), role_map.get(uid, []),
                 msgs, att_map, all_user_ids, args, generated_at,
                 dialog_msgs=dialog_msgs, dialog_mode=dialog_mode, names=names,
+                games=games_map.get(uid), history=history_map.get(uid),
             )
             fname = f"{uid}_{slug(u['username'])}"
             jl.write(json.dumps(dossier, ensure_ascii=False, default=str) + "\n")
