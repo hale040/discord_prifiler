@@ -19,9 +19,11 @@ from app.models.entities import (
     ChannelState,
     GuildMemberProfile,
     Message,
+    ProfileSnapshot,
     UserGame,
     UserRoleTag,
     UserProfile,
+    utcnow,
 )
 
 log = logging.getLogger("repository")
@@ -42,8 +44,17 @@ class Repository:
         fields: dict[str, Any],
         guild_fields: dict[str, Any] | None = None,
         roles: Iterable[dict[str, Any]] | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> None:
-        """Создать/обновить глобальный профиль + серверный профиль + теги-роли."""
+        """Создать/обновить глобальный профиль + серверный профиль + теги-роли.
+
+        roles — динамика ролей: существующим ролям обновляется last_seen,
+        новые получают first_seen=last_seen=now; исчезнувшие помечаются
+        last_lost_at (роль не удаляется — история важна для анализа).
+        snapshot — снимок профиля (bio/status/banner/connections): пишется в
+        profile_snapshots только если содержимое изменилось с прошлого раза.
+        """
+        now = utcnow()
         with self._sf() as s:
             user = s.scalars(select(UserProfile).where(UserProfile.user_id == user_id)).first()
             if user is None:
@@ -70,16 +81,54 @@ class Repository:
                     if hasattr(gp, k) and v is not None:
                         setattr(gp, k, v)
 
-            if roles:
+            if roles is not None:
                 existing = {
-                    r.role_id
+                    r.role_id: r
                     for r in s.scalars(select(UserRoleTag).where(UserRoleTag.user_id == user_id))
                 }
+                seen_ids: set[int] = set()
                 for r in roles:
-                    if r["role_id"] in existing:
-                        continue
-                    s.add(UserRoleTag(user_id=user_id, **r))
-                    existing.add(r["role_id"])
+                    rid = r["role_id"]
+                    seen_ids.add(rid)
+                    cur = existing.get(rid)
+                    if cur is None:
+                        s.add(UserRoleTag(user_id=user_id, first_seen=now, last_seen=now, **r))
+                    else:
+                        cur.last_seen = now
+                        cur.last_lost_at = None  # вернулась после отсутствия
+                        for k, v in r.items():
+                            if k != "role_id" and hasattr(cur, k) and v is not None:
+                                setattr(cur, k, v)
+                for rid, cur in existing.items():
+                    if rid not in seen_ids and cur.last_lost_at is None:
+                        cur.last_lost_at = now
+
+            if snapshot:
+                prev = s.scalars(
+                    select(ProfileSnapshot)
+                    .where(ProfileSnapshot.user_id == user_id)
+                    .order_by(ProfileSnapshot.id.desc())
+                    .limit(1)
+                ).first()
+                same = (
+                    prev is not None
+                    and prev.about == snapshot.get("about")
+                    and prev.status_text == snapshot.get("status_text")
+                    and prev.banner_hash == snapshot.get("banner_hash")
+                    and prev.avatar_hash == snapshot.get("avatar_hash")
+                    and prev.connections_json == snapshot.get("connections_json")
+                )
+                if not same:
+                    s.add(
+                        ProfileSnapshot(
+                            user_id=user_id, taken_at=now, changed=True,
+                            about=snapshot.get("about"),
+                            status_text=snapshot.get("status_text"),
+                            banner_hash=snapshot.get("banner_hash"),
+                            avatar_hash=snapshot.get("avatar_hash"),
+                            connections_json=snapshot.get("connections_json"),
+                        )
+                    )
 
             s.commit()
 
