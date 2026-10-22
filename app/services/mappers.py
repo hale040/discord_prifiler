@@ -257,12 +257,60 @@ def message_data(
     return data
 
 
+_DOC_EXTS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".txt", ".rtf", ".csv")
+_ARCHIVE_EXTS = (".zip", ".rar", ".7z", ".tar", ".gz", ".bz2")
+_AUDIO_EXTS = (".mp3", ".ogg", ".wav", ".flac", ".m4a", ".opus")
+_VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".avi", ".gifv")
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+
+
+def classify_attachment(filename: str | None, content_type: str | None,
+                        width: int | None, height: int | None) -> str:
+    """Эвристическая классификация вложения по имени/MIME/размерам.
+
+    kind: image|meme|screenshot|document|archive|audio|video|other.
+    Мемы и скриншоты — подвиды картинок (по имени файла); для нейросети
+    это сигнал «юмор-контент» vs «доказательный артефакт».
+    """
+    name = (filename or "").lower()
+    ct = (content_type or "").lower()
+    ext = ("." + name.rsplit(".", 1)[-1]) if "." in name else ""
+    stem = name.rsplit(".", 1)[0]
+    if any(k in stem for k in ("spoiler-", "image", "photo")) and ext in _IMAGE_EXTS:
+        # типичные автоимена Discord-картинок — просто картинка
+        pass
+    if ct.startswith("image/") or ext in _IMAGE_EXTS:
+        if any(k in stem for k in ("meme", "mem_", "_mem", "jaja", "lol", "lmao", "прикол", "мем", "смех")):
+            return "meme"
+        if any(k in stem for k in ("screenshot", "screen", "scrnshot", "scr", "snip", "скрин", "скриншот")) \
+                or name.startswith(("obs_", "sharex", "greenshot", "snagit", "screen-")):
+            return "screenshot"
+        return "image"
+    if ct.startswith("video/") or ext in _VIDEO_EXTS:
+        return "video"
+    if ct.startswith("audio/") or ext in _AUDIO_EXTS:
+        return "audio"
+    if ct.startswith("text/") or ext in _DOC_EXTS or ct in (
+        "application/pdf", "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ):
+        return "document"
+    if ext in _ARCHIVE_EXTS or ct in ("application/zip", "application/x-rar-compressed",
+                                      "application/x-7z-compressed", "application/gzip"):
+        return "archive"
+    return "other"
+
+
 def attachments_data(msg: discord.Message) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for a in msg.attachments or []:
         ct = (a.content_type or "").lower()
         ext = ("." + a.filename.rsplit(".", 1)[-1].lower()) if "." in (a.filename or "") else ""
         is_image = ct.startswith("image/") or ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+        w = getattr(a, "width", None)
+        h = getattr(a, "height", None)
         out.append(
             {
                 "id": a.id,
@@ -272,9 +320,10 @@ def attachments_data(msg: discord.Message) -> list[dict[str, Any]]:
                 "proxy_url": a.proxy_url,
                 "content_type": a.content_type,
                 "size": a.size or 0,
-                "width": getattr(a, "width", None),
-                "height": getattr(a, "height", None),
+                "width": w,
+                "height": h,
                 "is_image": is_image,
+                "kind": classify_attachment(a.filename, a.content_type, w, h),
                 "is_spoiler": bool(getattr(a, "is_spoiler", lambda: False)())
                 if callable(getattr(a, "is_spoiler", None))
                 else bool(getattr(a, "is_spoiler", False)),

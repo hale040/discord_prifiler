@@ -170,12 +170,63 @@ def _v05_user_games(engine: Engine) -> None:
         table.create(bind=conn, checkfirst=True)
 
 
+def _v06_profile_snapshots(engine: Engine) -> None:
+    """Таблица profile_snapshots (история изменений био/статуса/баннера/ссылок).
+
+    Новая схема создаётся через Base.metadata.create_all; этот шаг добавляет
+    таблицу в старые БД, созданные до появления модели."""
+    if _table_exists(engine, "profile_snapshots"):
+        return
+    from app.models.entities import Base
+
+    with engine.begin() as conn:
+        table = Base.metadata.tables["profile_snapshots"]
+        table.create(bind=conn, checkfirst=True)
+
+
+def _v07_role_dynamics_and_attach_kind(engine: Engine) -> None:
+    """Динамика ролей + классификация вложений:
+    - user_roles: first_seen / last_seen / last_lost_at (потерянные роли больше
+      не удаляются молча — видно, когда роль выдали и когда сняли);
+    - attachments: kind (image|meme|screenshot|document|archive|audio|video).
+    Идемпотентно; существующие строки получают first/last_seen = now."""
+    cols = _columns(engine, "user_roles")
+    if "first_seen" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE user_roles ADD COLUMN first_seen DATETIME"))
+            conn.execute(text("ALTER TABLE user_roles ADD COLUMN last_seen DATETIME"))
+            conn.execute(text("ALTER TABLE user_roles ADD COLUMN last_lost_at DATETIME"))
+            conn.execute(text(
+                "UPDATE user_roles SET first_seen = CURRENT_TIMESTAMP, "
+                "last_seen = CURRENT_TIMESTAMP WHERE first_seen IS NULL"
+            ))
+    acols = _columns(engine, "attachments")
+    if "kind" not in acols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE attachments ADD COLUMN kind VARCHAR(32)"))
+        # разовая классификация уже собранных вложений по имени/MIME
+        from sqlalchemy import text as _t  # noqa: PLC0415
+        with engine.begin() as conn:
+            rows = conn.execute(_t(
+                "SELECT id, filename, content_type FROM attachments "
+                "WHERE kind IS NULL LIMIT 200000"
+            )).fetchall()
+        from app.services.mappers import classify_attachment  # noqa: PLC0415
+        with engine.begin() as conn:
+            for rid, fname, ctype in rows:
+                k = classify_attachment(fname, ctype, None, None)
+                conn.execute(_t("UPDATE attachments SET kind=:k WHERE id=:i"),
+                             {"k": k, "i": rid})
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
     ("user_profiles: флаг priority + priority_note + индекс", _v03_user_priority),
     ("messages: очистка раздутого raw_json (с бэкапом БД перед запуском)", _v04_compact_raw_json),
     ("user_games: таблица игр/активностей пользователя (FK на user_profiles)", _v05_user_games),
+    ("profile_snapshots: история изменений профиля (bio/status/banner/connections)", _v06_profile_snapshots),
+    ("user_roles: first/last_seen + last_lost_at; attachments: kind", _v07_role_dynamics_and_attach_kind),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

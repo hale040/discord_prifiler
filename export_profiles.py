@@ -344,11 +344,70 @@ def row_get(row: dict, key: str, default=None):
 
 def fetch_attachments(conn) -> dict[int, list[dict]]:
     out: dict[int, list[dict]] = {}
-    for r in conn.execute(
-        "SELECT message_id, filename, url, proxy_url, content_type, width, height,"
-        " is_image, is_spoiler, downloaded, stored_path FROM attachments"
-    ):
-        out.setdefault(r["message_id"], []).append(dict(r))
+    try:
+        rows = conn.execute(
+            "SELECT message_id, filename, url, proxy_url, content_type, width, height,"
+            " is_image, is_spoiler, downloaded, stored_path, kind FROM attachments"
+        )
+    except sqlite3.Error:
+        # старая БД без колонки kind (до миграции v7) — берём без неё
+        rows = conn.execute(
+            "SELECT message_id, filename, url, proxy_url, content_type, width, height,"
+            " is_image, is_spoiler, downloaded, stored_path FROM attachments"
+        )
+    for r in rows:
+        d = dict(r)
+        d.setdefault("kind", None)
+        out.setdefault(d["message_id"], []).append(d)
+    return out
+
+
+def fetch_profile_history(conn) -> dict[int, dict]:
+    """user_id -> {'snaps': [...], 'roles_hist': [...]} из profile_snapshots и
+    динамики user_roles. Таблиц/колонок может не быть в старых БД — пусто."""
+    out: dict[int, dict] = {}
+    try:
+        snaps = conn.execute(
+            "SELECT user_id, taken_at, about, status_text, connections_json, changed"
+            " FROM profile_snapshots ORDER BY user_id, taken_at DESC"
+        ).fetchall()
+    except sqlite3.Error:
+        snaps = []
+    import json as _json
+    for r in snaps:
+        e = out.setdefault(int(r["user_id"]), {"snaps": [], "roles_hist": []})
+        item: dict = {"at": str(r["taken_at"] or "")[:10]}
+        if r["about"]:
+            item["bio"] = r["about"]
+        if r["status_text"]:
+            item["status"] = r["status_text"]
+        if r["connections_json"]:
+            try:
+                cs = _json.loads(r["connections_json"])
+                item["conns"] = [
+                    f"{c.get('platform', '?')}: {c.get('name', '')}".strip(": ")
+                    for c in cs if isinstance(c, dict)
+                ]
+            except Exception:  # noqa: BLE001
+                pass
+        e["snaps"].append(item)
+    try:
+        role_cols = {c[1] for c in conn.execute("PRAGMA table_info(user_roles)")}
+        if "first_seen" in role_cols and "last_lost_at" in role_cols:
+            rh = conn.execute(
+                "SELECT user_id, role_name, first_seen, last_seen, last_lost_at"
+                " FROM user_roles WHERE last_lost_at IS NOT NULL OR first_seen IS NOT NULL"
+            ).fetchall()
+            for r in rh:
+                e = out.setdefault(int(r["user_id"]), {"snaps": [], "roles_hist": []})
+                he: dict = {"role": r["role_name"]}
+                if r["first_seen"]:
+                    he["from"] = str(r["first_seen"])[:10]
+                if r["last_lost_at"]:
+                    he["lost"] = str(r["last_lost_at"])[:10]
+                e["roles_hist"].append(he)
+    except sqlite3.Error:
+        pass
     return out
 
 
@@ -747,7 +806,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   dialog_msgs: list[dict] | None = None,
                   dialog_mode: str | None = None,
                   names: dict[int, str] | None = None,
-                  games: list[str] | None = None) -> dict:
+                  games: list[str] | None = None,
+                  history: dict | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
     if dialog_msgs is not None and not args.no_context:

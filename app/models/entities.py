@@ -195,6 +195,10 @@ class UserRoleTag(Base):
     color: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_mentionable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     permissions_raw: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Динамика ролей: первая/последняя встреча и момент, когда роль пропала
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_lost_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[UserProfile] = relationship(back_populates="roles")
 
@@ -272,12 +276,32 @@ class Attachment(Base):
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_image: Mapped[bool] = mapped_column(Boolean, default=False)
+    kind: Mapped[str | None] = mapped_column(String(32), nullable=True)  # image|meme|screenshot|document|archive|audio|video|other
     is_spoiler: Mapped[bool] = mapped_column(Boolean, default=False)
     stored_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     downloaded: Mapped[bool] = mapped_column(Boolean, default=False)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     message: Mapped[Message] = relationship(back_populates="attachments")
+
+
+# ---------------------------------------------------------------------------
+# Снимки профиля (история изменений био/статуса/баннера/ссылок во времени)
+# ---------------------------------------------------------------------------
+class ProfileSnapshot(Base):
+    __tablename__ = "profile_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), index=True)
+    taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    about: Mapped[str | None] = mapped_column(Text, nullable=True)        # bio
+    status_text: Mapped[str | None] = mapped_column(String(256), nullable=True)  # кастомный статус
+    banner_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)   # смена баннера по хешу URL
+    avatar_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    connections_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # привязки на момент снимка
+    changed: Mapped[bool] = mapped_column(Boolean, default=True)  # отличается ли от предыдущего снимка
+
+    user: Mapped[UserProfile] = relationship()
 
 
 # ---------------------------------------------------------------------------

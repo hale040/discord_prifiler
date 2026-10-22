@@ -545,10 +545,39 @@ class CollectionService:
         if steam_login and fields.get("connections_json"):
             pass  # логин уже внутри connections_json; отдельного поля не заводим
 
-        # 5) Локаль/таймзон — доступны только о себе через profile.metadata;
+        # 5) Снимок профиля: био/кастомный статус/баннер/аватар/привязки —
+        #    пишется в profile_snapshots только при фактическом изменении.
+        snapshot: dict[str, Any] | None = None
+        src = prof if prof is not None else member
+        status_text = None
+        if src is not None:
+            for act in _safe_attr(lambda: list(src.activities or [])) or []:
+                if str(getattr(act, "type", "")) == "ActivityType.custom_status" or \
+                        getattr(act, "type", None) == discord.ActivityType.custom_status:
+                    status_text = getattr(act, "state", None) or _safe_attr(
+                        lambda a=act: a.emoji.name if getattr(a, "emoji", None) else None)
+                    break
+        import hashlib as _hl
+        snap_about = fields.get("about")
+        snap_conn = fields.get("connections_json")
+        bhash = _hl.sha1((fields.get("banner_url") or "").encode()).hexdigest()[:16] \
+            if fields.get("banner_url") else None
+        ahash = _hl.sha1((fields.get("avatar_url") or "").encode()).hexdigest()[:16] \
+            if fields.get("avatar_url") else None
+        if any(v is not None for v in (snap_about, status_text, bhash, ahash, snap_conn)):
+            snapshot = {
+                "about": snap_about,
+                "status_text": status_text,
+                "banner_hash": bhash,
+                "avatar_hash": ahash,
+                "connections_json": snap_conn,
+            }
+
+        # 6) Локаль/таймзон — доступны только о себе через profile.metadata;
         #    сохраняем всё, что удалось получить.
         if fields or guild_fields:
-            self.repo.upsert_user_profile(user_id, fields or {}, guild_fields, roles)
+            self.repo.upsert_user_profile(user_id, fields or {}, guild_fields, roles,
+                                          snapshot=snapshot)
             if games:
                 added = self.repo.replace_user_games(user_id, games)
                 if added:
