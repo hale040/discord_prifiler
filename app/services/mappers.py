@@ -12,7 +12,19 @@ from typing import Any
 
 import discord
 
-from app.utils.helpers import to_json
+import json
+
+from app.utils.helpers import DiscordJSONEncoder, to_json
+
+
+def _to_json_or_none(value: Any):
+    """to_json + «пустые» ([] / {} / '[]') трактуем как NULL (экономия места)."""
+    v = to_json(value)
+    if isinstance(v, str):  # fallback после сбоя сериализации — не пишем в JSONB
+        return None
+    if v in ([], {}, ""):
+        return None
+    return v
 
 log = logging.getLogger("mappers")
 
@@ -93,13 +105,13 @@ def user_fields(user: discord.abc.User) -> dict[str, Any]:
         "accent_color": _safe(lambda: int(user.accent_color.value) if user.accent_color else None),
         "created_at_discord": _safe(lambda: user.created_at),
         "public_flags": _safe(lambda: int(user.public_flags.value)),
-        "flags_raw": to_json(_safe(lambda: flags_to_list(user.public_flags), [])),
+        "flags_raw": _to_json_or_none(_safe(lambda: flags_to_list(user.public_flags), [])),
     }
     # UserProfile (fetch_user_profile) несёт bio/connections/badges/mutual
     fields["about"] = _safe(lambda: user.bio) or _safe(lambda: user.display_bio)
     badges = _safe(lambda: list(user.badges)) or []
     if badges:
-        fields["badges_json"] = to_json(
+        fields["badges_json"] = _to_json_or_none(
             [
                 {
                     "key": getattr(b, "key", None),
@@ -111,7 +123,7 @@ def user_fields(user: discord.abc.User) -> dict[str, Any]:
         )
     conns = _safe(lambda: list(user.connections)) or []
     if conns:
-        fields["connections_json"] = to_json(
+        fields["connections_json"] = _to_json_or_none(
             [
                 {
                     "platform": getattr(c, "platform", None),
@@ -143,7 +155,7 @@ def user_fields(user: discord.abc.User) -> dict[str, Any]:
     if mfc is not None:
         raw["mutual_friends_count"] = mfc
     if raw:
-        fields["raw_json"] = to_json(raw)
+        fields["raw_json"] = _to_json_or_none(raw)
     return {k: v for k, v in fields.items() if v is not None}
 
 
@@ -213,18 +225,18 @@ def message_data(
         "embed_count": len(msg.embeds or []),
         "mention_count": len(msg.mentions or []) + len(msg.role_mentions or []),
         "reaction_total": sum(r.count for r in (msg.reactions or [])),
-        "reactions_json": to_json(
+        "reactions_json": _to_json_or_none(
             [{"emoji": str(r.emoji), "count": r.count, "me": r.me} for r in (msg.reactions or [])]
         )
         if msg.reactions
         else None,
-        "mention_users_json": to_json([u.id for u in (msg.mentions or [])]) if msg.mentions else None,
-        "mention_roles_json": to_json([r.id for r in (msg.role_mentions or [])]) if msg.role_mentions else None,
-        "mention_channels_json": to_json(
+        "mention_users_json": _to_json_or_none([u.id for u in (msg.mentions or [])]) if msg.mentions else None,
+        "mention_roles_json": _to_json_or_none([r.id for r in (msg.role_mentions or [])]) if msg.role_mentions else None,
+        "mention_channels_json": _to_json_or_none(
             sorted({int(m) for m in CHANNEL_MENTION_RE.findall(msg.content or "")})
         )
         or None,
-        "stickers_json": to_json(
+        "stickers_json": _to_json_or_none(
             [
                 {
                     "id": s.id,
@@ -253,7 +265,7 @@ def message_data(
     if store_raw:
         raw = _safe(lambda: msg.to_dict())
         if raw:
-            data["raw_json"] = to_json(raw)
+            data["raw_json"] = _to_json_or_none(raw)
     return data
 
 

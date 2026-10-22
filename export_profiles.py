@@ -20,7 +20,7 @@
   out/index.json                            — сводка по всем пользователям
 
 Запуск:
-  python export_profiles.py [--db postgresql://user:pass@host/db] [--out out]
+  python export_profiles.py [--db postgresql+psycopg://user:pass@localhost:5432/profiling] [--out out]
         [пользователь] [--users id1,id2] [--min-messages 5] [--max-lines N]
         [--per-user-json] [--no-prompts]
 
