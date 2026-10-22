@@ -87,20 +87,32 @@ DATABASE_URL=postgresql+psycopg://profiler:profiler@localhost:5682/profiling
 ### Вариант 1 — Docker Compose (рекомендуется, PostgreSQL 18)
 
 В репозитории лежит `docker-compose.yml` с PostgreSQL 18 (alpine), портом 5682,
-паролями из дефолтного `DATABASE_URL`, volume `pgdata` и tuned-параметрами
+паролями из дефолтного `DATABASE_URL` и tuned-параметрами
 (`shared_buffers`, `work_mem`, `wal_level=minimal`, `synchronous_commit=off`,
 `jit=off`, locale `C.UTF-8`). Роль, база и права создаются образом автоматически.
 
+**Хранение данных:** БД лежит в каталоге `./data/db` рядом с проектом
+(bind-mount, добавлен в `.gitignore`). Обратите внимание: начиная с официальных
+образов postgres 18 данные хранятся в версионном подкаталоге
+(`/var/lib/postgresql/18/docker`), поэтому монтируется именно
+`/var/lib/postgresql`, а не `/var/lib/postgresql/data` — иначе контейнер падает
+с ошибкой *"there appears to be PostgreSQL data in /var/lib/postgresql/data
+(unused mount/volume)"* при апгрейде образа 17→18. Если у вас остался старый
+named-volume `pgdata` от прошлой конфигурации — переносить его нельзя (в нём
+формат PG≤17), просто удалите volume и начните новую базу: схема создаётся
+заново при первом запуске `main.py`.
+
 ```bash
-docker compose up -d          # поднять базу
-docker compose ps             # статус (healthcheck: pg_isready)
+mkdir -p data/db            # каталог под данные (права: uid 70 для alpine-образа)
+docker compose up -d        # поднять базу
+docker compose ps           # статус (healthcheck: pg_isready)
 
 # проверить подключение (порт на хосте — 5682)
 PGPASSWORD=profiler psql -h localhost -p 5682 -U profiler -d profiling -c 'SELECT version();'
 
-docker compose stop           # остановить (данные сохраняются в volume)
-docker compose down           # удалить контейнер, данные остаются
-docker compose down -v        # удалить и данные (схема пересоздаётся при следующем запуске main.py)
+docker compose stop         # остановить (данные сохраняются в ./data/db)
+docker compose down         # удалить контейнер, данные остаются в ./data/db
+rm -rf data/db              # полная очистка БД (схема пересоздаётся при следующем запуске main.py)
 ```
 
 ### Вариант 2 — локальный сервер (Debian/Ubuntu, PostgreSQL 13+)
