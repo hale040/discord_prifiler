@@ -361,8 +361,25 @@ def extract_user_ids(msg: discord.Message) -> set[int]:
 # Игры / активности пользователя (таблица user_games)
 # ---------------------------------------------------------------------------
 _ACTIVITY_KINDS = {
-    0: "playing", 1: "streaming", 2: "listening", 3: "watching", 5: "custom",
+    0: "playing", 1: "streaming", 2: "listening", 3: "watching", 4: "custom",
+    5: "competing",
 }
+
+
+def activity_kind_str(a: Any) -> str:
+    """Нормализует тип активности в человекочитаемую строку.
+
+    discord.py-self отдаёт enum ActivityType, у которого str() возвращает
+    'ActivityType.custom_status', а int() — числовой код protocol'а.
+    """
+    t = getattr(a, "type", None)
+    num = _safe(lambda: int(t))
+    if num is not None and num in _ACTIVITY_KINDS:
+        return _ACTIVITY_KINDS[num]
+    raw = str(_safe(lambda: str(t)) or "").lower()
+    if "custom" in raw:
+        return "custom"
+    return raw.replace("activitytype.", "")[:32] or None  # type: ignore[return-value]
 
 
 def games_from_activities(obj: Any) -> list[dict[str, Any]]:
@@ -372,22 +389,23 @@ def games_from_activities(obj: Any) -> list[dict[str, Any]]:
     UserProfile; для обычного User может отсутствовать — тогда пустой список.
     Steam-логин берётся из connections (platform == steam) — сам профиль Steam
     НЕ тянется, сохраняется только логин (он уже есть в connections_json).
+
+    Кастомный статус (ActivityType.custom_status) — это НЕ игра: он попадает
+    в profile_snapshots.status_text и сюда не пишется.
     """
     out: list[dict[str, Any]] = []
     acts = _safe(lambda: list(getattr(obj, "activities", None) or [])) or []
     for a in acts:
+        kind = activity_kind_str(a)
+        if kind == "custom":
+            continue  # кастомный статус — не игра, храним его в снапшоте профиля
         name = _safe(lambda a=a: str(a.name)) or ""
         if not name:
             continue
-        kind_num = _safe(lambda a=a: int(a.type))
-        kind = _ACTIVITY_KINDS.get(kind_num, str(_safe(lambda a=a: a.type) or ""))
         url = _safe(lambda a=a: str(a.url)) if getattr(a, "url", None) else None
         details = _safe(lambda a=a: str(a.details)) if getattr(a, "details", None) else None
         state_txt = _safe(lambda a=a: str(a.state)) if getattr(a, "state", None) else None
         app_id = _safe(lambda a=a: int(a.application_id)) if getattr(a, "application_id", None) else None
-        # кастомный статус с эмодзи — имя часто пустое, берём state
-        if kind == "custom" and not details and state_txt:
-            details = state_txt
         out.append(
             {
                 "name": name[:256],

@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.entities import (
@@ -137,6 +137,29 @@ class Repository:
             return s.scalars(select(UserProfile).where(UserProfile.user_id == user_id)).first()
 
     # ------------------------------------------------------------------ games
+    def purge_custom_status_games(self, user_id: int | None = None) -> int:
+        """Удаляет из user_games записи-«мусор» от старых версий маппера:
+        кастомный статус (kind содержит 'custom' / 'ActivityType') — это не
+        игра, теперь он пишется только в profile_snapshots.status_text.
+
+        custom-запись одна на пользователя (name == user_id), поэтому
+        удаление безопасно и не трогает реальные игры. Возвращает число
+        удалённых строк."""
+        from sqlalchemy import or_
+        q = delete(UserGame).where(
+            or_(
+                UserGame.kind.is_(None),
+                UserGame.kind.ilike("%custom%"),
+                UserGame.kind.ilike("%activitytype%"),
+            )
+        )
+        if user_id is not None:
+            q = q.where(UserGame.user_id == user_id)
+        with self._sf() as s:
+            n = s.execute(q).rowcount or 0
+            s.commit()
+        return n
+
     def replace_user_games(self, user_id: int, games: list[dict[str, Any]]) -> int:
         """Upsert списка игр/активностей пользователя. Обновляет last_seen у
         совпавших по имени, добавляет новые; старые НЕ удаляет (история игр

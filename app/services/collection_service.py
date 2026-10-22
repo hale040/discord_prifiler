@@ -578,6 +578,12 @@ class CollectionService:
         if fields or guild_fields:
             self.repo.upsert_user_profile(user_id, fields or {}, guild_fields, roles,
                                           snapshot=snapshot)
+            # самоочистка legacy-мусора: старые версии маппера писали кастомный
+            # статус в user_games (kind='ActivityType.custom_status', name=user_id)
+            purged = self.repo.purge_custom_status_games(user_id)
+            if purged:
+                log.info("GAMES user %s: убрано %s legacy-записей кастомного статуса",
+                         user_id, purged)
             if games:
                 added = self.repo.replace_user_games(user_id, games)
                 if added:
