@@ -1,39 +1,49 @@
-"""Инициализация БД (SQLite + SQLAlchemy 2.x)."""
+"""Инициализация БД (PostgreSQL + SQLAlchemy 2.x)."""
 from __future__ import annotations
 
 import re
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.models.entities import Base
 
+# Значение по умолчанию — PostgreSQL (SQLite больше не поддерживается).
+DEFAULT_DATABASE_URL = "postgresql+psycopg://profiler:profiler@localhost:5432/profiling"
+
 
 def _to_sync_url(url: str) -> str:
-    """Нам нужен синхронный SQLAlchemy поверх SQLite — драйвер aiosqlite не используем."""
-    return re.sub(r"\+aiosqlite", "", url)
+    """Приводит URL к синхронному драйверу psycopg(3).
+
+    aiosqlite/asyncpg-варианты не используем: коллектор выполняет БД-операции
+    в отдельных потоках (asyncio.to_thread), поэтому нужен sync-движок.
+    """
+    url = re.sub(r"\+asyncpg$", "+psycopg", url)
+    if url.startswith("postgres://"):
+        # устаревшая схема: SQLAlchemy требует postgresql://
+        url = "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+def create_db_engine(url: str):
+    """Создать sync-engine для произвольного DATABASE_URL (используется CLI-скриптами)."""
+    return create_engine(_to_sync_url(url), echo=False, future=True, pool_pre_ping=True)
 
 
 def init_db(settings: Settings) -> sessionmaker[Session]:
     sync_url = _to_sync_url(settings.database_url)
-    engine = create_engine(sync_url, echo=False, future=True)
-
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        # WAL лучше для конкурентного чтения/записи; нормальные таймауты блокировок
-        cursor.execute("PRAGMA journal_mode=WAL")
-        # synchronous=FULL: каждый коммит ждёт fsync WAL+базы — максимальная
-        # защита от повреждения файла БД при обрыве питания/kill -9.
-        # (NORMAL допускал потерю последних транзакций и риск malformed image.)
-        cursor.execute("PRAGMA synchronous=FULL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA busy_timeout=5000")
-        # Ограничение размера WAL-файла (64 МБ): без него -wal разрастался
-        # бесконечно при долгих чтениях админки на фоне пишущего коллектора.
-        cursor.execute("PRAGMA journal_size_limit=67108864")
-        cursor.close()
+    engine = create_engine(
+        sync_url,
+        echo=False,
+        future=True,
+        # Пул соединений: коллектор пишет из нескольких потоков (to_thread),
+        # админка читает параллельно — PG держит пул и переживает это спокойно.
+        pool_size=5,
+        max_overflow=10,
+        pool_pre_ping=True,   # отлов «убитых» сервером соединений до выдачи
+        pool_recycle=1800,    # пересоздавать соединения раньше таймаута PG/LB
+    )
 
     fresh = not inspect_tables(engine)  # фиксируем ДО создания таблиц
     Base.metadata.create_all(engine)

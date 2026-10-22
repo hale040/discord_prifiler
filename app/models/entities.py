@@ -7,17 +7,26 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import BIGINT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Discord snowflake'и — 64-битные id. В PostgreSQL обычный SERIAL/BIGSERIAL
+# не может выдать такое значение (sequence ограничен int32/int64-счётчиком с
+# START 1), поэтому для таблиц с внешними id (messages/attachments) PK
+# объявляется как plain BIGINT без автоинкремента — id присваивает приложение.
+SnowflakeId = BIGINT
 
 
 class Base(DeclarativeBase):
@@ -32,7 +41,8 @@ class AuditLog(Base):
 
     __tablename__ = "audit_log"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )
@@ -54,7 +64,8 @@ class UserProfile(Base):
 
     __tablename__ = "user_profiles"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
 
     username: Mapped[str] = mapped_column(String(256), default="")
@@ -129,7 +140,8 @@ class UserGame(Base):
     __tablename__ = "user_games"
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_game"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("user_profiles.user_id", ondelete="CASCADE"), index=True
     )
@@ -154,7 +166,8 @@ class GuildMemberProfile(Base):
     __tablename__ = "guild_member_profiles"
     __table_args__ = (UniqueConstraint("user_id", "guild_id", name="uq_user_guild"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.user_id"), index=True)
     guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
 
@@ -186,7 +199,8 @@ class UserRoleTag(Base):
     __tablename__ = "user_roles"
     __table_args__ = (UniqueConstraint("user_id", "role_id", name="uq_user_role"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.user_id"), index=True)
     role_id: Mapped[int] = mapped_column(BigInteger, index=True)
     guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -209,7 +223,8 @@ class UserRoleTag(Base):
 class Message(Base):
     __tablename__ = "messages"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # snowflake Discord
+    # PK = snowflake Discord (явный id, без sequence) — plain BIGINT на PG
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True)
     channel_id: Mapped[int] = mapped_column(BigInteger, index=True)
     guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     author_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -265,7 +280,8 @@ class Message(Base):
 class Attachment(Base):
     __tablename__ = "attachments"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # snowflake id вложения Discord
+    # PK = snowflake id вложения Discord (явный id, без sequence)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True)
     message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), index=True)
 
     filename: Mapped[str] = mapped_column(String(512), default="")
@@ -291,7 +307,8 @@ class Attachment(Base):
 class ProfileSnapshot(Base):
     __tablename__ = "profile_snapshots"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # INTEGER inline-PK = rowid-автоинкремент SQLite
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), index=True)
     taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     about: Mapped[str | None] = mapped_column(Text, nullable=True)        # bio
@@ -319,7 +336,8 @@ class PsychProfile(Base):
 
     __tablename__ = "psych_profiles"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     model: Mapped[str | None] = mapped_column(Text)            # id модели LLM
     prompt_hash: Mapped[str | None] = mapped_column(Text)      # контроль транскрипта
@@ -327,16 +345,16 @@ class PsychProfile(Base):
     period_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     period_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     messages_analyzed: Mapped[int | None] = mapped_column(Integer)
-    big_five_openness: Mapped[float | None] = mapped_column(nullable=True)
-    big_five_conscientiousness: Mapped[float | None] = mapped_column(nullable=True)
-    big_five_extraversion: Mapped[float | None] = mapped_column(nullable=True)
-    big_five_agreeableness: Mapped[float | None] = mapped_column(nullable=True)
-    big_five_neuroticism: Mapped[float | None] = mapped_column(nullable=True)
+    big_five_openness: Mapped[float | None] = mapped_column(Float, nullable=True)
+    big_five_conscientiousness: Mapped[float | None] = mapped_column(Float, nullable=True)
+    big_five_extraversion: Mapped[float | None] = mapped_column(Float, nullable=True)
+    big_five_agreeableness: Mapped[float | None] = mapped_column(Float, nullable=True)
+    big_five_neuroticism: Mapped[float | None] = mapped_column(Float, nullable=True)
     mbti_type: Mapped[str | None] = mapped_column(String(8))
-    mbti_confidence: Mapped[float | None] = mapped_column(nullable=True)
+    mbti_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     enneagram_type: Mapped[str | None] = mapped_column(String(8))
-    enneagram_confidence: Mapped[float | None] = mapped_column(nullable=True)
-    confidence_overall: Mapped[float | None] = mapped_column(nullable=True)
+    enneagram_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence_overall: Mapped[float | None] = mapped_column(Float, nullable=True)
     severity_max: Mapped[str | None] = mapped_column(String(8))  # high|med|low
     result_json: Mapped[str | None] = mapped_column(Text)        # полный ответ LLM
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -347,12 +365,13 @@ class PsychSignal(Base):
     """Атомарные сигналы/примеры из ответа LLM (evidence).
 
     Дедуп по нормализованной цитате на уровне пользователя: повторный
-    импорт того же анализа не раздувает базу (INSERT OR IGNORE).
+    импорт того же анализа не раздувает базу (ON CONFLICT DO NOTHING).
     """
 
     __tablename__ = "psych_signals"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     profile_id: Mapped[int | None] = mapped_column(
         ForeignKey("psych_profiles.id", ondelete="CASCADE"), index=True, nullable=True
     )
@@ -375,7 +394,8 @@ class UserInterest(Base):
 
     __tablename__ = "user_interests"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     topic: Mapped[str] = mapped_column(Text)
     topic_norm: Mapped[str] = mapped_column(Text)           # lower+collapse для дедупа
@@ -392,7 +412,8 @@ class UserInterest(Base):
 class ChannelState(Base):
     __tablename__ = "channel_states"
 
-    channel_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # PK = snowflake id канала (явный id, без sequence)
+    channel_id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True)
     guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # Самый старый загруженный id (для резюма backfill без ограничения по дате)
