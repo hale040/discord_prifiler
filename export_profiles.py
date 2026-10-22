@@ -1423,8 +1423,9 @@ def main():
         cols = conn.columns("user_profiles")
         if "priority" not in cols:
             sys.exit("[FATAL] В базе нет колонки user_profiles.priority. "
-                     "Обновите код и запустите коллектор/админку — миграция v3 "
-                     "добавит её автоматически (или: python -m app.models.migrations).")
+                     "Пересоздайте схему (init_db создаёт таблицы из моделей) "
+                     "или добавьте колонку вручную: "
+                     "ALTER TABLE user_profiles ADD COLUMN priority boolean DEFAULT FALSE;")
         prio_ids = {r["user_id"] for r in conn.execute(
             "SELECT user_id FROM user_profiles WHERE priority IS TRUE")}
         print(f"[FILTER] приоритетных пользователей: {len(prio_ids)}")

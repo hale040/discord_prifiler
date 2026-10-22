@@ -62,27 +62,11 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
         pool_recycle=1800,    # пересоздавать соединения раньше таймаута PG/LB
     )
 
-    fresh = not inspect_tables(engine)  # фиксируем ДО создания таблиц
+    # Миграции намеренно отключены: база новая и схема создаётся целиком
+    # из моделей (create_all). Модуль app.models.migrations сохранён для
+    # будущих версий схемы — подключать вызов migrate()/stamp_baseline()
+    # здесь, когда появятся данные, которые нужно доводить по шагам.
     Base.metadata.create_all(engine)
-
-    # Версионируемые миграции (app.models.migrations): доводят старые БД,
-    # созданные ещё ad-hoc ALTER'ами, до актуальной схемы; новые БД просто
-    # помечаются текущей версией. Любое изменение моделей требует записи
-    # в список MIGRATIONS — см. модуль migrations.
-    from app.models.migrations import LATEST_VERSION, migrate, stamp_baseline
-
-    if fresh:
-        stamp_baseline(engine)
-    else:
-        n = migrate(engine)
-        if n:
-            import logging
-
-            logging.getLogger("app.db").info(
-                "Схема БД обновлена: применено миграций: %d (версия v%s)",
-                n,
-                LATEST_VERSION,
-            )
 
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
