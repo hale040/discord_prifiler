@@ -78,15 +78,15 @@ app/
 Дефолтный URL из `.env.example`:
 
 ```
-DATABASE_URL=postgresql+psycopg://profiler:profiler@localhost:5432/profiling
+DATABASE_URL=postgresql+psycopg://profiler:profiler@localhost:5682/profiling
 ```
 
 То есть: пользователь `profiler`, пароль `profiler`, база `profiling`,
-хост `localhost`, **стандартный порт 5432**.
+хост `localhost`, **порт 5682**.
 
 ### Вариант 1 — Docker Compose (рекомендуется, PostgreSQL 18)
 
-В репозитории лежит `docker-compose.yml` с PostgreSQL 18 (alpine), портом 5432,
+В репозитории лежит `docker-compose.yml` с PostgreSQL 18 (alpine), портом 5682,
 паролями из дефолтного `DATABASE_URL`, volume `pgdata` и tuned-параметрами
 (`shared_buffers`, `work_mem`, `wal_level=minimal`, `synchronous_commit=off`,
 `jit=off`, locale `C.UTF-8`). Роль, база и права создаются образом автоматически.
@@ -95,8 +95,8 @@ DATABASE_URL=postgresql+psycopg://profiler:profiler@localhost:5432/profiling
 docker compose up -d          # поднять базу
 docker compose ps             # статус (healthcheck: pg_isready)
 
-# проверить подключение
-PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c 'SELECT version();'
+# проверить подключение (порт на хосте — 5682)
+PGPASSWORD=profiler psql -h localhost -p 5682 -U profiler -d profiling -c 'SELECT version();'
 
 docker compose stop           # остановить (данные сохраняются в volume)
 docker compose down           # удалить контейнер, данные остаются
@@ -105,20 +105,32 @@ docker compose down -v        # удалить и данные (схема пе�
 
 ### Вариант 2 — локальный сервер (Debian/Ubuntu, PostgreSQL 13+)
 
+Сервер по умолчанию слушает стандартный порт **5432**, а проект ожидает
+**5682**. Варианты: переназначить порт сервера — `sudo -u postgres psql -c
+"ALTER SYSTEM SET port = 5682;" && sudo systemctl restart postgresql`
+(тогда проверка ниже работает как есть) — либо оставить 5432 и указать его в
+`DATABASE_URL` в `.env`.
+
 ```bash
 # 1. Установить и запустить сервер (если ещё не стоит)
 sudo apt install postgresql
 sudo systemctl enable --now postgresql
 
-# 2. Создать роль, базу и права на схему от имени системного пользователя postgres
+# 2. Создать роль, базу и схему от имени системного пользователя postgres
 sudo -u postgres psql <<'SQL'
 CREATE ROLE profiler WITH LOGIN PASSWORD 'profiler';
 CREATE DATABASE profiling OWNER profiler;
-GRANT ALL ON SCHEMA public TO profiler;   -- PG15+: public не наследует CREATE от владельца БД
+-- PG15+: public не наследует CREATE от владельца БД.
+-- ВАЖНО: схема должна принадлежать роли profiler, иначе таблицы, созданные
+-- приложением (create_all), останутся собственником postgres и INSERT/UPDATE
+-- будут падать с "permission denied for table ...":
+\connect profiling
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public AUTHORIZATION profiler;
 SQL
 
-# 3. Проверить подключение под новой ролью
-PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c 'SELECT version();'
+# 3. Проверить подключение под новой ролью (порт 5682)
+PGPASSWORD=profiler psql -h localhost -p 5682 -U profiler -d profiling -c 'SELECT version();'
 ```
 
 Схема таблиц **создаётся автоматически** при первом запуске `python main.py`
@@ -132,7 +144,7 @@ PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c 'SELECT versio
 ### Что собирается (проверка после первого запуска)
 
 ```bash
-PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c '\dt'
+PGPASSWORD=profiler psql -h localhost -p 5682 -U profiler -d profiling -c '\dt'
 # messages, attachments, user_profiles, guild_member_profiles,
 # user_role_tags, channel_states, …
 ```

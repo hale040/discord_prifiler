@@ -8,7 +8,7 @@ messages_analyzed). Сигналы (evidence) пишутся атомарно с
 
 CLI:
     python -m app.services.analysis_importer --user <user_id> --model deepseek \
-        --json-file answer.json [--db postgresql+psycopg://user:pass@host:5432/db] \
+        --json-file answer.json [--db postgresql+psycopg://user:pass@host:5682/db] \
         [--period-from 2026-09-28 --period-to 2026-10-20 --messages 1058]
 """
 from __future__ import annotations
@@ -124,7 +124,8 @@ def import_analysis(
                     mbti_type, mbti_confidence, enneagram_type, enneagram_confidence,
                     confidence_overall, severity_max, result_json, is_current, created_at)
                    VALUES (:user_id,:model,:ph,:sl,:pf,:pt,:ma,:bo,:bc,:be,:ba,:bn,
-                           :mt,:mc,:et,:ec,:co,:sm,:rj,TRUE,:ca)"""
+                           :mt,:mc,:et,:ec,:co,:sm,:rj,TRUE,:ca)
+                    RETURNING id"""
             )
             # rj — dict для нативной колонки JSONB: без явного типа
             # DBAPI-драйвер не умеет адаптировать dict ("can't adapt type 'dict'")
@@ -146,9 +147,9 @@ def import_analysis(
                 "ca": _utcnow(),
             },
         )
-        # psycopg не поддерживает lastrowid — берём вставленный PK из
-        # inserted_primary_key (BIGINT/bigserial на PostgreSQL).
-        profile_id = res.inserted_primary_key[0]
+        # psycopg не поддерживает lastrowid; у text()-запроса нет и
+        # inserted_primary_key — PK читаем из RETURNING id (scalar()).
+        profile_id = res.scalar()
 
         # ---- сигналы: атомарно, с дедупом, лимит MAX_SIGNALS ----
         n_sig = 0

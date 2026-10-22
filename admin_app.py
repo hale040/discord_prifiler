@@ -2,7 +2,7 @@
 """Админка поверх БД профайлера (Flask + SQLAlchemy Core, PostgreSQL).
 
 Запуск:
-    python admin_app.py [--db postgresql+psycopg://user:pass@localhost:5432/profiling] [--port 8777]
+    python admin_app.py [--db postgresql+psycopg://user:pass@localhost:5682/profiling] [--port 8777]
 
 База поднимается из docker-compose.yml (`docker compose up -d`) либо локальным
 сервером PostgreSQL 18 (см. README, раздел «База данных»).

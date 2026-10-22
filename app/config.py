@@ -91,7 +91,7 @@ class Settings:
     database_url: str = os.getenv(
         "DATABASE_URL",
         # PostgreSQL — единственная поддерживаемая СУБД (см. app/models/db.py)
-        "postgresql+psycopg://profiler:profiler@localhost:5432/profiling",
+        "postgresql+psycopg://profiler:profiler@localhost:5682/profiling",
     )
 
     # Синхронный URL для SQLAlchemy (driver переключается в db.py)
