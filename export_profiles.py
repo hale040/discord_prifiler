@@ -8,8 +8,9 @@
   - серверными атрибутами (ник, роли/теги, дата вступления, таймауты);
   - статистикой коммуникации (частоты, длины, реакции, ответы, эмодзи,
     активность по часам/дням недели — сигналы для определения психотипа);
-  - текстовой лентой сообщений (chronological transcript; лимит — КОЛИЧЕСТВО
-    СТРОК чата, берутся самые свежие: EXPORT_MAX_LINES в .env или --max-lines N;
+  - текстовой лентой сообщений (chronological transcript; лимит — ВЕС
+    итогового файла промпта: EXPORT_PROMPT_MAX_KB в .env или --prompt-max-kb N
+    (килобайты, 1 КБ = 1024 байта UTF-8); перенос строки считается как \\n;
     0 = полная лента без среза);
   - медиа-сигналами (картинки: локальные пути/URL).
 
@@ -21,15 +22,17 @@
 
 Запуск:
   python export_profiles.py [--db postgresql+psycopg://user:pass@localhost:5682/profiling] [--out out]
-        [пользователь] [--users id1,id2] [--min-messages 5] [--max-lines N]
+        [пользователь] [--users id1,id2] [--min-messages 5] [--prompt-max-kb N]
         [--per-user-json] [--no-prompts]
 
 Настройки выгрузки по умолчанию читаются из .env (файл подгружается сам):
-  EXPORT_MAX_LINES=300          — максимум СТРОК чата в транскрипте; берутся
-                                  самые СВЕЖИЕ (срез от нового к старому),
-                                  строки текста не обрезаются. 0 = полная лента.
+  EXPORT_PROMPT_MAX_KB=300      — максимальный вес ИТОГОВОГО файла промпта
+                                  (.md) в килобайтах; лента усекается по
+                                  весу, а не по числу строк: остаются самые
+                                  СВЕЖИЕ строки, целые строки текста не
+                                  обрезаются. 0 = полная лента без среза.
   EXPORT_CONTEXT_WINDOW=120     — окно временной связности диалога, сек.
-Флаг командной строки (--max-lines / --context-window) переопределяет .env.
+Флаг командной строки (--prompt-max-kb / --context-window) переопределяет .env.
 """
 from __future__ import annotations
 
@@ -171,6 +174,12 @@ class ReadOnlyDb:
         except SQLAlchemyError:
             return set()
 
+    def has_table(self, table: str) -> bool:
+        try:
+            return sa_inspect(self._engine).has_table(table)
+        except SQLAlchemyError:
+            return False
+
     def close(self) -> None:
         self._engine.dispose()
 
@@ -204,6 +213,12 @@ def open_db(db_arg: str) -> tuple[ReadOnlyDb, str]:
 
 
 def fetch_users(conn) -> list[dict]:
+    # приоритет мог ещё не появиться в старых схемах (миграция v3) —
+    # подставляем FALSE, чтобы row_get("priority") работал всегда
+    if conn.has_table("user_profiles") and "priority" not in conn.columns("user_profiles"):
+        return conn.execute(
+            "SELECT *, FALSE AS priority, NULL::varchar AS priority_note"
+            " FROM user_profiles ORDER BY user_id")
     return conn.execute("SELECT * FROM user_profiles ORDER BY user_id")
 
 
@@ -677,12 +692,21 @@ def analyze_messages(msgs: list[dict], all_user_ids: set[int]) -> dict:
 # Транскрипт и очистка от PII
 # ---------------------------------------------------------------------------
 
+DEFAULT_PROMPT_MAX_KB = 300   # максимальный вес файла промпта (.md), КБ
+
+
+def _utf8_len(s: str) -> int:
+    """Вес строки в байтах UTF-8 (переносы считаются как \\n)."""
+    return len((s or "").encode("utf-8"))
+
+
 def make_transcript(
     msgs: list[dict],
     max_lines: int | None,
     redact_pii: bool,
     target_uid: int | None = None,
     names: dict[int, str] | None = None,
+    max_bytes: int | None = None,
 ) -> tuple[str, bool]:
     """Компактная диалоговая лента (экономия токенов — приоритет).
 
@@ -692,12 +716,14 @@ def make_transcript(
         O2 14:04 >2 текст           — собеседник O2 (имя — один раз в шапке)
         *                             — начало новой темы/ветки
     Флаги: >N — ответ на реплику N, e/d — edit/delete, [img]/[emb] — медиа.
-    Лимит — КОЛИЧЕСТВО СТРОК ЧАТА (не символов): берутся самые СВЕЖИЕ
-    max_lines строк (срез от нового к старому), старые отбрасываются.
-    max_lines <= 0 / None — полная лента без среза.
+    Лимит ленты — ВЕС в байтах (max_bytes): остаются самые СВЕЖИЕ целые
+    строки (срез от нового к старому), старые отбрасываются; строки текста
+    не обрезаются посимвольно. max_bytes <= 0 / None — лимит по количеству
+    строк (max_lines; устаревший режим), 0/-1 и там и там = полная лента.
     """
     if target_uid is None or names is None:
-        return _make_transcript_plain(msgs, max_lines, redact_pii)
+        return _make_transcript_plain(msgs, max_lines, redact_pii,
+                                      max_bytes=max_bytes)
 
     header_rows = list(msgs)
     labels: dict[int, str] = {}
@@ -763,17 +789,48 @@ def make_transcript(
         lines.append(f"{parts[0]} {body}".strip() if parts else body)
         prev_ts_dt = ts
 
-    # срез по КОЛИЧЕСТВУ СТРОК чата: берём самые СВЕЖИЕ (конец ленты),
-    # старые строки отбрасываются; шапка-легенда всегда сохраняется.
-    # Гарантии: 1) строки целевого пользователя (T) никогда не вырезаются —
-    # если свежих T-реплик больше лимита, берутся последние max_lines из них;
-    # 2) транскрипт не бывает пустым при наличии сообщений (минимум одна
-    # самая свежая строка).
+    # срез ленты: основной режим — по ВЕСУ в байтах (max_bytes), остаются
+    # самые СВЕЖИЕ целые строки; fallback — устаревший лимит по количеству
+    # строк (max_lines). Гарантии обоих режимов: 1) строки целевого
+    # пользователя (T) вырезаются в последнюю очередь; 2) транскрипт не
+    # бывает пустым при наличии сообщений (минимум одна самая свежая строка);
+    # 3) шапка-легенда всегда сохраняется.
     tgt_idx = [i for i, m in enumerate(header_rows) if m["author_id"] == target_uid]
     # строки-разделители дней («# 2026-10-05») не считаем контентом: при
     # жёстком лимите они не должны вытеснять реплики целевого пользователя
     day_row = {i for i, l in enumerate(lines) if l.startswith("# ")}
-    if max_lines and max_lines > 0 and len(lines) > max_lines:
+
+    if max_bytes and max_bytes > 0:
+        # бюджет считается на финальный текст (после redact), поэтому
+        # пересчитываем сумму каждый раз — строки короткие, это дёшево
+        def _fits(keep: set[int]) -> bool:
+            sel = sorted(keep)
+            txt = "\n".join([head] + [(redact(lines[i]) if redact_pii else lines[i])
+                                      for i in sel])
+            return _utf8_len(txt) <= max_bytes
+
+        def _pick_by_weight() -> tuple[set[int], bool]:
+            cand = list(range(len(lines) - 1, -1, -1))   # свежие раньше
+            keep: set[int] = set()
+            for i in cand:
+                if i in day_row:
+                    continue
+                if _fits(keep | {i}):
+                    keep.add(i)
+            if not keep:
+                keep = {len(lines) - 1}                  # лента не может быть пустой
+            hdrs = [i for i in sorted(day_row) if i <= max(keep)]
+            freshest_day = hdrs[-1] if hdrs else None
+            if freshest_day is not None and _fits(keep | {freshest_day}):
+                keep.add(freshest_day)
+            n_content = sum(1 for l in lines if not l.startswith("# "))
+            truncated = len(keep) < n_content or \
+                (freshest_day is not None and freshest_day not in keep)
+            return keep, truncated
+
+        keep, truncated = _pick_by_weight()
+        body_lines = [lines[i] for i in sorted(keep)]
+    elif max_lines and max_lines > 0 and len(lines) > max_lines:
         content_budget = max(max_lines - 1, 1)  # 1 слот резервируем под дату
         keep = set(tgt_idx[-content_budget:])    # свежие реплики целевого — приоритет
         extra = [i for i in range(len(lines))
@@ -802,11 +859,14 @@ def make_transcript(
     return "\n".join(out_lines), truncated
 
 
-def _make_transcript_plain(msgs: list[dict], max_lines: "int | None", redact_pii: bool) -> tuple[str, bool]:
+def _make_transcript_plain(msgs: list[dict], max_lines: "int | None",
+                           redact_pii: bool,
+                           max_bytes: int | None = None) -> tuple[str, bool]:
     """Старый одиночный формат: [2026-10-07 14:03] текст.
 
-    Лимит — количество строк чата; берутся самые свежие (срез от нового
-    к старому). max_lines <= 0 / None — полная лента без среза.
+    Лимит — вес ленты в байтах (max_bytes); берутся самые свежие целые
+    строки (срез от нового к старому). Если max_bytes не задан — устаревший
+    лимит по количеству строк (max_lines). <=0 / None нигде — полная лента.
     """
     lines = []
     limit_on = bool(max_lines) and max_lines > 0
@@ -830,6 +890,17 @@ def _make_transcript_plain(msgs: list[dict], max_lines: "int | None", redact_pii
         if limit_on and len(lines) >= max_lines:
             break
     truncated = limit_on and len(msgs) > len(lines)
+    if max_bytes and max_bytes > 0:
+        kept: list[str] = []
+        used = 0
+        for l in lines:                    # lines уже от новых к старым
+            w = _utf8_len(l) + (1 if kept else 0)   # перенос между строками
+            if kept and used + w > max_bytes:
+                break
+            kept.append(l)                 # первая строка берётся всегда —
+            used += w                      # лента не бывает пустой
+        truncated = len(kept) < len(lines)
+        lines = kept
     return "\n".join(reversed(lines)), truncated
 
 
@@ -915,6 +986,17 @@ PROFILE_SYSTEM_PROMPT = """Ты — аналитик по профайлингу
  "disclaimer":""}"""
 
 
+def _kb_to_bytes(kb: int | None) -> int | None:
+    """КБ (.env EXPORT_PROMPT_MAX_KB / --prompt-max-kb) -> байты; <=0/None -> None."""
+    if kb is None:
+        return None
+    try:
+        kb = int(kb)
+    except (TypeError, ValueError):
+        return None
+    return kb * 1024 if kb > 0 else None
+
+
 def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   all_user_ids, args, generated_at,
                   dialog_msgs: list[dict] | None = None,
@@ -925,18 +1007,27 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   psych: dict | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
+    max_bytes = _kb_to_bytes(getattr(args, "prompt_max_kb", None))
+    tr_src = None
     if dialog_msgs is not None and not args.no_context:
         transcript, truncated = make_transcript(
             dialog_msgs, args.max_lines, args.redact_pii,
             target_uid=user["user_id"], names=names or {},
+            max_bytes=max_bytes,
         )
+        tr_src = dict(src=dialog_msgs, max_lines=args.max_lines,
+                      redact=args.redact_pii, target=user["user_id"],
+                      names=names or {})
         # защита от «(нет сообщений)» при 1000+ реплик: в диалоге всегда
         # присутствуют строки целевого (T), но на всякий случай проверяем
         if not transcript.strip():
             transcript = ensure_nonempty_transcript("", msgs, args.redact_pii)
     else:
-        transcript, truncated = make_transcript(msgs, args.max_lines, args.redact_pii)
-        # max_lines<=0 не должен обнулять ленту: если транскрипт пуст при
+        transcript, truncated = make_transcript(
+            msgs, args.max_lines, args.redact_pii, max_bytes=max_bytes)
+        tr_src = dict(src=msgs, max_lines=args.max_lines,
+                      redact=args.redact_pii, target=None, names=None)
+        # лимит не должен обнулять ленту: если транскрипт пуст при
         # наличии сообщений — вставляем самую свежую реплику
         if not transcript.strip() and msgs:
             transcript = ensure_nonempty_transcript("", msgs, args.redact_pii)
@@ -969,6 +1060,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             "transcript_truncated": truncated,
             "transcript_lines": max(0, transcript.count("\n")),
             "line_limit": int(args.max_lines) if args.max_lines else None,
+            "prompt_max_kb": (int(args.prompt_max_kb)
+                              if getattr(args, "prompt_max_kb", None) else None),
             "pii_redacted": bool(args.redact_pii),
         },
         "identity": {
@@ -1035,6 +1128,14 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
         # активный психопрофиль от нейросети (если импортировался)
         "psych_profile": psych or {},
         "transcript": transcript,
+        # служебное: исходные сообщения транскрипта для точной подгонки веса
+        # промпта (fit_prompt_size); в dataset.jsonl не сериализуется (main)
+        "_tr_src": tr_src["src"],
+        "_tr_max_lines": tr_src["max_lines"],
+        "_tr_redact": tr_src["redact"],
+        "_tr_target": tr_src["target"],
+        "_tr_names": tr_src["names"],
+        "_tr_msgs": msgs,
     }
     return dossier
 
@@ -1243,13 +1344,25 @@ def strip_urls_text(text: str) -> str:
     return re.sub(r"https?://\S+", "", text or "")
 
 
-def render_prompt_md(dossier: dict) -> str:
+def _render_prompt_text(dossier: dict) -> str:
     d = strip_urls_deep(dossier)
     # транскрипт чистим отдельно: ссылки бывают внутри текста сообщений
     t = d.get("transcript") or ""
     d["transcript"] = strip_urls_text(t)
     ident = d["identity"]
     st = d["statistics"]
+    meta = d["meta"]
+    if not meta["transcript_truncated"]:
+        size_note = f"Транскрипт ПОЛНЫЙ, строк чата: {meta['transcript_lines']}. "
+    elif meta.get("prompt_max_kb"):
+        size_note = (f"ВНИМАНИЕ: лента урезана по ВЕСУ промпта "
+                     f"(лимит {meta['prompt_max_kb']} КБ), показаны только самые "
+                     f"свежие строки чата ({meta['transcript_lines']}); "
+                     f"старые дни отброшены. ")
+    else:
+        size_note = (f"ВНИМАНИЕ: лента срезана по лимиту строк "
+                     f"({meta['line_limit']}), показаны только самые свежие "
+                     f"{meta['transcript_lines']} строк чата; старые дни отброшены. ")
     lines = [
         f"# Дело: {ident['global_name'] or ident['username']}",
         "",
@@ -1278,18 +1391,62 @@ def render_prompt_md(dossier: dict) -> str:
         "```",
         "",
         f"Сообщений целевого: {st['messages_total']}. "
-        + (f"Транскрипт ПОЛНЫЙ, строк чата: {d['meta']['transcript_lines']}. "
-           if not d["meta"]["transcript_truncated"]
-           else f"ВНИМАНИЕ: лента срезана по лимиту строк "
-                f"({d['meta']['line_limit']}), показаны только самые свежие "
-                f"{d['meta']['transcript_lines']} строк чата; старые дни отброшены. ")
+        + size_note
         + f"Период: {_date_only(st.get('first_message_at'))} .. "
-        f"{_date_only(st.get('last_message_at'))}, {st.get('span_days')} дн. "
-        "MBTI/эннеаграмма — слабо валидные гипотезы, указывай confidence; "
-        "это не клиническая диагностика.",
+        + f"{_date_only(st.get('last_message_at'))}, {st.get('span_days')} дн. "
+        + "MBTI/эннеаграмма — слабо валидные гипотезы, указывай confidence; "
+          "это не клиническая диагностика.",
         "Верни ТОЛЬКО валидный JSON по схеме выше.",
     ]
     return "\n".join(lines)
+
+
+def fit_prompt_size(dossier: dict, max_bytes: int | None) -> tuple[str, bool]:
+    """Рендерит промпт и гарантирует вес файла <= max_bytes байт.
+
+    Лента усекается make_transcript по байтовому бюджету, но итоговый .md
+    содержит ещё системную инструкцию, блок данных и сноски — поэтому здесь
+    подгоняем бюджет ленты под остаток от полного файла и пересобираем
+    транскрипт+промпт (несколько итераций до точного попадания). Обрезаются
+    только целые старые строки хвоста ленты; самые свежие сохраняются.
+
+    Возвращает (текст_промпта, was_trimmed). Требует служебных ключей
+    dossier["_tr_*"] (исходные сообщения транскрипта) — их кладет build_dossier.
+    """
+    text = _render_prompt_text(dossier)
+    if not max_bytes or max_bytes <= 0:
+        return text, False
+    trimmed = False
+    for _ in range(4):
+        cur = _utf8_len(text)
+        if cur <= max_bytes:
+            break
+        tr = dossier.get("transcript") or ""
+        overhead = cur - (_utf8_len(tr) + 1)     # всё остальное в файле
+        budget = max(max_bytes - overhead, 0)
+        new_tr, _t = make_transcript(
+            dossier["_tr_src"], dossier["_tr_max_lines"], dossier["_tr_redact"],
+            target_uid=dossier.get("_tr_target"), names=dossier.get("_tr_names"),
+            max_bytes=budget,
+        )
+        if not new_tr.strip():
+            new_tr = ensure_nonempty_transcript("", dossier.get("_tr_msgs") or [],
+                                                dossier["_tr_redact"])
+        if new_tr == tr:                          # дальше ужимать некуда
+            break
+        dossier["transcript"] = new_tr
+        dossier["meta"]["transcript_lines"] = max(0, new_tr.count("\n"))
+        dossier["meta"]["transcript_truncated"] = True
+        trimmed = True
+        text = _render_prompt_text(dossier)
+    return text, trimmed
+
+
+def render_prompt_md(dossier: dict) -> str:
+    """Публичный рендер промпта с гарантией веса (EXPORT_PROMPT_MAX_KB)."""
+    max_bytes = _kb_to_bytes((dossier.get("meta") or {}).get("prompt_max_kb"))
+    text, _ = fit_prompt_size(dossier, max_bytes)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -1310,17 +1467,22 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _dossier_for_json(dossier: dict) -> dict:
+    """Копия дела без служебных ключов _tr_* (для dataset.jsonl / *.json)."""
+    return {k: v for k, v in dossier.items() if not k.startswith("_tr_")}
+
+
 def parse_args():
-    # настройки по умолчанию берутся из .env (EXPORT_MAX_LINES / EXPORT_CONTEXT_WINDOW),
+    # настройки по умолчанию берутся из .env (EXPORT_PROMPT_MAX_KB / EXPORT_CONTEXT_WINDOW),
     # их может переопределить флаг командной строки
-    env_max_lines = _env_int("EXPORT_MAX_LINES", 0)
+    env_max_kb = _env_int("EXPORT_PROMPT_MAX_KB", DEFAULT_PROMPT_MAX_KB)
     env_ctx_window = _env_int("EXPORT_CONTEXT_WINDOW", CONTEXT_WINDOW_SEC)
     p = argparse.ArgumentParser(
         description="Экспорт данных для LLM-профайлинга.\n"
                     "Без аргументов — выгрузка ВСЕХ участников канала.\n"
                     "Позиционный аргумент — фильтр одного пользователя по username,\n"
                     "display-имени или user_id: python export_profiles.py fluff\n"
-                    "Лимиты ленты читаются из .env: EXPORT_MAX_LINES, EXPORT_CONTEXT_WINDOW")
+                    "Лимиты ленты читаются из .env: EXPORT_PROMPT_MAX_KB, EXPORT_CONTEXT_WINDOW")
     p.add_argument("target", nargs="?", default="",
                    help="username / имя / user_id одного пользователя (пусто = все)")
     p.add_argument("--db", default=os.getenv("DATABASE_URL", ""),
@@ -1332,12 +1494,14 @@ def parse_args():
                         "(флаг priority в админке; колонка появится после миграции v3)")
     p.add_argument("--min-messages", type=int, default=1,
                    help="минимум сообщений, чтобы экспортить пользователя")
-    p.add_argument("--max-lines", type=int, default=env_max_lines, metavar="N",
-                   dest="max_lines",
-                   help=f"лимит КОЛИЧЕСТВА СТРОК чата на транскрипт; берутся самые "
-                        f"СВЕЖИЕ N строк (срез от нового к старому), строки текста "
-                        f"не обрезаются. 0 = без лимита (полная лента). "
-                        f"По умолчанию из .env EXPORT_MAX_LINES={env_max_lines}")
+    p.add_argument("--prompt-max-kb", type=int, default=env_max_kb, metavar="N",
+                   dest="prompt_max_kb",
+                   help=f"максимальный вес ИТОГОВОГО файла промпта (.md) в КБ; "
+                        f"транскрипт усекается по ВЕСУ (остаются самые свежие "
+                        f"целые строки). 0 = без лимита (полная лента). "
+                        f"По умолчанию из .env EXPORT_PROMPT_MAX_KB={env_max_kb}")
+    p.add_argument("--max-lines", type=int, default=None, metavar="N",
+                   dest="legacy_max_lines", help=argparse.SUPPRESS)  # deprecated
     p.add_argument("--max-msg-chars", type=int, default=None, metavar="N",
                    dest="legacy_max_msg_chars", help=argparse.SUPPRESS)  # deprecated
     p.add_argument("--per-user-json", action="store_true",
@@ -1356,9 +1520,13 @@ def parse_args():
     p.add_argument("--until", default="", metavar="YYYY-MM-DD[THH:MM]",
                    help="включать в транскрипт только сообщения до этой даты/времени (UTC)")
     args = p.parse_args()
+    if getattr(args, "legacy_max_lines", None) is not None:
+        print("[WARN] --max-lines устарел и игнорируется: лимит теперь по ВЕСУ "
+              "промпта (--prompt-max-kb N или EXPORT_PROMPT_MAX_KB в .env).")
     if args.legacy_max_msg_chars is not None:
         print("[WARN] --max-msg-chars устарел и игнорируется: лимит теперь "
-              "по КОЛИЧЕСТВУ СТРОК чата (--max-lines N или EXPORT_MAX_LINES в .env).")
+              "по ВЕСУ промпта (--prompt-max-kb N или EXPORT_PROMPT_MAX_KB в .env).")
+    args.max_lines = None   # байтовый лимит основной; строковый режим отключён
     return args
 
 
@@ -1392,10 +1560,12 @@ def parse_bound(value: str, end_of_day: bool = False) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 def build_prompt_for_user(db_url: str, user_id: int, *,
-                          max_lines: int | None = None,
+                          prompt_max_kb: int | None = None,
                           context_window: int | None = None) -> dict:
     """Собрать «дело» и готовый промпт одного пользователя из PostgreSQL.
 
+    prompt_max_kb — максимальный вес итогового промпта (по умолчанию из
+    .env EXPORT_PROMPT_MAX_KB); транскрипт усекается по ВЕСУ.
     Возвращает dict: username, display_name, messages_total, period_from,
     period_to, prompt (markdown-промпт с системной инструкцией и схемой JSON).
     Исключения — ValueError (нет данных/пользователя), RuntimeError (БД).
@@ -1430,8 +1600,10 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
                         else _env_int("EXPORT_CONTEXT_WINDOW", CONTEXT_WINDOW_SEC)))
 
         ns = argparse.Namespace(
-            max_lines=(max_lines if max_lines is not None
-                       else _env_int("EXPORT_MAX_LINES", 0)),
+            max_lines=None,
+            prompt_max_kb=(prompt_max_kb if prompt_max_kb is not None
+                           else _env_int("EXPORT_PROMPT_MAX_KB",
+                                         DEFAULT_PROMPT_MAX_KB)),
             redact_pii=False, no_context=False,
             context_window=(context_window if context_window is not None
                             else _env_int("EXPORT_CONTEXT_WINDOW", CONTEXT_WINDOW_SEC)),
@@ -1585,24 +1757,36 @@ def main():
                 psych=psych_map.get(uid),
             )
             fname = f"{uid}_{slug(u['username'])}"
-            jl.write(json.dumps(dossier, ensure_ascii=False, default=str) + "\n")
+            jl.write(json.dumps(_dossier_for_json(dossier),
+                                ensure_ascii=False, default=str) + "\n")
             if args.per_user_json:
                 (profiles_dir / f"{fname}.json").write_text(
-                    json.dumps(dossier, ensure_ascii=False, indent=2, default=str),
+                    json.dumps(_dossier_for_json(dossier), ensure_ascii=False,
+                               indent=2, default=str),
                     encoding="utf-8")
+            prompt_kb = getattr(args, "prompt_max_kb", None)
             if not args.no_prompts:
+                prompt_text = render_prompt_md(dossier)
                 (prompts_dir / f"{fname}.md").write_text(
-                    render_prompt_md(dossier), encoding="utf-8")
+                    prompt_text, encoding="utf-8")
+                w_bytes = len(prompt_text.encode("utf-8"))
+                if prompt_kb and prompt_kb > 0 and w_bytes > prompt_kb * 1024:
+                    print(f"  [WARN] {u['username']}: вес промпта "
+                          f"{w_bytes / 1024:.1f} КБ превышает лимит "
+                          f"{prompt_kb} КБ — лента ужать дальше некуда "
+                          f"(неизменяемая часть файла больше лимита)")
             st = dossier["statistics"]
             if not (dossier["transcript"] or "").strip():
                 print(f"  [WARN] {u['username']}: транскрипт пуст при "
-                      f"{st['messages_total']} сообщ. — проверьте EXPORT_MAX_LINES/--max-lines")
+                      f"{st['messages_total']} сообщ. — проверьте EXPORT_PROMPT_MAX_KB/--prompt-max-kb")
             index.append({
                 "user_id": str(uid),
                 "display_name": u["global_name"] or u["username"],
                 "priority": bool(u.get("priority")),
                 "messages": st["messages_total"],
                 "span_days": st["span_days"],
+                "prompt_weight_kb": round(len(prompt_text.encode("utf-8")) / 1024, 1)
+                                    if not args.no_prompts else None,
                 "transcript_truncated": dossier["meta"]["transcript_truncated"],
                 "file": f"profiles/{fname}.json" if args.per_user_json else "dataset.jsonl",
                 "prompt": None if args.no_prompts else f"prompts/{fname}.md",
@@ -1617,6 +1801,8 @@ def main():
         "exported": exported,
         "skipped_low_data": skipped,
         "min_messages": args.min_messages,
+        "prompt_max_kb": (int(args.prompt_max_kb)
+                          if getattr(args, "prompt_max_kb", None) else None),
         "pii_redacted": bool(args.redact_pii),
         "users": index,
     }
