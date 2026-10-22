@@ -114,7 +114,7 @@ PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c 'SELECT versio
 > ```bash
 > docker run -d --name profiling-pg -p 5432:5432 \
 >   -e POSTGRES_USER=profiler -e POSTGRES_PASSWORD=profiler \
->   -e POSTGRES_DB=profiling postgres:15
+>   -e POSTGRES_DB=profiling postgres:18
 > ```
 
 ### Что собирается (проверка после первого запуска)
