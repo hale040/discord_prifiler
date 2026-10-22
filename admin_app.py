@@ -390,8 +390,11 @@ def create_app(database_url: str) -> Flask:
                     kind = "bool"
                 elif cls in ("Integer", "SmallInteger"):
                     kind = "int"
-                elif cls == "BigInteger":
-                    kind = "bigint"      # текстовый ввод -> int (snowflake не влезает в JS-число)
+                elif cls in ("BigInteger", "BIGINT", "BigInt"):
+                    # PG BIGINT приходит с autoload и как dialect-класс BIGINT
+                    # (не наследник sqlalchemy.BigInteger) — snowflake не влезает
+                    # в JS-число, ввод текстом -> int.
+                    kind = "bigint"
                 elif cls in ("Float", "Numeric", "DECIMAL"):
                     kind = "float"
                 elif impl_name.upper().startswith("JSONB") or cls == "JSON":
