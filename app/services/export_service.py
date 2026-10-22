@@ -241,7 +241,8 @@ class DialogExporter:
 def main(argv: list[str] | None = None) -> int:
     _try_load_dotenv()
     p = argparse.ArgumentParser(description="Компактный экспорт диалогов для LLM.")
-    p.add_argument("--db", default=os.getenv("DATABASE_URL", "sqlite:///data/profiling.db"))
+    p.add_argument("--db", default=os.getenv("DATABASE_URL", ""),
+                   help="PostgreSQL URL (по умолчанию из env DATABASE_URL)")
     p.add_argument("--user", help="username целевого пользователя (из user_profiles)")
     p.add_argument("--user-id", type=int, help="snowflake id целевого пользователя")
     p.add_argument("--channel", type=int, help="фильтр по каналу")

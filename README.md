@@ -72,14 +72,70 @@ app/
 - `messages.raw_json` по умолчанию НЕ пишется (`STORE_RAW_JSON=0`) — полный дамп
   каждого сообщения раздувал базу; при включении хранится в JSONB.
 
+## База данных (PostgreSQL)
+
+Проект работает **только с PostgreSQL** (SQLite больше не поддерживается).
+Дефолтный URL из `.env.example`:
+
+```
+DATABASE_URL=postgresql+psycopg://profiler:profiler@localhost:5432/profiling
+```
+
+То есть: пользователь `profiler`, пароль `profiler`, база `profiling`,
+хост `localhost`, **стандартный порт 5432**.
+
+### Создание базы (Debian/Ubuntu, PostgreSQL 13+)
+
+```bash
+# 1. Установить и запустить сервер (если ещё не стоит)
+sudo apt install postgresql
+sudo systemctl enable --now postgresql
+
+# 2. Создать роль, базу и права на схему от имени системного пользователя postgres
+sudo -u postgres psql <<'SQL'
+CREATE ROLE profiler WITH LOGIN PASSWORD 'profiler';
+CREATE DATABASE profiling OWNER profiler;
+GRANT ALL ON SCHEMA public TO profiler;   -- PG15+: public не наследует CREATE от владельца БД
+SQL
+
+# 3. Проверить подключение под новой ролью
+PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c 'SELECT version();'
+```
+
+Схема таблиц **создаётся автоматически** при первом запуске `python main.py`
+(`init_db()` → SQLAlchemy `create_all()`), никаких SQL-скриптов и миграций
+запускать не нужно — база новая и пустая. Модуль версионируемых миграций
+сохранён (`app/models/migrations.py`), но сейчас отключён (см. ниже).
+
+Если используете другой хост/порт/пароль — просто поправьте `DATABASE_URL`
+в `.env`. Формат: `postgresql+psycopg://USER:PASSWORD@HOST:PORT/DBNAME`.
+
+> Docker-альтернатива (без установки PG в систему):
+> ```bash
+> docker run -d --name profiling-pg -p 5432:5432 \
+>   -e POSTGRES_USER=profiler -e POSTGRES_PASSWORD=profiler \
+>   -e POSTGRES_DB=profiling postgres:15
+> ```
+
+### Что собирается (проверка после первого запуска)
+
+```bash
+PGPASSWORD=profiler psql -h localhost -U profiler -d profiling -c '\dt'
+# messages, attachments, user_profiles, guild_member_profiles,
+# user_role_tags, channel_states, …
+```
+
 ## Запуск
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # заполнить DISCORD_TOKEN, CHANNEL_ID и (опционально) START_DATE
+cp .env.example .env        # заполнить DISCORD_TOKEN, CHANNEL_ID, DATABASE_URL и (опционально) START_DATE
 python main.py              # Ctrl+C / SIGTERM — корректное завершение
 ```
+
+При неверном/не-PostgreSQL `DATABASE_URL` приложение падает сразу с понятным
+сообщением (fail-fast), а не молча создаёт sqlite-файл.
 
 ### Дата начала сбора (START_DATE)
 
@@ -152,8 +208,9 @@ snowflake ID сообщений и вложений.
 ### Схема БД и миграции
 
 База новая: схема создаётся целиком из SQLAlchemy-моделей при старте
-(`app/models/db.py` → `init_db` → `create_all`). Старые SQLite-базы не
-поддерживаются — данные при необходимости переносите вручную.
+(`app/models/db.py` → `init_db` → `create_all`) — см. раздел
+«База данных (PostgreSQL)» выше. Старые SQLite-базы не поддерживаются —
+данные при необходимости переносите вручную.
 
 Модуль версионируемых миграций `app/models/migrations.py` сохранён для
 будущего (доводка схемы живой базы по шагам, таблица `schema_version`),
