@@ -11,7 +11,7 @@ from app.config import Settings
 from app.models.entities import Base
 
 # Значение по умолчанию — PostgreSQL (SQLite больше не поддерживается).
-DEFAULT_DATABASE_URL = "postgresql+psycopg://profiler:profiler@localhost:5432/profiling"
+DEFAULT_DATABASE_URL = "postgresql+psycopg://profiler:profiler@localhost:5682/profiling"
 
 
 def default_database_url() -> str:
