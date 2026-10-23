@@ -548,6 +548,194 @@ def strip_mentions(text: str) -> str:
     return MENTION_RE.sub(lambda m: "@" if m.group(1) == "@!" else "#", text or "")
 
 
+# --- Эмоциональная лексика эмодзи/реакций ---------------------------------
+# Каждая группа — «эмоциональный кластер»: реакция или эмодзи из набора
+# трактуются как проявление этой эмоции. Таблицы покрывают Unicode-эмодзи
+# и кастомные Discord-реакции (:name: и голый name из emoji.name).
+# Порядок объявления кластеров важен: при коллизиях выигрывает более узкий,
+# объявленный первым (❤️ — привязанность/благодарность, а не просто позитив;
+# 👍 — поддержка, а не общий позитив; 💀 в интернете — смех, а не враждебность).
+EMOTION_EMOJI: dict[str, set[str]] = {
+    "support_agreement": {
+        "👍", "👌", "🤝", "👏", "🙌", "✔️", "✅", "🫡", "💪", "👊", "🤞", "✊",
+    },
+    "affection_gratitude": {
+        "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💕", "💞", "💓",
+        "💗", "💖", "💘", "💝", "🥰", "😍", "😘", "🫶", "🤗", "🌹", "🙏",
+    },
+    "laughter_humor": {
+        "😂", "🤣", "😆", "😅", "😹", "💀", "🫠", "😁", "😀", "lol", "lmao",
+        "rofl", "kek", "hehe", "haha", "200", "joy",
+    },
+    "sadness_sympathy": {
+        "😢", "😭", "😞", "😔", "😟", "🙁", "☹️", "😕", "💔", "😪", "🥱", "😧",
+        "😦", "🌧", "⛈", "rain", "broken_heart", "sob", "cry", "frowning",
+    },
+    "anger_irritation": {
+        "😠", "😡", "🤬", "😤", "👿", "💢", "🖕", "😾", "rage", "anger",
+        "enraged", "upset", "mad",
+    },
+    "fear_anxiety": {
+        "😨", "😰", "😱", "😳", "🥺", "😬", "fear", "scream",
+        "anguish", "anxious", "nervous",
+    },
+    "shock_surprise": {
+        "😲", "😮", "🤯", "❗", "❕", "⁉️", "shock", "astonished",
+        "mind_blown", "whoa",
+    },
+    "disgust_contempt": {
+        "🤢", "🤮", "🥴", "😒", "🙄", "😏", "🤡", "disgust", "nauseated",
+        "unamused", "roll_eyes", "smirk", "clown",
+    },
+    "celebration_pride": {
+        "🎉", "🎊", "🥳", "🏆", "🎖", "🥇", "🍾", "👑", "🚀", "tada", "party",
+        "trophy", "medal", "champagne", "crown", "rocket",
+    },
+    "thinking_analysis": {
+        "🤔", "🧐", "💭", "🤨", "think", "ponder", "monocle", "thought",
+        "raised_eyebrow",
+    },
+    "sleep_tired": {
+        "😴", "💤", "🌙", "😌", "zzz", "yawn", "sleepy", "moon",
+    },
+    "hostility_troll": {
+        "👎", "🚫", "⚠️", "☠️", "middle_finger", "thumbsdown",
+        "no_entry", "skull", "warning",
+    },
+    "positivity": {  # общий резерв: всё остальное тёплое/нейтрально-позитивное
+        "🙂", "🙃", "😉", "😊", "😇", "🤩", "😗", "☺️", "✨", "🌟", "⭐",
+        "🔥", "🌈", "☀️", "🌻", "🍀", "💯",
+    },
+}
+
+# Токен (эмодзи или имя кастомной реакции) -> эмоция. Первый кластер выигрывает.
+_EMOTION_BY_TOKEN: dict[str, str] = {}
+for _emo_name, _tokens in EMOTION_EMOJI.items():
+    for _t in _tokens:
+        _EMOTION_BY_TOKEN.setdefault(_t.strip().lower(), _emo_name)
+        _EMOTION_BY_TOKEN.setdefault(_t.strip(":").lower(), _emo_name)
+
+
+def reaction_display(reaction: dict) -> str:
+    """Как показать реакцию в промпте: unicode-эмодзи как есть, кастомную — :name:.
+
+    Поддерживает оба формата хранения reactions_json: плоский
+    {"name":..,"count":..} и старый вложенный {"emoji":{"name":..},"count":..}.
+    """
+    if not isinstance(reaction, dict):
+        return "?"
+    emoji = reaction.get("emoji")
+    name = ""
+    if isinstance(emoji, dict):
+        name = str(emoji.get("name") or "").strip()
+    if not name:
+        name = str(reaction.get("name") or "").strip()
+    if not name:
+        return "?"
+    if name.isascii():  # кастомная реакция: хостинг discord-имени
+        return f":{name.lower()}:"
+    return name
+
+
+def classify_reaction(reaction: dict) -> str | None:
+    """Эмоциональный кластер реакции; None — нейтральная/неизвестная."""
+    disp = reaction_display(reaction)
+    if disp == "?":
+        return None
+    return _lookup_emotion(disp.strip(":"))
+
+
+def analyze_reactions(msgs: list[dict]) -> dict:
+    """Агрегат по реакциям, которые ПОСТАВИЛИ пользователю (социальное влияние)."""
+    total = 0
+    by_emotion: Counter = Counter()
+    top: Counter = Counter()
+    neutral = 0
+    reacted_msgs = 0
+    for m in msgs:
+        rl = load_json(m.get("reactions_json"))
+        if not isinstance(rl, list) or not rl:
+            continue
+        msg_total = 0
+        for r in rl:
+            if not isinstance(r, dict):
+                continue
+            cnt = int(r.get("count") or 0)
+            if cnt <= 0:
+                continue
+            msg_total += cnt
+            disp = reaction_display(r)
+            top[disp] += cnt
+            emo = classify_reaction(r)
+            if emo:
+                by_emotion[emo] += cnt
+            else:
+                neutral += cnt
+        if msg_total:
+            reacted_msgs += 1
+            total += msg_total
+    out = {
+        "total": total,
+        "messages_with_reactions": reacted_msgs,
+        "avg_per_message": round(total / len(msgs), 2) if msgs else 0.0,
+        "by_emotion": dict(by_emotion.most_common()),
+        "neutral_or_unclear": neutral,
+        "top": [[k, v] for k, v in top.most_common(10)],
+    }
+    return out
+
+
+def _lookup_emotion(token: str) -> str | None:
+    """Кластер по токену (эмодзи или имя): точный поиск + варианты FE0F/skin/ZWJ."""
+    def _find(s: str) -> str | None:
+        s = s.strip().lower()
+        if not s:
+            return None
+        for cand in (s, s.replace("\ufe0f", ""), s + "\ufe0f"):
+            mapped = _EMOTION_BY_TOKEN.get(cand)
+            if mapped:
+                return mapped
+        return None
+
+    mapped = _find(token)
+    if mapped:
+        return mapped
+    # последовательность из нескольких эмодзи (😂😂) или ZWJ-набор: первый угаданный
+    for ch in EMOJI_RE.findall(token or ""):
+        mapped = _find(ch)
+        if mapped:
+            return mapped
+        for cp in ch:  # skin tone вариант 👍🏽 -> базовый 👍
+            mapped = _find(cp)
+            if mapped:
+                return mapped
+    return None
+
+
+def analyze_own_emojis(msgs: list[dict]) -> dict:
+    """Эмодзи В ТЕКСТЕ пользователя — его собственная эмоциональная подача."""
+    used = 0
+    by_emotion: Counter = Counter()
+    top: Counter = Counter()
+    for m in msgs:
+        text = (m["clean_content"] or m["content"] or "")
+        found = EMOJI_RE.findall(text)
+        if not found:
+            continue
+        used += 1
+        for e in found:
+            top[e] += 1
+            emo = _lookup_emotion(e)
+            if emo:
+                by_emotion[emo] += 1
+    return {
+        "messages_with_emoji": used,
+        "share": round(used / len(msgs), 3) if msgs else 0.0,
+        "by_emotion": dict(by_emotion.most_common()),
+        "top": [[k, v] for k, v in top.most_common(15)],
+    }
+
+
 def analyze_messages(msgs: list[dict], all_user_ids: set[int]) -> dict:
     n = len(msgs)
     stats = {
@@ -568,6 +756,8 @@ def analyze_messages(msgs: list[dict], all_user_ids: set[int]) -> dict:
         "link_share": 0.0,
         "emoji_usage_share": 0.0,
         "avg_reactions_received": 0.0,
+        "reactions_emotions": {},
+        "own_emoji_emotions": {},
         "pinned_count": 0,
         "attachment_share": 0.0,
         "active_hours_utc": {},          # 0..23 -> кол-во сообщений
@@ -651,6 +841,8 @@ def analyze_messages(msgs: list[dict], all_user_ids: set[int]) -> dict:
         prev_ts = ts
 
     ws = sorted(word_counts)
+    rx_agg = analyze_reactions(msgs)      # эмоции реакций, поставленных целевому
+    own_agg = analyze_own_emojis(msgs)    # эмоции эмодзи в тексте целевого
     first_ts = parse_ts(msgs[0]["timestamp"])
     last_ts = parse_ts(msgs[-1]["timestamp"])
 
@@ -678,6 +870,12 @@ def analyze_messages(msgs: list[dict], all_user_ids: set[int]) -> dict:
         },
         "burst_sessions": burst,
         "top_emojis": emoji_counter.most_common(15),
+        # эмоциональный разбор: реакции, поставленные целевому (социальное
+        # влияние/какое впечатление производит), и эмодзи в его собственном тексте
+        "reactions_emotions": rx_agg["by_emotion"],
+        "reactions_top": [[k, v] for k, v in rx_agg["top"]],
+        "reactions_messages_share": round(rx_agg["messages_with_reactions"] / n, 3),
+        "own_emoji_emotions": own_agg["by_emotion"],
         "hesitation_word_hits": hesitation,
         "absolute_word_hits": absolute,
         "apology_hits": apologies,
@@ -745,7 +943,7 @@ def make_transcript(
     legend = ", ".join(f"{lab}={names.get(uid, uid)}" for lab, uid in order)
     head = (f"# целевой=T; {legend}; "
             "формат: 'автор ЧЧ:ММ [>N|@Uk][ed][img] текст', >N — ответ на реплику N, "
-            "@Uk — адресат ответа, *=новая тема")
+            "@Uk — адресат ответа, *=новая тема, «...» — реакции на реплику")
 
     lines: list[str] = []
     id_to_num: dict[int, int] = {}
@@ -785,7 +983,9 @@ def make_transcript(
             atts += "[img]"
         if m.get("embed_count"):
             atts += "[emb]"
-        body = " ".join(x for x in (f"{label} {ts.strftime('%H:%M')}", flags, text, atts) if x)
+        rx = message_reactions_compact(m)  # реакции с эмоциональной разметкой
+        body = " ".join(x for x in (f"{label} {ts.strftime('%H:%M')}", flags, text, atts,
+                                    f"«{rx}»" if rx else "") if x)
         lines.append(f"{parts[0]} {body}".strip() if parts else body)
         prev_ts_dt = ts
 
@@ -859,6 +1059,37 @@ def make_transcript(
     return "\n".join(out_lines), truncated
 
 
+def reaction_line_tag(reaction: dict) -> str | None:
+    """Короткая метка реакции для строки транскрипта.
+
+    unicode-эмодзи пишется как есть, кастомная реакция — :name:, после чего
+    добавляется эмоциональный кластер в скобках, если он известен:
+        ❤️(support_affection)  :blobcat:(laughter_humor)
+    """
+    disp = reaction_display(reaction)
+    if disp == "?":
+        return None
+    emo = classify_reaction(reaction)
+    return f"{disp}({emo})" if emo else disp
+
+
+def message_reactions_compact(m: dict, limit: int = 5) -> str:
+    """'👍3x ❤️2x' — компактный блок реакций на сообщение (для транскрипта)."""
+    rl = load_json(m.get("reactions_json"))
+    if not isinstance(rl, list):
+        return ""
+    parts = []
+    for r in rl[:limit]:
+        if not isinstance(r, dict):
+            continue
+        cnt = int(r.get("count") or 0)
+        tag = reaction_line_tag(r)
+        if not tag:
+            continue
+        parts.append(f"{tag}{cnt}x" if cnt > 1 else tag)
+    return " ".join(parts)
+
+
 def _make_transcript_plain(msgs: list[dict], max_lines: "int | None",
                            redact_pii: bool,
                            max_bytes: int | None = None) -> tuple[str, bool]:
@@ -882,6 +1113,9 @@ def _make_transcript_plain(msgs: list[dict], max_lines: "int | None",
             meta.append("attachment")
         if m["embed_count"]:
             meta.append(f"embed x{m['embed_count']}")
+        rx = message_reactions_compact(m)  # реакции с эмоциональной разметкой
+        if rx:
+            meta.append(f"reactions: {rx}")
         tag = f" [{','.join(meta)}]" if meta else ""
         line = f"[{ts.strftime('%Y-%m-%d %H:%M')}] {text}{tag}"
         if redact_pii:
@@ -969,7 +1203,16 @@ PROFILE_SYSTEM_PROMPT = """Ты — аналитик по профайлингу
 4. При малом объёме или коротком периоде данных честно снижай confidence_overall и \
 перечисли ограничения в disclaimer. Это не клиническая диагностика.
 5. Формат транскрипта: T — целевой пользователь, O2..On — собеседники, >N — ответ на \
-строку N, @Uk — упоминание участника Uk, ed/d — правка/удаление, img/emb — медиа.
+строку N, @Uk — упоминание участника Uk, ed/d — правка/удаление, img/emb — медиа; \
+«...» в конце строки — реакции на сообщение (эмодзи или :custom:, Nx — количество, \
+метка в скобках — эмоциональный кластер).
+6. Эмоциональный разбор обязателен, не только количественный: используй агрегаты \
+reactions_emotions / own_emoji_emotions / top_emojis из stats и построчные реакции \
+в транскрипте. Учитывай И что реагируют (топливо самооценки, статусность постов), и \
+КАК сам человек выражает эмоции эмодзи (плотность, разнообразие, тон — сарказм vs \
+искренность, пассивно-агрессивные 🙄/💀, удержание негатива вместо прямого конфликта). \
+Отражай это в tone.dominant/triggers, style и evidence (цитата может быть реакцией вида \
+"❤️x12 на сообщение про X").
 
 Верни СТРОГО JSON (без markdown, без текста вне JSON) со схемой:
 {"big_five":{"openness":0,"conscientiousness":0,"extraversion":0,"agreeableness":0,\
@@ -1344,11 +1587,29 @@ def strip_urls_text(text: str) -> str:
     return re.sub(r"https?://\S+", "", text or "")
 
 
+_RX_LINE_RE = re.compile(r"\s*«[^»]*»\s*$")
+
+
+def _strip_reactions_from_transcript(t: str) -> str:
+    """Убирает построчные блоки реакций «...» из конца строк транскрипта.
+
+    Эмоциональный разбор реакций уже есть в агрегатах stats
+    (reactions_emotions / reactions_top / own_emoji_emotions), а сами символы
+    эмодзи — в тексте сообщений; дублировать их в каждой строке — лишние байты."""
+    out = []
+    for ln in t.splitlines():
+        m = _RX_LINE_RE.search(ln)
+        if m and ("x" in m.group(0) or any(ord(c) > 0x2500 for c in m.group(0))):
+            ln = ln[:m.start()].rstrip()
+        out.append(ln)
+    return "\n".join(out)
+
+
 def _render_prompt_text(dossier: dict) -> str:
     d = strip_urls_deep(dossier)
     # транскрипт чистим отдельно: ссылки бывают внутри текста сообщений
     t = d.get("transcript") or ""
-    d["transcript"] = strip_urls_text(t)
+    d["transcript"] = _strip_reactions_from_transcript(strip_urls_text(t))
     ident = d["identity"]
     st = d["statistics"]
     meta = d["meta"]
