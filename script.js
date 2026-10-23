@@ -30,10 +30,23 @@ const PRICE_DATA = [
 const fmt = n => n.toLocaleString("ru-RU") + " ₽";
 
 /* =========================================================
-   Рендер таблицы прайса + поиск
+   Рендер таблицы прайса + поиск + фильтры + кнопки «Заказать»
    ========================================================= */
 const priceTbody = document.querySelector("#priceTable tbody");
 const priceSearch = document.getElementById("priceSearch");
+const priceCategory = document.getElementById("priceCategory");
+const priceStock = document.getElementById("priceStock");
+
+// категории для фильтра — уникальные наименования из прайса
+[...new Set(PRICE_DATA.map(i => i.name))].forEach(name => {
+  const opt = document.createElement("option");
+  opt.value = name;
+  opt.textContent = name;
+  priceCategory.appendChild(opt);
+});
+const catAll = document.createElement("option");
+catAll.value = ""; catAll.textContent = "Все категории";
+priceCategory.prepend(catAll);
 
 function stockClass(stock) {
   if (stock === "В наличии") return "stock--yes";
@@ -41,23 +54,73 @@ function stockClass(stock) {
   return "stock--no";
 }
 
-function renderPrice(filter = "") {
-  const q = filter.trim().toLowerCase();
-  const rows = PRICE_DATA.filter(item =>
-    !q || (item.name + " " + item.size).toLowerCase().includes(q)
+function getFilteredPrice() {
+  const q = priceSearch.value.trim().toLowerCase();
+  const cat = priceCategory.value;
+  const st = priceStock.value;
+  return PRICE_DATA.filter(item =>
+    (!q || (item.name + " " + item.size).toLowerCase().includes(q)) &&
+    (!cat || item.name === cat) &&
+    (!st || item.stock === st)
   );
-  priceTbody.innerHTML = rows.map(item => `
+}
+
+function renderPrice() {
+  const rows = getFilteredPrice();
+  priceTbody.innerHTML = rows.map((item, idx) => `
     <tr>
       <td>${item.name}</td>
       <td>${item.size}</td>
       <td>${item.unit}</td>
       <td class="num">${fmt(item.price)}</td>
       <td class="${stockClass(item.stock)}">${item.stock}</td>
+      <td><button class="btn--order" data-idx="${PRICE_DATA.indexOf(item)}">Заказать</button></td>
     </tr>`).join("") ||
-    `<tr><td colspan="5" style="text-align:center;padding:1.5rem;">Ничего не найдено 🤷</td></tr>`;
+    `<tr><td colspan="6" style="text-align:center;padding:1.5rem;">Ничего не найдено — позвоните нам, привезём под заказ: <a href="tel:+74951234567" style="color:#e5670c;font-weight:700;">+7 (495) 123-45-67</a></td></tr>`;
 }
 renderPrice();
-priceSearch.addEventListener("input", e => renderPrice(e.target.value));
+priceSearch.addEventListener("input", renderPrice);
+priceCategory.addEventListener("change", renderPrice);
+priceStock.addEventListener("change", renderPrice);
+
+// делегирование: клик «Заказать» в любой строке -> модалка с предзаполнением
+priceTbody.addEventListener("click", e => {
+  const btn = e.target.closest(".btn--order");
+  if (!btn) return;
+  const item = PRICE_DATA[+btn.dataset.idx];
+  openModal(
+    `Заявка: <b>${item.name}</b>, ${item.size} — ${fmt(item.price)}/т (${item.stock.toLowerCase()}).<br>Оставьте телефон — менеджер подтвердит цену и наличие за 15 минут.`,
+    "Заявка на «" + item.name + "»"
+  );
+});
+
+/* =========================================================
+   Таймер обратного отсчёта до конца недели (дедлайн акции)
+   ========================================================= */
+(function () {
+  const el = document.getElementById("timerValue");
+  if (!el) return;
+  function endOfWeek() {
+    const now = new Date();
+    const day = now.getDay(); // 0 вс … 6 сб
+    const add = ((6 - day) + 7) % 7 || 7; // следующий воскресенья 23:59
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + add, 23, 59, 59);
+    return d;
+  }
+  const target = endOfWeek();
+  const pad2 = n => String(n).padStart(2, "0");
+  function tick() {
+    let ms = target - Date.now();
+    if (ms <= 0) { el.textContent = "акция завершена"; return; }
+    const d = Math.floor(ms / 864e5); ms -= d * 864e5;
+    const h = Math.floor(ms / 36e5);  ms -= h * 36e5;
+    const m = Math.floor(ms / 6e4);   ms -= m * 6e4;
+    const s = Math.floor(ms / 1e3);
+    el.textContent = `${d} дн ${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+    setTimeout(tick, 1000);
+  }
+  tick();
+})();
 
 /* =========================================================
    Скачивание прайса (CSV, с BOM для корректной кириллицы в Excel)
@@ -315,13 +378,38 @@ nav.querySelectorAll(".nav__link").forEach(link =>
    ========================================================= */
 const header = document.getElementById("header");
 const toTop = document.getElementById("toTop");
+const fabStack = document.getElementById("fabStack");
+const stickyBar = document.getElementById("stickyBar");
 
 window.addEventListener("scroll", () => {
-  header.classList.toggle("scrolled", window.scrollY > 10);
-  toTop.classList.toggle("visible", window.scrollY > 600);
+  const y = window.scrollY;
+  header.classList.toggle("scrolled", y > 10);
+  toTop.classList.toggle("visible", y > 600);
+  if (fabStack) fabStack.classList.toggle("visible", y > 400);
+  if (stickyBar) stickyBar.classList.toggle("visible", y > 500);
 }, { passive: true });
 
 toTop.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+
+/* Активный пункт меню по секциям */
+(function () {
+  const links = [...document.querySelectorAll(".nav__link")];
+  const map = new Map();
+  links.forEach(l => {
+    const sec = document.querySelector(l.getAttribute("href"));
+    if (sec) map.set(sec, l);
+  });
+  const secIO = new IntersectionObserver(entries => {
+    entries.forEach(en => {
+      if (en.isIntersecting) {
+        links.forEach(l => l.classList.remove("active"));
+        const link = map.get(en.target);
+        if (link) link.classList.add("active");
+      }
+    });
+  }, { rootMargin: "-40% 0px -55% 0px" });
+  map.forEach((_, sec) => secIO.observe(sec));
+})();
 
 /* =========================================================
    Появление блоков при скролле (IntersectionObserver)
@@ -365,6 +453,7 @@ const calcWeight = document.getElementById("calcWeight");
 const calcCut = document.getElementById("calcCut");
 const calcDelivery = document.getElementById("calcDelivery");
 const calcSum = document.getElementById("calcSum");
+const calcHint = document.getElementById("calcHint");
 
 // наполняем select уникальными категориями по цене "от"
 const calcOptions = [
@@ -386,10 +475,17 @@ function calcUpdate() {
   let sum = opt.price * w;
   if (calcCut.checked) sum += 1500 * w;
   if (calcDelivery.checked) sum += 8000;
-  // скидка за объём
-  if (w >= 20) sum *= 0.95;
-  else if (w >= 5) sum *= 0.97;
+  // скидка за объём + подсказка «до скидки»
+  let hint = "";
+  if (w >= 20) { sum *= 0.95; hint = "Скидка 5% за объём применена ✅"; }
+  else if (w >= 5) {
+    sum *= 0.97;
+    hint = `Скидка 3% применена. Добавьте ещё ${(20 - w).toFixed(1)} т — скидка вырастет до 5%`;
+  } else if (w > 0) {
+    hint = `Добавьте ${(5 - w).toFixed(1)} т — получите скидку 3%`;
+  }
   calcSum.textContent = w > 0 ? fmt(Math.round(sum)) : "—";
+  calcHint.textContent = hint;
 }
 [calcType, calcWeight, calcCut, calcDelivery].forEach(el =>
   el.addEventListener("change", calcUpdate));
@@ -426,9 +522,14 @@ const modal = document.getElementById("modal");
 const modalClose = document.getElementById("modalClose");
 const modalForm = document.getElementById("modalForm");
 const modalStatus = document.getElementById("modalStatus");
+const modalTitle = document.getElementById("modalTitle");
+const modalText = document.getElementById("modalText");
 
-function openModal(text) {
-  if (text) modal.querySelector("p").textContent = text;
+const DEFAULT_MODAL_TEXT = "Оставьте телефон — перезвоним в течение 15 минут.";
+
+function openModal(html, title) {
+  modalText.innerHTML = html || DEFAULT_MODAL_TEXT;
+  modalTitle.textContent = title || "Заказать звонок";
   modal.classList.add("open");
 }
 function closeModal() {
@@ -436,6 +537,12 @@ function closeModal() {
   modalStatus.textContent = "";
 }
 document.getElementById("callBtn").addEventListener("click", () => openModal());
+// «Получить прайс за 15 минут» (hero + мобильная панель)
+const priceOfferText = "Оставьте телефон — отправим актуальный прайс-лист и точную цену по вашим позициям <b>в течение 15 минут</b> (WhatsApp / SMS / e-mail).";
+document.getElementById("heroPriceBtn").addEventListener("click", () =>
+  openModal(priceOfferText, "Прайс за 15 минут"));
+document.getElementById("stickyFormBtn").addEventListener("click", () =>
+  openModal(priceOfferText, "Прайс за 15 минут"));
 modalClose.addEventListener("click", closeModal);
 modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
