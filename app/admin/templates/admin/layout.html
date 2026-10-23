@@ -1,6 +1,7 @@
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
     <title>{% block t %}Профайлер — админка{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
     <style>
       body{font-family:system-ui,sans-serif;margin:0;background:#f4f5f7;color:#222}
       nav{background:#1e1f2b;padding:.6rem 1rem;display:flex;gap:1rem;flex-wrap:wrap}
@@ -27,7 +28,7 @@
     </style></head><body>
     {% if session.get('admin_ok') %}
     <nav>
-      <a class="{{ 'on' if page=='dash' }}">📊 Дашборд</a>
+      <a href="{{ url_for('dashboard') }}" class="{{ 'on' if page=='dash' }}"><img src="{{ url_for('static', filename='logo.png') }}" alt="" style="width:20px;height:20px;border-radius:5px;vertical-align:-4px;margin-right:.3rem">Профайлер</a>
       {% for tb in nav_tables %}<a href="{{ url_for('browse', table=tb) }}"
  class="{{ 'on' if page=='browse' and table==tb }}">{{ tb }}</a>{% endfor %}
       <a href="{{ url_for('sql_page') }}" class="{{ 'on' if page=='sql' }}">SQL</a>
