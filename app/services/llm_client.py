@@ -53,7 +53,7 @@ def get_settings() -> dict:
     }
 
 
-def _extract_json(text: str) -> str:
+def extract_json(text: str) -> str:
     """Вынуть JSON-объект из ответа модели (снимает markdown-обёртки ```...```)."""
     t = text.strip()
     m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", t, re.S)
@@ -63,6 +63,10 @@ def _extract_json(text: str) -> str:
     if s != -1 and e > s:
         return t[s:e + 1]
     return t
+
+
+# обратная совместимость со старым приватным именем
+_extract_json = extract_json
 
 
 def chat(prompt: str, *, temperature: float = 0.3, max_tokens: int = 4096,

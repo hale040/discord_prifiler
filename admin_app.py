@@ -566,6 +566,9 @@ def create_app(database_url: str) -> Flask:
               <button class='btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
               >🧠 {{ 'Обновить психо профиль' if ps else 'Построить психо профиль' }}</button>
             </form>
+            <a class='btn gray' style='text-decoration:none'
+               title='вставить ответ нейросети вручную с проверкой структуры JSON'
+               href="/psych/manual/{{ row.cells[cols.index('user_id')][0] }}">📋 Вставить ответ модели</a>
             {% if ps %}<a class='btn gray' title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
                href="{{ url_for('profile_view', pid=ps.id) }}">👁</a>{% endif %}
           {% endif %}
@@ -1298,6 +1301,151 @@ def create_app(database_url: str) -> Flask:
             flash(f"Не удалось обновить психо профиль: {e}", "error")
             return redirect(url_for("browse", table="user_profiles",
                                     col="user_id", val=str(user_id)))
+
+    # --- ручная вставка ответа модели ---------------------------------------- #
+    PSCH_SAMPLE = ('{"big_five":{"openness":0,"conscientiousness":0,'
+        '"extraversion":0,"agreeableness":0,"neuroticism":0},'
+        '"mbti":{"type":"","alt":[],"confidence":0.0,"reasoning":""},'
+        '"enneagram":{"type":"","alt":[],"confidence":0.0,"reasoning":""},'
+        '"interests":[{"topic":"","evidence":""}],'
+        '"risk_flags":[{"flag":"","evidence":"","severity":"low|med|high"}],'
+        '"evidence":[{"signal":"","quote":""}],'
+        '"confidence_overall":0.0,"disclaimer":""}')
+
+    PAGE_PSCH_MANUAL = """<h2>Вставить ответ модели · user {{ uid }}</h2>
+    <p class='muted'><a href="{{ url_for('record', table='user_profiles', pk=upk) }}">← профиль пользователя</a>
+       · сюда можно вставить сырой ответ любой модели (в т.ч. из чата), даже если он обёрнут в ```json``` или содержит текст вокруг JSON.</p>
+    <div class='card'>
+      <form method='post' action='/psych/validate'>
+        <input type='hidden' name='user_id' value='{{ uid }}'>
+        <h4>Ответ нейросети (JSON по схеме промпта)</h4>
+        <textarea name='answer' rows='22' placeholder='{{ ph_sample }}' autofocus>{{ answer or '' }}</textarea>
+        <br><br>
+        <div style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap'>
+          <input type='text' name='model' value='{{ model_name or '' }}' placeholder='имя модели (необязательно)' style='max-width:340px'>
+          <button class='btn gray' name='do' value='validate'>Проверить структуру</button>
+          <button class='btn' name='do' value='import'
+                  onclick="return confirm('Импортировать как НОВУЮ версию психо профиля? Текущая актуальная запись станет архивной.');">Проверить и импортировать</button>
+        </div>
+      </form>
+    </div>
+    {% if result is not none %}
+    <div class='card'>
+      {% if result.ok %}
+        <h4 style='color:#1b7a1b'>✅ Структура корректна</h4>
+        <p>MBTI: <b>{{ result.mbti }}</b> · эннеаграмма: <b>{{ result.enneagram }}</b> ·
+           сигналов (evidence): {{ result.signals }} · интересов: {{ result.interests }} ·
+           risk-флагов: {{ result.risks }} · confidence_overall: {{ result.conf }}</p>
+        {% if result.warns %}
+        <h4 style='color:#e65100;margin-bottom:.2rem'>⚠️ Предупреждения (импорт возможен)</h4>
+        <ul>{% for w in result.warns %}<li>{{ w }}</li>{% endfor %}</ul>
+        {% endif %}
+
+      {% else %}
+        <h4 style='color:#c62828'>❌ Ошибки структуры</h4>
+        <ul>{% for e in result.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+        {% if result.warns %}
+        <h4 style='color:#e65100;margin-bottom:.2rem'>Предупреждения</h4>
+        <ul>{% for w in result.warns %}<li>{{ w }}</li>{% endfor %}</ul>
+        {% endif %}
+        <p class='muted'>Пока есть ошибки — импорт заблокирован. Исправьте ответ (или перегенерируйте его у модели).</p>
+      {% endif %}
+    </div>
+    {% endif %}"""
+
+    @app.route("/psych/manual/<int:user_id>")
+    def psych_manual(user_id: int):
+        """Форма ручной вставки ответа модели с проверкой структуры."""
+        if "user_profiles" not in tables():
+            abort(404)
+        up = Table("user_profiles", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            r = conn.execute(sa_select(up.columns.id, up.columns.username).where(
+                up.columns.user_id == user_id)).first()
+        if r is None:
+            abort(404)
+        return render(PAGE_PSCH_MANUAL, page="browse", uid=user_id, upk=r[0],
+                      answer=None, model_name=None, result=None, do_import="no", ph_sample=PSCH_SAMPLE)
+
+    def _psch_validate_form():
+        """Общий разбор POST-параметров формы ручной вставки.
+
+        Возвращает (user_id, answer_text, model_name, do_action, result|None, err|None);
+        result — dict для шаблона, err — сообщение о неверном user_id (уже готовый flash-редирект).
+        """
+        try:
+            uid = int(request.form.get("user_id") or "")
+        except ValueError:
+            return None, "", "", "validate", None, "Не указан корректный user_id."
+        answer_text = request.form.get("answer") or ""
+        model_name = (request.form.get("model") or "").strip() or None
+        do_action = "import" if request.form.get("do") == "import" else "validate"
+        result = None
+        try:
+            from app.services.llm_client import extract_json
+            from app.services.analysis_importer import parse_llm_answer, validate_answer
+
+            data = parse_llm_answer(extract_json(answer_text))
+            errs, warns = validate_answer(data)
+            result = {
+                "ok": not errs,
+                "errors": errs,
+                "warns": warns,
+                "mbti": ((data.get("mbti") or {}).get("type")) or "—",
+                "enneagram": ((data.get("enneagram") or {}).get("type")) or "—",
+                "signals": len(data.get("evidence") or []),
+                "interests": len(data.get("interests") or []),
+                "risks": len(data.get("risk_flags") or []),
+                "conf": data.get("confidence_overall"),
+            }
+        except Exception as e:  # noqa: BLE001
+            result = {"ok": False, "errors": [f"JSON не разобран: {e}"],
+                      "warns": [], "mbti": "—", "enneagram": "—",
+                      "signals": 0, "interests": 0, "risks": 0, "conf": None}
+        return uid, answer_text, model_name, do_action, result, None
+
+    @app.route("/psych/validate", methods=["POST"])
+    def psych_validate():
+        """Проверить (и при do=import — импортировать) вставленный ответ модели."""
+        uid, answer_text, model_name, do_action, result, err = _psch_validate_form()
+        if err:
+            flash(err, "error")
+            return redirect(url_for("dashboard"))
+        if do_action != "import":
+            # только проверка структуры — остаёмся на форме
+            return render(PAGE_PSCH_MANUAL, page="browse", uid=uid, upk=uid,
+                          answer=answer_text, model_name=model_name,
+                          result=result, do_import="no", ph_sample=PSCH_SAMPLE)
+        # ---- импорт новой версии профиля ----
+        if not result["ok"]:
+            audit("psych_import_manual", target=f"user={uid}",
+                  details=f"rejected: {result['errors'][0][:200]}", result="error")
+            flash("Импорт отклонён: структура ответа некорректна "
+                  f"(первая ошибка: {result['errors'][0]}).", "error")
+            return render(PAGE_PSCH_MANUAL, page="browse", uid=uid, upk=uid,
+                          answer=answer_text, model_name=model_name,
+                          result=result, do_import="yes", ph_sample=PSCH_SAMPLE)
+        try:
+            import hashlib
+
+            from app.services.analysis_importer import parse_llm_answer, import_analysis
+
+            data = parse_llm_answer(answer_text)
+            ph = hashlib.sha256(answer_text.encode("utf-8")).hexdigest()[:32]
+            pid = import_analysis(engine, uid, data,
+                                  model=model_name or "manual-paste",
+                                  prompt_hash=ph)
+            audit("psych_import_manual", target=f"user={uid}",
+                  details=f"profile_id={pid} model={model_name or 'manual-paste'}",
+                  result="ok")
+            flash(f"Психо профиль импортирован: новая версия #{pid}.", "ok")
+            return redirect(url_for("profile_view", pid=pid))
+        except Exception as e:  # noqa: BLE001
+            audit("psych_import_manual", target=f"user={uid}", result=f"error: {e}")
+            flash(f"Ошибка импорта: {e}", "error")
+            return render(PAGE_PSCH_MANUAL, page="browse", uid=uid, upk=uid,
+                          answer=answer_text, model_name=model_name,
+                          result=result, do_import="yes", ph_sample=PSCH_SAMPLE)
 
     @app.route("/profile/<int:pid>")
     def profile_view(pid: int):

@@ -71,6 +71,115 @@ def _as_float(v):
 
 
 # --------------------------------------------------------------------------- #
+# Валидация структуры ответа                                                   #
+# --------------------------------------------------------------------------- #
+
+_MBTI_RE = re.compile(r"^[EI][NS][TF][JP]$")
+_ENN_RE = re.compile(r"^([1-9]|1[0-2])([-w])?$")
+_SEVERITIES = {"low", "med", "medium", "high"}
+
+
+def validate_answer(data: dict) -> tuple[list[str], list[str]]:
+    """Проверить структуру ответа модели по схеме промпта.
+
+    Возвращает (errors, warnings). errors — то, что ломает импорт или говорит
+    о том, что ответ не по схеме; warnings — поля, которые импорт терпит,
+    но их стоит проверить глазами.
+    """
+    errs: list[str] = []
+    warns: list[str] = []
+    if not isinstance(data, dict):
+        return (["корень JSON должен быть объектом {...}"], [])
+
+    def _num(obj: dict, key: str, path: str, *, required: bool) -> None:
+        v = obj.get(key)
+        if v is None:
+            if required:
+                errs.append(f"{path}: отсутствует обязательное числовое поле")
+            return
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            errs.append(f"{path}: ожидалось число, получено {type(v).__name__}")
+            return
+        if not 0 <= float(v) <= 100:
+            errs.append(f"{path}: значение {v} вне диапазона 0..100 "
+                        "(допустимы шкалы 0..1 и 0..100)")
+
+    # --- big_five -------------------------------------------------------------
+    bf = data.get("big_five")
+    if not isinstance(bf, dict):
+        errs.append("big_five: ожидается объект с 5 ключами")
+    else:
+        for k in ("openness", "conscientiousness", "extraversion",
+                  "agreeableness", "neuroticism"):
+            _num(bf, k, f"big_five.{k}", required=True)
+
+    # --- mbti / enneagram -------------------------------------------------------
+    for block, rx, label in (("mbti", _MBTI_RE, "MBTI"),
+                             ("enneagram", _ENN_RE, "эннеаграмма")):
+        o = data.get(block)
+        if not isinstance(o, dict):
+            errs.append(f"{block}: ожидается объект {{type, confidence, ...}}")
+            continue
+        t = o.get("type")
+        if not isinstance(t, str) or not t.strip():
+            errs.append(f"{block}.type: ожидается непустая строка ({label})")
+        elif not rx.match(t.strip().upper()):
+            warns.append(f"{block}.type: «{t}» не похоже на канонический код "
+                         f"{label} — импортируется как есть")
+        _num(o, "confidence", f"{block}.confidence", required=False)
+        alt = o.get("alt")
+        if alt is not None and not isinstance(alt, list):
+            warns.append(f"{block}.alt: ожидается список альтернатив")
+
+    # --- interests --------------------------------------------------------------
+    it = data.get("interests")
+    if it is None:
+        warns.append("interests: поле отсутствует (импорт пройдёт без интересов)")
+    elif not isinstance(it, list):
+        errs.append("interests: ожидается список [{topic, evidence}, ...]")
+    else:
+        for i, x in enumerate(it):
+            if not isinstance(x, dict) or not str((x or {}).get("topic") or "").strip():
+                errs.append(f"interests[{i}]: у элемента должен быть непустой topic")
+
+    # --- risk_flags ---------------------------------------------------------------
+    rf = data.get("risk_flags")
+    if rf is not None:
+        if not isinstance(rf, list):
+            errs.append("risk_flags: ожидается список")
+        else:
+            for i, x in enumerate(rf):
+                sev = str((x or {}).get("severity") or "").lower()
+                if sev and sev not in _SEVERITIES:
+                    warns.append(f"risk_flags[{i}].severity: «{sev}» — ожидались "
+                                 "low/med/high")
+
+    # --- evidence -----------------------------------------------------------------
+    ev = data.get("evidence")
+    if ev is None:
+        warns.append("evidence: поле отсутствует (сигналы не будут сохранены)")
+    elif not isinstance(ev, list):
+        errs.append("evidence: ожидается список [{signal, quote}, ...]")
+    else:
+        nq = 0
+        for i, x in enumerate(ev):
+            if not isinstance(x, dict) or not str(x.get("quote") or "").strip():
+                errs.append(f"evidence[{i}]: цитата quote обязательна и непуста")
+                continue
+            nq += 1
+        if nq and len(ev) > MAX_SIGNALS:
+            warns.append(f"evidence: {len(ev)} элементов — в базу попадут "
+                         f"только первые {MAX_SIGNALS} (дедуп по цитате)")
+
+    # --- confidence_overall ---------------------------------------------------------
+    _num(data, "confidence_overall", "confidence_overall", required=False)
+
+    if "disclaimer" not in data:
+        warns.append("disclaimer: отсутствует (не влияет на импорт — он не сохраняется)")
+    return errs, warns
+
+
+# --------------------------------------------------------------------------- #
 # Импорт                                                                       #
 # --------------------------------------------------------------------------- #
 
