@@ -22,13 +22,29 @@
 
 ```
 main.py                        # точка входа процесса (сигналы, graceful shutdown)
-export_profiles.py             # автономный экспорт «дел» для LLM-профайлинга (без Discord)
+admin_app.py                   # CLI-обёртка админки (запуск; реализация — app/admin/)
+export_profiles.py             # CLI-обёртка экспорта (реализация — app/services/profile_export/)
 app/
 ├── config.py                  # настройки из ENV (.env.example)
 ├── models/                    # MODEL
 │   ├── entities.py            #   SQLAlchemy-модели: профили, роли/теги, сообщения, вложения, курсоры
 │   ├── db.py                  #   движок PostgreSQL (SQLAlchemy + psycopg), create_all
 │   └── repository.py          #   репозиторий: upsert/dedup/state/stats
+├── admin/                     # веб-админка (Flask), python -m app.admin
+│   ├── app.py                 #   приложение: маршруты, CRUD, SQL-редактор, аудит, psych-импорт
+│   ├── __main__.py            #   точка входа python -m app.admin
+│   └── templates/admin/       #   ВЕСЬ HTML отдельными файлами Jinja2:
+│       ├── layout.html        #     каркас страницы (nav, стили, flash)
+│       ├── login.html         #     вход по ADMIN_PASSWORD
+│       ├── dashboard.html     #     сводка по таблицам
+│       ├── browse.html        #     лента таблицы: поиск/фильтры/пагинация/★/🧠/📋
+│       ├── record.html        #     карточка записи (редактирование + связанные данные)
+│       ├── sql.html           #     SQL-редактор (SELECT / подтверждение UPDATE-DELETE)
+│       ├── audit.html         #     журнал аудита
+│       ├── actions.html       #     VACUUM/ANALYZE
+│       ├── profile_import.html#     импорт ответа LLM (CLI-формат)
+│       ├── psych_manual.html  #     ручная вставка ответа модели с валидацией структуры
+│       └── profile_view.html  #     читаемый вид психопрофиля
 ├── views/                     # VIEW
 │   └── console_view.py        #   консольный вывод прогресса + настройка логов
 ├── controllers/               # CONTROLLER
@@ -36,7 +52,10 @@ app/
 ├── services/
 │   ├── discord_gateway.py     #   UserbotClient (discord.py-self): логин, profile, member
 │   ├── collection_service.py  #   поллер канала, backfill истории, профилирование, загрузка картинок
-│   └── mappers.py             #   discord-объекты -> dict для БД (+ метрики для психотипирования)
+│   ├── mappers.py             #   discord-объекты -> dict для БД (+ метрики для психотипирования)
+│   ├── llm_client.py          #   клиент OpenRouter (бесплатные модели) для автосборки профиля
+│   ├── analysis_importer.py   #   JSON-ответ LLM -> psych_profiles/signals/interests + validate_answer
+│   └── profile_export/        #   экспорт «дел» и промптов (модуль за export_profiles.py)
 └── utils/helpers.py           #   human_delay, JSON-сериализация, snowflake
 ```
 

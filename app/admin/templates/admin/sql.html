@@ -1,0 +1,24 @@
+<h2>SQL-редактор</h2>
+    <div class='card muted'>SELECT выполняется сразу. UPDATE/DELETE требуют WHERE и подтверждения.
+    DROP/ALTER/CREATE/VACUUM запрещены (используйте «Действия»).</div>
+    {% if preview %}
+      <div class='card'><pre class='sql'>{{ preview.sql }}</pre>
+      <p>Затронет строк: <b>{{ preview.n }}</b>.
+      {% if preview.n >= 0 %}
+      <form method='post' style='display:inline'>
+<input type='hidden' name='confirm_token' value='{{ preview.token }}'>
+<input type='hidden' name='sql' value='{{ preview.sql }}'>
+<button class='btn warn'>Подтвердить выполнение</button></form>
+      {% endif %}
+      <a class='btn gray' href='{{ url_for('sql_page') }}'>отмена</a></p>
+      {% if preview.error %}<div class='flash err'>{{ preview.error }}</div>{% endif %}</div>
+    {% endif %}
+    {% if result is not none %}
+      <div class='card'><h4>Результат ({{ result|length }} строк)</h4>
+      {% if result %}<table><tr>{% for k in result[0].keys() %}<th>{{ k }}</th>{% endfor %}</tr>
+      {% for r in result %}<tr>{% for v in r.values() %}<td>{{ v }}</td>{% endfor %}</tr>{% endfor %}</table>
+      {% else %}<p class='muted'>пусто</p>{% endif %}</div>
+    {% endif %}
+    <form method='post' class='card'>
+      <textarea name='sql' placeholder="SELECT * FROM messages ORDER BY id DESC LIMIT 50">{{ raw or '' }}</textarea>
+      <br><br><button class='btn'>Выполнить</button></form>

@@ -1,0 +1,65 @@
+<h2>Таблица «{{ table }}» <span class='muted'>({{ total }} строк)</span></h2>
+    <form method='get' class='card' style='display:flex;gap:.5rem;align-items:end'>
+      <div style='flex:1'><label class='muted'>Поиск подстрокой</label>
+      <input type='text' name='q' value='{{ q }}' placeholder='подстрока в любом столбце'></div>
+      <div style='flex:1'><label class='muted'>Фильтр</label>
+      <select name='col'><option value=''>—</option>
+      {% for c in cols %}<option {{ 'selected' if col==c }}>{{ c }}</option>{% endfor %}</select></div>
+      <div style='flex:1'><label class='muted'>= значение</label>
+      <input type='text' name='val' value='{{ val }}'></div>
+      {% if has_priority %}<label style='white-space:nowrap;padding-bottom:.45rem'>
+<input type='checkbox' name='prio' value='1' {{ 'checked' if prio=='1' }}>
+только ★ приоритетные</label>{% endif %}
+      {% if is_psych_profiles %}<label style='white-space:nowrap;padding-bottom:.45rem'>
+<input type='checkbox' name='cur' value='1' {{ 'checked' if cur=='1' }}>
+только активные версии</label>{% endif %}
+      <button class='btn'>Применить</button>
+      <a class='btn gray' href='{{ url_for('browse', table=table) }}'>сброс</a>
+    </form>
+    <p class='muted'>В ленте только нужные столбцы{% if hidden_count %} · {{ hidden_count }}
+    скрытых (raw/json) см. в карточке записи{% endif %}. Клик по id — открыть/править.
+    {% if has_priority %}★ — отметить/снять приоритет одним кликом.{% endif %}
+    {% if is_psych_profiles %}👁 — читаемое представление результата LLM.{% endif %}</p>
+    <div style='overflow:auto'><table><tr>
+      {% if has_priority %}<th title='приоритетный пользователь'>★</th>{% endif %}
+      {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr>
+      {% for row in rows %}<tr>
+{% if has_priority %}<td style='text-align:center;white-space:nowrap'>
+  <a class='btn gray' style='padding:.05rem .35rem' title='переключить priority'
+     href='/browse/{{ table|e }}?star={{ row.pk }}&page={{ cur_page }}'
+     {%- if q %}&q={{ q|urlencode }}{% endif -%}
+     {%- if prio %}&prio=1{% endif %}}>{{ '★' if row.cells[cols.index('priority')][0] not in ('None','—','0','False','false') else '☆' }}</a></td>{% endif %}
+{% for cell in row.cells %}<td class='{{ 'json' if cell[1] }}' title='{{ cell[0] }}'>
+  {% if loop.index0 == 0 %}<a href="{{ url_for('record', table=table, pk=row.pk) }}">{{ cell[0] }}</a>
+  {% elif has_priority and cols[loop.index0] == 'priority' %}{# колонка priority не дублируется — показ через ★ #}
+  {% elif cols[loop.index0] == 'user_id' and uid_map.get(cell[0]) %}<a href="/browse/user_profiles?col=user_id&val={{ cell[0] }}" title="профиль пользователя">{{ cell[0] }}</a> <span class='muted'>@{{ uid_map.get(cell[0]) }}</span>
+  {% elif cols[loop.index0] == 'mbti_type' and cell[0] != '—' %}<b>{{ cell[0] }}</b>
+  {% elif cols[loop.index0] == 'severity_max' and cell[0] == 'high' %}<span style='color:#c62828;font-weight:700'>high</span>
+  {% else %}{{ cell[0] }}{% endif %}</td>{% endfor %}
+<td style='white-space:nowrap'>
+  {% if table == 'user_profiles' %}
+    {% set ps = psych_map.get(row.cells[cols.index('user_id')][0]) %}
+    <form method='post' action='/psych/refresh/{{ row.cells[cols.index('user_id')][0] }}'
+          style='display:inline'
+          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.');">
+      <button class='btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
+      >🧠 {{ 'Обновить психо профиль' if ps else 'Построить психо профиль' }}</button>
+    </form>
+    <a class='btn gray' style='text-decoration:none'
+       title='вставить ответ нейросети вручную с проверкой структуры JSON'
+       href="/psych/manual/{{ row.cells[cols.index('user_id')][0] }}">📋 Вставить ответ модели</a>
+    {% if ps %}<a class='btn gray' title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
+       href="{{ url_for('profile_view', pid=ps.id) }}">👁</a>{% endif %}
+  {% endif %}
+  {% if is_psych_profiles %}<a class='btn gray' title='читаемый вид результата LLM'
+     href="{{ url_for('profile_view', pid=row.pk) }}">👁</a>{% endif %}
+  <a class='btn' href="{{ url_for('record', table=table, pk=row.pk) }}">✎</a>
+  <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
+        onsubmit="return confirm('Удалить строку {{ table }}={{ row.pk }}?');">
+    <input type='hidden' name='pk' value='{{ row.pk }}'><button class='btn warn'>✕</button></form></td>
+      </tr>{% endfor %}</table></div>
+    <p class='pager'>
+      {% if cur_page > 1 %}<a class='btn gray' href='{{ href(cur_page-1) }}'>← назад</a>{% endif %}
+      стр. {{ cur_page }} / {{ pages }}
+      {% if cur_page < pages %}<a class='btn gray' href='{{ href(cur_page+1) }}'>вперёд →</a>{% endif %}
+    </p>

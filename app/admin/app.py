@@ -1,0 +1,1164 @@
+"""Ядро админки: Flask-приложение поверх PostgreSQL (см. admin_app.py — CLI)."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import secrets
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import quote_plus
+
+from dotenv import load_dotenv
+from flask import (
+    Flask,
+    abort,
+    flash,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+from sqlalchemy import Boolean, MetaData, Table, Text, cast as sa_cast, create_engine, func, inspect, select as sa_select, text
+from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update
+from sqlalchemy import String
+from sqlalchemy.dialects.postgresql import CHAR, VARCHAR
+from markupsafe import Markup
+from sqlalchemy.engine import Engine
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+
+def utcnow() -> datetime:
+    """Текущее время UTC (совпадает с helpers.utcnow в моделях)."""
+    return datetime.now(timezone.utc)
+
+# --------------------------------------------------------------------------- #
+# Какие столбцы показывать в лентах таблиц («только нужные»).                 #
+# Список — порядок отображения; всё остальное скрыто из ленты, но доступно    #
+# целиком на странице записи. ENV-надстройки (формат "таблица:столбец"):      #
+#   ADMIN_EXTRA_COLUMNS=messages:reactions_json,...  — добавить в ленту       #
+#   ADMIN_HIDE_COLUMNS=user_profiles:username,...    — убрать из ленты        #
+# --------------------------------------------------------------------------- #
+VIEW_COLUMNS: dict[str, list[str]] = {
+    "messages": [
+        "id", "timestamp", "author_id", "clean_content", "reply_to_author_id",
+        "edited_at", "deleted_at", "word_count", "has_attachment",
+        "reaction_total",
+    ],
+    "user_profiles": [
+        "id", "user_id", "username", "global_name", "priority",
+        "created_at_discord", "bot", "about", "premium_type", "last_updated",
+    ],
+    "guild_member_profiles": [
+        "id", "user_id", "guild_id", "nick", "joined_at", "timeout_until",
+        "top_role", "mute", "deaf",
+    ],
+    "user_roles": [
+        "id", "user_id", "role_name", "guild_id", "position",
+    ],
+    "attachments": [
+        "id", "message_id", "filename", "content_type", "size",
+        "is_image", "downloaded",
+    ],
+    "channel_states": [
+        "channel_id", "guild_id", "last_message_id", "oldest_message_id",
+        "last_poll_at", "messages_total",
+    ],
+    "audit_log": [
+        "id", "created_at", "action", "target", "result",
+    ],
+    # --- новый функционал (миграции v5..v8) ---------------------------------
+    "user_games": [
+        "id", "user_id", "name", "kind", "details", "state",
+        "first_seen", "last_seen",
+    ],
+    "profile_snapshots": [
+        "id", "user_id", "taken_at", "about", "status_text",
+        "avatar_hash", "banner_hash", "changed",
+    ],
+    "psych_profiles": [
+        "id", "user_id", "model", "mbti_type", "mbti_confidence",
+        "enneagram_type", "confidence_overall", "severity_max",
+        "messages_analyzed", "period_from", "period_to",
+        "is_current", "created_at",
+    ],
+    "psych_signals": [
+        "id", "user_id", "signal_key", "quote", "message_id",
+        "severity", "created_at",
+    ],
+    "user_interests": [
+        "id", "user_id", "topic", "evidence_count", "evidence",
+        "first_seen_at", "last_seen_at",
+    ],
+}
+
+# Ссылки «кто это?» — колонки, по которым строится ссылка на user_profiles.
+USER_LINK_COLS = ("user_id",)
+
+
+def _json_pretty(v) -> str:
+    """Красивый JSON для textarea в карточке записи (если значение — JSON).
+
+    Колонки *_json на PostgreSQL — JSONB: psycopg возвращает уже разобранные
+    list/dict; строковые значения поддержаны для совместимости.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, (dict, list)):
+        try:
+            return json.dumps(v, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            return str(v)
+    s = str(v)
+    try:
+        return json.dumps(json.loads(s), ensure_ascii=False, indent=2)
+    except Exception:
+        return s
+
+
+def _is_json_field(name: str) -> bool:
+    return name.endswith("_json") or name in ("result_json", "connections_json")
+
+
+def _sync_url(url: str) -> str:
+    # PostgreSQL-only: нормализация драйвера + fail-fast на чужих диалектах.
+    from app.models.db import _to_sync_url, require_postgres
+
+    return _to_sync_url(require_postgres(url))
+
+
+# --------------------------------------------------------------------------- #
+# Приложение                                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def create_app(database_url: str) -> Flask:
+    load_dotenv(BASE_DIR / ".env")
+    password = os.getenv("ADMIN_PASSWORD", "")
+    if not password:
+        raise SystemExit(
+            "[FATAL] ADMIN_PASSWORD не задан в .env — админка не запущена (fail-closed)."
+        )
+    secret = os.getenv("SECRET_KEY") or hashlib.sha256(
+        f"profile-admin::{password}".encode()
+    ).hexdigest()
+
+    app = Flask(
+        __name__,
+        template_folder=str(BASE_DIR / "app" / "admin" / "templates"),
+    )
+    app.secret_key = secret
+    app.config["DATABASE_URL"] = database_url
+    engine: Engine = create_engine(_sync_url(database_url), future=True)
+    app.config["ENGINE"] = engine
+
+    # --- аудит -------------------------------------------------------------
+    def audit(action: str, target: str = "", details: str = "", result: str = "ok") -> None:
+        try:
+            with engine.begin() as conn:
+                # created_at передаём явно: default=utcnow в модели работает
+                # только через ORM/Core-insert, а мы пишем raw SQL — иначе
+                # колонка остаётся NULL и журнал выглядит пустым.
+                conn.execute(
+                    text(
+                        "INSERT INTO audit_log (created_at, actor, action, target, details, result) "
+                        "VALUES (:ts, 'admin', :a, :t, :d, :r)"
+                    ),
+                    {
+                        "ts": utcnow(),
+                        "a": action,
+                        "t": target[:256],
+                        "d": (details or "")[:4000],
+                        "r": result[:512],
+                    },
+                )
+        except Exception:  # журнал не должен ронять админку
+            pass
+
+    # --- helpers ------------------------------------------------------------
+    def tables() -> list[str]:
+        return sorted(inspect(engine).get_table_names())
+
+    def columns_of(t: str) -> list[str]:
+        return [c["name"] for c in inspect(engine).get_columns(t)]
+
+    def pk_of(t: str) -> str:
+        pk = inspect(engine).get_pk_constraint(t)["constrained_columns"]
+        if pk:
+            return pk[0]
+        # Fallback для таблиц без явного PK (исторические ad-hoc БД):
+        # выбираем столбец с самой высокой селективностью — иначе ссылки на
+        # записи и UPDATE по "PK" будут работать неверно.
+        cols = columns_of(t)
+        try:
+            sa_tbl = Table(t, MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                best, best_n = cols[0], -1
+                for c in cols:
+                    n = conn.execute(
+                        sa_select(func.count()).select_from(sa_tbl).where(
+                            sa_tbl.columns[c].is_not(None)
+                        ).distinct()
+                    ).scalar() or 0
+                    if n > best_n:
+                        best, best_n = c, n
+            return best
+        except Exception:
+            return cols[0]
+
+    def safe_ident(name: str) -> str:
+        """Разрешаем только валидные SQL-идентификаторы (защита от инъекций имён)."""
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name or ""):
+            abort(400, description=f"Некорректное имя: {name!r}")
+        return name
+
+    def fmt_cell(v) -> tuple[str, bool]:
+        """(текст, is_json) для отображения; длинные значения сворачиваются."""
+        if v is None:
+            return "—", False
+        if isinstance(v, (dict, list)):  # JSONB-колонки приходят уже разобранными
+            s = json.dumps(v, ensure_ascii=False, default=str)
+            if len(s) > 400:
+                return s[:400] + "…", True
+            return s, True
+        s = str(v)
+        if len(s) > 400:
+            return s[:400] + "…", True
+        return s, False
+
+    def _env_pairs(name: str) -> dict[str, set[str]]:
+        """ADMIN_EXTRA_COLUMNS / ADMIN_HIDE_COLUMNS: 'таблица:столбец,таблица:столбец2'."""
+        out: dict[str, set[str]] = {}
+        for item in (os.getenv(name) or "").split(","):
+            item = item.strip()
+            if not item or ":" not in item:
+                continue
+            t, c = item.split(":", 1)
+            out.setdefault(t.strip(), set()).add(c.strip())
+        return out
+
+    ENV_EXTRA = _env_pairs("ADMIN_EXTRA_COLUMNS")
+    ENV_HIDE = _env_pairs("ADMIN_HIDE_COLUMNS")
+
+    def view_cols_of(table: str) -> list[str]:
+        """Столбцы для ленты: только нужные (VIEW_COLUMNS) + ENV-надстройки.
+
+        Порядок: PK первым, затем список VIEW_COLUMNS (+ENV extra), минус ENV hide.
+        Для неизвестных таблиц — все столбцы, но без громоздких *_json/raw.
+        """
+        all_cols = columns_of(table)
+        pk = pk_of(table)
+        base = VIEW_COLUMNS.get(table)
+        if base is None:
+            base = [c for c in all_cols
+                    if not (c.endswith("_json") or c == "raw_json" or c == "details")]
+        chosen = [pk] + [c for c in base if c != pk and c in all_cols]
+        for c in ENV_EXTRA.get(table, ()):  # явные дополнения из .env
+            if c in all_cols and c not in chosen:
+                chosen.append(c)
+        hidden = ENV_HIDE.get(table, set())
+        return [c for c in chosen if c not in hidden]
+
+    # --- ссылки на пользователя и связанные записи ---------------------------
+    def user_names_for(ids: set) -> dict:
+        """user_id -> 'username' для подписи ссылок в лентах (graceful)."""
+        ids = {i for i in ids if i is not None}
+        if not ids or "user_profiles" not in tables():
+            return {}
+        try:
+            up = Table("user_profiles", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    sa_select(up.columns.user_id, up.columns.username,
+                              up.columns.global_name)
+                    .where(up.columns.user_id.in_(list(ids)))
+                ).all()
+            return {r[0]: (r[1] or r[2] or str(r[0])) for r in rows}
+        except Exception:
+            return {}
+
+    def related_counts(user_id) -> dict:
+        """Сколько связанных записей в новых таблицах (для кнопки в ленте)."""
+        out = {}
+        if user_id is None:
+            return out
+        for t in ("psych_profiles", "psych_signals", "user_interests",
+                  "user_games", "profile_snapshots"):
+            if t not in tables():
+                continue
+            try:
+                tb = Table(t, MetaData(), autoload_with=engine)
+                with engine.connect() as conn:
+                    n = conn.execute(
+                        sa_select(func.count()).select_from(tb).where(
+                            tb.columns.user_id == user_id
+                        )
+                    ).scalar() or 0
+                if n:
+                    out[t] = n
+            except Exception:
+                continue
+        return out
+
+    def profile_view_url(pid) -> str | None:
+        """Ссылка на просмотр результата LLM (если есть tab/profile)."""
+        if pid is None:
+            return None
+        try:
+            return url_for("profile_view", pid=int(pid))
+        except Exception:
+            return None
+
+    def current_psych(user_id) -> dict | None:
+        """Актуальная версия психопрофиля пользователя: {id, model, created_at}."""
+        if user_id is None or "psych_profiles" not in tables():
+            return None
+        try:
+            pp = Table("psych_profiles", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                r = conn.execute(
+                    sa_select(pp.columns.id, pp.columns.model, pp.columns.created_at)
+                    .where(pp.columns.user_id == int(user_id),
+                           pp.columns.is_current.is_(True))
+                    .order_by(pp.columns.created_at.desc())
+                    .limit(1)
+                ).first()
+            return {"id": r[0], "model": r[1], "created_at": r[2]} if r else None
+        except Exception:
+            return None
+
+    def editable_fields(sa_tbl: Table) -> list[dict]:
+        """Редактируемые поля записи по схеме SQLAlchemy (тип/nullable/PK)."""
+        fields = []
+        for col in sa_tbl.columns:
+            t = col.type
+            cls = type(t).__name__
+            if cls in ("DateTime", "TIMESTAMP"):
+                kind = "datetime"
+            elif isinstance(t, Boolean):
+                # Boolean может быть обёрнут в TypeDecorator (например, Coalesce) —
+                # проверяем через dialect_impl + процессоры, а не только по имени.
+                kind = "bool"
+            else:
+                impl_name = ""
+                try:
+                    impl = t.dialect_impl(engine.dialect)
+                    impl_name = type(impl).__name__
+                except Exception:
+                    pass
+                if impl_name in ("BOOLEAN", "BOOL") or "BOOL" in impl_name.upper():
+                    kind = "bool"
+                elif cls in ("Integer", "SmallInteger"):
+                    kind = "int"
+                elif cls in ("BigInteger", "BIGINT", "BigInt"):
+                    # PG BIGINT приходит с autoload и как dialect-класс BIGINT
+                    # (не наследник sqlalchemy.BigInteger) — snowflake не влезает
+                    # в JS-число, ввод текстом -> int.
+                    kind = "bigint"
+                elif cls in ("Float", "Numeric", "DECIMAL"):
+                    kind = "float"
+                elif impl_name.upper().startswith("JSONB") or cls == "JSON":
+                    kind = "json"        # JSONB: ввод/вывод в виде JSON-текста
+                elif cls in ("Text", "CLOB"):
+                    kind = "textarea"
+                elif getattr(t, "length", None) and t.length > 64:
+                    kind = "textarea"
+                else:
+                    kind = "text"
+            fields.append({
+                "name": col.name, "kind": kind, "pk": bool(col.primary_key),
+                "nullable": bool(col.nullable),
+            })
+        return fields
+
+    def parse_field(kind: str, raw: str, nullable: bool):
+        """Строка формы -> значение по типу колонки; ValueError при неверном типе.
+
+        Пустая строка: NULL если nullable, иначе ошибка ('0'/False для чисел).
+        """
+        raw = (raw or "").strip()
+        if raw == "":
+            if nullable:
+                return None
+            raise ValueError("поле обязательное (не nullable), пустое значение запрещено")
+        if kind == "bool":
+            return raw.lower() in ("1", "true", "yes", "on", "да")
+        if kind in ("int", "bigint"):
+            try:
+                return int(raw)
+            except ValueError:
+                raise ValueError(f"ожидается целое число, получено {raw!r}")
+        if kind == "float":
+            try:
+                return float(raw)
+            except ValueError:
+                raise ValueError(f"ожидается число, получено {raw!r}")
+        if kind == "json":
+            # JSONB-колонки: принимаем JSON-текст из textarea, храним объект
+            try:
+                return json.loads(raw)
+            except ValueError:
+                raise ValueError(f"ожидается корректный JSON, получено {raw[:60]!r}")
+        if kind == "datetime":
+            from datetime import datetime as _dt
+            s = raw.replace("T", " ").replace("Z", "")
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    return _dt.strptime(s, fmt)
+                except ValueError:
+                    continue
+            raise ValueError(f"ожидается дата 'ГГГГ-ММ-ДД [ЧЧ:ММ[:СС]]', получено {raw!r}")
+        return raw
+
+    def render(tpl: str, **ctx):
+        """Страница = layout.html с подставленным содержимым templates/admin/<tpl>.html."""
+        return render_template(
+            "admin/layout.html",
+            content=Markup(render_template(f"admin/{tpl}.html", **ctx)),
+        )
+
+    # --- auth -----------------------------------------------------------------
+    @app.before_request
+    def require_login():
+        if request.endpoint in ("login", "logout", "static"):
+            return
+        if not session.get("admin_ok"):
+            return redirect(url_for("login"))
+
+    @app.context_processor
+    def inject_nav():
+        return {"nav_tables": tables(), "page": "",
+                "has_psych": "psych_profiles" in tables()}
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        error = None
+        if request.method == "POST":
+            pw = request.form.get("pw", "")
+            # сравнение через secrets — против timing-атак
+            if pw and secrets.compare_digest(pw.encode(), password.encode()):
+                session["admin_ok"] = True
+                audit("login", result="ok")
+                return redirect(url_for("dashboard"))
+            error = "Неверный пароль"
+        return render("login", page="", error=error)
+
+    @app.route("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
+    # --- дашборд ----------------------------------------------------------------
+    @app.route("/")
+    def dashboard():
+        ts = tables()
+        counts = []
+        total = 0
+        for t in ts:
+            if t == "schema_version":
+                continue
+            with engine.connect() as conn:
+                n = conn.execute(text(f"SELECT COUNT(*) FROM {safe_ident(t)}")).scalar() or 0
+            counts.append((t, n))
+            total += n
+        recent = []
+        if "audit_log" in ts:
+            with engine.connect() as conn:
+                recent = conn.execute(
+                    text("SELECT created_at, action, target, result FROM audit_log "
+                         "ORDER BY id DESC LIMIT 10")
+                ).mappings().all()
+        return render(
+            "dashboard", page="dash", db=app.config["DATABASE_URL"],
+            counts=counts, total=total, recent=recent,
+        )
+
+    # --- просмотр таблиц ----------------------------------------------------------
+    @app.route("/browse/<table>")
+    def browse(table: str):
+        table = safe_ident(table)
+        if table not in tables():
+            abort(404)
+        all_cols = columns_of(table)
+        cols = view_cols_of(table)
+        pk = pk_of(table)
+        q = (request.args.get("q") or "").strip()
+        col = safe_ident(request.args.get("col") or "") if request.args.get("col") else ""
+        val = request.args.get("val") or ""
+        prio = (request.args.get("prio") or "").strip()  # '1' только приоритетные
+        cur = (request.args.get("cur") or "").strip()    # '1' только активные версии (psych_profiles)
+        star_pk = request.args.get("star")              # быстрый переключатель ★
+        page = max(1, int(request.args.get("page") or 1))
+        per = 50
+
+        sa_tbl = Table(table, MetaData(), autoload_with=engine)
+
+        # Быстрая кнопка ★: переключить priority у одной записи (GET ?star=<pk>).
+        if star_pk and "priority" in all_cols:
+            with engine.begin() as conn:
+                cur = conn.execute(
+                    sa_select(sa_tbl.columns.priority).where(
+                        sa_tbl.columns[pk] == star_pk
+                    )
+                ).scalar()
+                newv = bool(cur) is False  # Boolean-колонка на PG
+                conn.execute(
+                    sa_update(sa_tbl)
+                    .where(sa_tbl.columns[pk] == star_pk)
+                    .values(priority=newv)
+                )
+            audit(
+                "priority_toggle", f"{table}#{star_pk}",
+                f"priority {'включён' if newv else 'выключен'}",
+            )
+            return redirect(url_for("browse", table=table, q=q or None,
+                                    col=col or None, val=val or None,
+                                    prio=prio or None, page=page))
+
+        # Таблица через SQLAlchemy Core (autoload) — используется в выражениях ниже.
+        where_parts = []
+        if q:
+            # LIKE осмысленна только для текстовых колонок; numeric/bool/timestamp/jsonb
+            # в PG не поддерживают оператор ~~ (bigint ~~ text -> ошибка). Для них —
+            # приведение к тексту через cast, чтобы поиск работал и по id/датам/флагам.
+            like = "%" + q.replace("%", "\\%").replace("_", "\\_") + "%"
+            texty = (String, Text, VARCHAR, CHAR)
+            conds = []
+            for c in cols:
+                col_type = sa_tbl.columns[c].type
+                if isinstance(col_type, texty):
+                    conds.append(sa_tbl.columns[c].like(like, escape="\\"))
+                else:
+                    conds.append(
+                        sa_cast(sa_tbl.columns[c], Text).like(like, escape="\\")
+                    )
+            where_parts.append(sa_or(*conds))
+        if col and val:
+            # Равнение по нетекстовым колонкам так же требует приведения строки из URL.
+            ctype = sa_tbl.columns[col].type
+            if isinstance(ctype, (String, Text, VARCHAR, CHAR)):
+                where_parts.append(sa_tbl.columns[col] == val)
+            elif isinstance(ctype, Boolean):
+                where_parts.append(
+                    sa_tbl.columns[col] == val.strip().lower() in ("1", "true", "да", "yes", "on")
+                )
+            else:
+                where_parts.append(
+                    sa_cast(sa_tbl.columns[col], Text) == val
+                )
+        # Фильтр «только приоритетные» (для таблиц с колонкой priority).
+        if prio == "1" and "priority" in all_cols:
+            where_parts.append(sa_tbl.columns.priority.is_(True))
+        # psych_profiles: фильтр «только активная версия профиля».
+        if cur == "1" and table == "psych_profiles" and "is_current" in all_cols:
+            where_parts.append(sa_tbl.columns.is_current.is_(True))
+        wclause = sa_and(*where_parts) if where_parts else None
+
+        sel = sa_select(sa_tbl).order_by(sa_tbl.columns[pk].desc()).limit(per).offset((page - 1) * per)
+        cnt = sa_select(func.count()).select_from(sa_tbl)
+        if wclause is not None:
+            sel = sel.where(wclause)
+            cnt = cnt.where(wclause)
+        with engine.connect() as conn:
+            total = conn.execute(cnt).scalar() or 0
+            rows_raw = conn.execute(sel).mappings().all()
+        rows = [
+            {"pk": r[pk], "cells": [fmt_cell(r[c]) for c in cols]}
+            for r in rows_raw
+        ]
+        # «Обновить психо профиль»: user_id -> актуальная версия профиля (для ленты)
+        psych_map: dict[str, dict | None] = {}
+        if table == "user_profiles" and "user_id" in cols:
+            for r in rows_raw:
+                try:
+                    uid_key = str(r["user_id"])
+                except Exception:
+                    continue
+                psych_map[uid_key] = current_psych(uid_key) if uid_key.isdigit() else None
+        # Подписи user_id -> @username для колонок-ссылок (одним запросом).
+        uids = {r["cells"][cols.index("user_id")][0] for r in rows} \
+            if "user_id" in cols else set()
+        uid_map = {}
+        if uids:
+            try:
+                uid_map = user_names_for({int(u) for u in uids if u.isdigit()})
+            except Exception:
+                uid_map = {}
+
+        def href(p: int) -> str:
+            base = f"/browse/{quote_plus(table)}?page={p}"
+            if q:
+                base += "&q=" + quote_plus(q)
+            if col:
+                base += "&col=" + quote_plus(col) + "&val=" + quote_plus(val)
+            if prio:
+                base += "&prio=" + quote_plus(prio)
+            if cur:
+                base += "&cur=" + cur
+            return base
+
+        return render(
+            "browse", page="browse", table=table, cols=cols, rows=rows,
+            total=total, q=q, col=col, val=val, cur_page=page,
+            pages=max(1, -(-total // per)), href=href,
+            hidden_count=len(all_cols) - len(cols),
+            prio=prio, has_priority="priority" in all_cols, pk_col=pk,
+            cur=cur, is_psych_profiles=(table == "psych_profiles"),
+            uid_map=uid_map, psych_map=psych_map,
+        )
+
+    # --- карточка записи: просмотр + редактирование -------------------------
+    @app.route("/browse/<table>/<pk>", methods=["GET", "POST"])
+    def record(table: str, pk: str):
+        table = safe_ident(table)
+        if table not in tables():
+            abort(404)
+        pk_col = pk_of(table)
+        sa_tbl = Table(table, MetaData(), autoload_with=engine)
+        fields = editable_fields(sa_tbl)
+        kind_by_name = {f["name"]: f["kind"] for f in fields}
+        null_by_name = {f["name"]: f["nullable"] for f in fields}
+
+        # Загрузка строки (PK приводим к типу колонки).
+        pk_kind = kind_by_name[pk_col]
+        try:
+            pk_val = parse_field(pk_kind, pk, nullable=False)
+        except ValueError as e:
+            abort(400, description=str(e))
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa_select(sa_tbl).where(sa_tbl.columns[pk_col] == pk_val)
+            ).mappings().first()
+        if row is None:
+            abort(404, description=f"Запись {table}.{pk} не найдена")
+
+        errors: dict[str, str] = {}
+        if request.method == "POST":
+            # Сначала парсим ВСЕ поля — UPDATE только если ошибок нет целиком.
+            parsed: dict[str, object] = {}
+            for name in kind_by_name:
+                if name == pk_col:
+                    continue  # PK не меняем
+                input_name = f"fld_{name}"
+                if input_name not in request.form:
+                    continue  # поля нет в форме — не трогаем
+                try:
+                    parsed[name] = parse_field(
+                        kind_by_name[name], request.form.get(input_name, ""),
+                        null_by_name[name])
+                except ValueError as e:
+                    errors[name] = str(e)
+
+            updates: dict[str, object] = {}
+            if not errors:
+                for name, new_val in parsed.items():
+                    old_val = row[name]
+                    # JSONB: сравниваем канонизированный JSON (dict/list),
+                    # иначе textarea с тем же содержимым ложно «изменяется».
+                    if kind_by_name.get(name) == "json":
+                        def _canon(v):
+                            if isinstance(v, str):
+                                try:
+                                    v = json.loads(v)
+                                except ValueError:
+                                    return v
+                            return json.dumps(v, sort_keys=True, ensure_ascii=False, default=str) \
+                                if v is not None else ""
+                        if _canon(old_val) != _canon(new_val):
+                            updates[name] = new_val
+                        continue
+                    # Сравнение по строковому представлению: из формы значения
+                    # приходят строками, а bool/datetime приводятся parse_field.
+                    if str(old_val if old_val is not None else "") != \
+                       str(new_val if new_val is not None else ""):
+                        updates[name] = new_val
+
+            if errors:
+                flash("Исправьте ошибки в полях: " + "; ".join(errors.values()), "error")
+            elif not updates:
+                flash("Изменений не обнаружено.", "ok")
+            else:
+                with engine.begin() as conn:
+                    n = conn.execute(
+                        sa_update(sa_tbl).values(**updates)
+                        .where(sa_tbl.columns[pk_col] == pk_val)
+                    ).rowcount
+                changed = {k: {"old": str(row[k]), "new": str(v)} for k, v in updates.items()}
+                audit("edit_row", target=f"{table}.{pk}",
+                      details=str(changed)[:4000], result=f"updated={n}")
+                flash(f"Сохранено: изменено полей — {len(updates)}.", "ok")
+                return redirect(url_for("record", table=table, pk=pk))
+            # при ошибке показываем форму с введёнными значениями
+            values = {name: request.form.get(f"fld_{name}", row[name])
+                      for name in kind_by_name}
+        else:
+            values = dict(row)
+
+        form_fields = [
+            {"name": f["name"], "kind": f["kind"], "pk": f["pk"],
+             "nullable": f["nullable"],
+             "type": str(sa_tbl.columns[f["name"]].type.compile()).split()[0],
+             "value": (_json_pretty(values.get(f["name"]))
+                       if f["kind"] == "textarea" and _is_json_field(f["name"])
+                       else values.get(f["name"])),
+             "error": errors.get(f["name"])}
+            for f in fields
+        ]
+
+        # --- связанные данные (новый функционал v5..v8) -----------------------
+        related: list[dict] = []
+        uid_val = row.get("user_id")
+        if table != "user_profiles" and uid_val is not None:
+            # все таблицы-источники, где есть user_id
+            for t in ("psych_profiles", "psych_signals", "user_interests",
+                      "user_games", "profile_snapshots"):
+                if t not in tables() or t == table:
+                    continue
+                try:
+                    tb2 = Table(t, MetaData(), autoload_with=engine)
+                    if "user_id" not in [c["name"] for c in inspect(engine).get_columns(t)]:
+                        continue
+                    with engine.connect() as conn:
+                        rs = conn.execute(
+                            sa_select(tb2).where(tb2.columns.user_id == uid_val)
+                            .order_by(tb2.columns[pk_of(t)].desc()).limit(10)
+                        ).mappings().all()
+                    cols2 = view_cols_of(t)
+                    related.append({
+                        "table": t, "cols": cols2,
+                        "rows": [[fmt_cell(r[c])[0] for c in cols2] for r in rs],
+                        "pks": [r[pk_of(t)] for r in rs],
+                    })
+                except Exception:
+                    continue
+        elif table == "user_profiles":
+            uid_val = row.get("user_id")
+            for t in ("psych_profiles", "psych_signals", "user_interests",
+                      "user_games", "profile_snapshots", "messages"):
+                if t not in tables():
+                    continue
+                try:
+                    tb2 = Table(t, MetaData(), autoload_with=engine)
+                    with engine.connect() as conn:
+                        n = conn.execute(
+                            sa_select(func.count()).select_from(tb2).where(
+                                tb2.columns.user_id == uid_val
+                            )
+                        ).scalar() or 0
+                    related.append({"table": t, "count": n})
+                except Exception:
+                    continue
+
+        return render("record", page="browse", table=table, pk=pk,
+                      fields=form_fields, related=related,
+                      uid=uid_val)
+
+    @app.post("/browse/<table>/delete")
+    def delete_row(table: str):
+        table = safe_ident(table)
+        pk = pk_of(table)
+        key = request.form.get("pk", "")
+        with engine.begin() as conn:
+            n = conn.execute(
+                text(f"DELETE FROM {safe_ident(table)} WHERE {safe_ident(pk)} = :k"),
+                {"k": key},
+            ).rowcount
+        audit("delete_row", target=f"{table}.{key}", result=f"deleted={n}")
+        flash(f"Удалено строк: {n}" if n else "Строка не найдена", "ok" if n else "error")
+        return redirect(url_for("browse", table=table))
+
+    # --- SQL-редактор ---------------------------------------------------------------
+    WRITE_KINDS = ("UPDATE", "DELETE")
+
+    def classify(sql: str) -> str:
+        s = sql.strip().upper().rstrip(";")
+        for kw in ("DROP", "ALTER", "CREATE", "VACUUM", "PRAGMA", "ATTACH", "INSERT", "REPLACE"):
+            if s.startswith(kw):
+                return kw
+        for kw in WRITE_KINDS + ("SELECT", "WITH"):
+            if s.startswith(kw):
+                return kw.split()[0]
+        return "OTHER"
+
+    @app.route("/sql", methods=["GET", "POST"])
+    def sql_page():
+        result = None
+        preview = None
+        raw = request.form.get("sql") if request.method == "POST" else None
+        if request.method == "POST":
+            sql = (raw or "").strip().rstrip(";")
+            kind = classify(sql)
+            if kind in ("DROP", "ALTER", "CREATE", "VACUUM", "PRAGMA", "ATTACH", "OTHER"):
+                flash(f"Операция «{kind}» запрещена в редакторе.", "error")
+                audit("sql_denied", details=sql, result=f"blocked:{kind}")
+            elif kind == "INSERT":
+                with engine.begin() as conn:
+                    conn.execute(text(sql))
+                audit("sql_insert", details=sql, result="ok")
+                flash("INSERT выполнен.", "ok")
+            elif kind in WRITE_KINDS:
+                token = request.form.get("confirm_token")
+                stored = session.get("pending_sql")
+                if token and stored and secrets.compare_digest(str(token), str(stored[1])) \
+                        and stored[0] == sql:
+                    with engine.begin() as conn:
+                        cur = conn.execute(text(sql))
+                        n = cur.rowcount
+                    session.pop("pending_sql", None)
+                    audit(f"sql_{kind.lower()}", details=sql, result=f"rows={n}")
+                    flash(f"{kind} выполнен, затронутых строк: {n}.", "ok")
+                else:
+                    if " WHERE " not in (" " + sql.upper() + " "):
+                        flash(f"{kind} без WHERE запрещён (защита от стирания всей таблицы).", "error")
+                        audit(f"sql_{kind.lower()}_denied", details=sql, result="no_where")
+                    else:
+                        # Подсчёт затрагиваемых строк через обёртку SELECT COUNT(*).
+                        try:
+                            count_sql = f"SELECT COUNT(*) FROM ({_select_for_count(kind, sql)}) AS _t"
+                            tok = secrets.token_hex(16)
+                            with engine.connect() as conn:
+                                n = conn.execute(text(count_sql)).scalar()
+                            session["pending_sql"] = (sql, tok)
+                            preview = {"sql": sql, "n": int(n or 0), "token": tok, "error": None}
+                        except Exception as e:  # показать синтаксическую ошибку до подтверждения
+                            preview = {"sql": sql, "n": -1, "token": "", "error": str(e)}
+            else:  # SELECT / WITH
+                try:
+                    with engine.connect() as conn:
+                        rs = conn.execute(text(sql))
+                        if rs.returns_rows:
+                            result = [dict(r) for r in rs.mappings().all()]
+                except Exception as e:
+                    flash(f"Ошибка SQL: {e}", "error")
+                audit("sql_select", details=sql[:2000], result="ok")
+        return render(
+            "sql", page="sql", raw=raw, result=result, preview=preview,
+        )
+
+    def _select_for_count(kind: str, sql: str) -> str:
+        """Извлекает табличное выражение для подсчёта затрагиваемых строк."""
+        if kind == "DELETE":
+            m = re.match(r"(?is)^DELETE\s+FROM\s+(\S+)(.*)$", sql)
+            return f"* FROM {m.group(1)}{m.group(2)}"
+        m = re.match(r"(?is)^UPDATE\s+(\S+)\s+SET\s+.+?(\s+WHERE\s+.*)?$", sql)
+        where = m.group(2) or ""
+        return f"* FROM {m.group(1)}{where}"
+
+    # --- аудит-страница --------------------------------------------------------------
+    @app.route("/audit")
+    def audit_page():
+        if "audit_log" not in tables():
+            flash("Таблица audit_log отсутствует — выполните миграции («Действия»).", "error")
+            return render("audit", page="audit", rows=[], cur_page=1, pages=1)
+        page = max(1, int(request.args.get("page") or 1))
+        per = 100
+        with engine.connect() as conn:
+            total = conn.execute(text("SELECT COUNT(*) FROM audit_log")).scalar() or 0
+            rows = conn.execute(
+                text("SELECT * FROM audit_log ORDER BY id DESC LIMIT :l OFFSET :o"),
+                {"l": per, "o": (page - 1) * per},
+            ).mappings().all()
+        return render(
+            "audit", page="audit", rows=rows, cur_page=page, pages=max(1, -(-total // per)),
+        )
+
+    # --- импорт ответа нейросети (психопрофиль) ------------------------------
+    @app.route("/profile/import", methods=["GET", "POST"])
+    def profile_import():
+        if "user_profiles" not in tables():
+            flash("Таблица user_profiles отсутствует — сначала запустите сбор.", "error")
+            return render("profile_import", page="profimport", users=[],
+                          sel=None, model=None, period_from=None,
+                          period_to=None, messages=None, answer=None)
+        with engine.connect() as conn:
+            users = conn.execute(text(
+                "SELECT id, username, priority FROM user_profiles "
+                "ORDER BY priority DESC, username"
+            )).mappings().all()
+        form = {k: request.form.get(k, "") for k in
+                ("user_id", "model", "period_from", "period_to", "messages", "answer")}
+        if request.method == "POST":
+            try:
+                from app.services.analysis_importer import (
+                    import_analysis, parse_llm_answer,
+                )
+
+                parsed = parse_llm_answer(form["answer"])
+                pid = import_analysis(
+                    engine,
+                    user_id=int(form["user_id"]),
+                    answer=parsed,
+                    model=form["model"] or None,
+                    period_from=(parse_field("datetime", form["period_from"], True)
+                                 if form["period_from"] else None),
+                    period_to=(parse_field("datetime", form["period_to"], True)
+                               if form["period_to"] else None),
+                    messages_analyzed=(int(form["messages"])
+                                       if form["messages"].isdigit() else None),
+                )
+                audit("psych_import", target=f"user={form['user_id']}",
+                      details=f"profile_id={pid}")
+                flash(f"Импортировано: профиль #{pid}.", "ok")
+                return redirect(url_for("profile_view", pid=pid))
+            except Exception as e:
+                flash(f"Ошибка импорта: {e}", "error")
+        return render("profile_import", page="profimport", users=users,
+                      sel=form.get("user_id"), model=form.get("model"),
+                      period_from=form.get("period_from"),
+                      period_to=form.get("period_to"),
+                      messages=form.get("messages"), answer=form.get("answer"))
+
+    # --- автообновление психопрофиля через LLM API ----------------------------
+    @app.route("/psych/refresh/<int:user_id>", methods=["POST"])
+    def psych_refresh(user_id: int):
+        """Кнопка «Обновить психо профиль»: БД -> промпт -> бесплатный LLM API -> запись.
+
+        1) profile_export.build_prompt_for_user собирает «дело» пользователя
+           из PostgreSQL и готовый markdown-промпт (та же сборка, что и CLI);
+        2) app.services.llm_client.analyze_prompt прогоняет его через OpenRouter
+           (модель из LLM_MODEL, по умолчанию deepseek/deepseek-chat-v3.1:free);
+        3) analysis_importer.import_analysis сохраняет ответ как новую версию
+           psych_profiles (старая -> архив), сигналы и интересы — с дедупом.
+        """
+        if "user_profiles" not in tables():
+            abort(404)
+        up = Table("user_profiles", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            uname = conn.execute(sa_select(up.columns.username).where(
+                up.columns.user_id == user_id)).scalar()
+        if uname is None:
+            abort(404)
+        audit("psych_refresh_start", target=f"user={user_id}", result="start")
+        try:
+            from app.services import llm_client
+            from app.services.profile_export import build_prompt_for_user
+
+            info = build_prompt_for_user(
+                app.config["DATABASE_URL"], user_id)
+            answer, model_used, ph = llm_client.analyze_prompt(info["prompt"])
+
+            from app.services.analysis_importer import import_analysis
+
+            pid = import_analysis(
+                engine, user_id, answer,
+                model=model_used, prompt_hash=ph,
+                source_lines=info["messages_total"],
+                period_from=info["period_from"], period_to=info["period_to"],
+                messages_analyzed=info["messages_total"],
+            )
+            audit("psych_refresh", target=f"user={user_id}",
+                  details=f"profile_id={pid} model={model_used} "
+                          f"msgs={info['messages_total']}",
+                  result="ok")
+            flash(f"Психо профиль обновлён: запись #{pid} "
+                  f"(модель {model_used}, сообщений {info['messages_total']}).",
+                  "ok")
+            return redirect(url_for("profile_view", pid=pid))
+        except Exception as e:  # noqa: BLE001
+            audit("psych_refresh", target=f"user={user_id}", result=f"error: {e}")
+            flash(f"Не удалось обновить психо профиль: {e}", "error")
+            return redirect(url_for("browse", table="user_profiles",
+                                    col="user_id", val=str(user_id)))
+
+    # --- ручная вставка ответа модели ---------------------------------------- #
+    PSCH_SAMPLE = ('{"big_five":{"openness":0,"conscientiousness":0,'
+        '"extraversion":0,"agreeableness":0,"neuroticism":0},'
+        '"mbti":{"type":"","alt":[],"confidence":0.0,"reasoning":""},'
+        '"enneagram":{"type":"","alt":[],"confidence":0.0,"reasoning":""},'
+        '"interests":[{"topic":"","evidence":""}],'
+        '"risk_flags":[{"flag":"","evidence":"","severity":"low|med|high"}],'
+        '"evidence":[{"signal":"","quote":""}],'
+        '"confidence_overall":0.0,"disclaimer":""}')
+
+    @app.route("/psych/manual/<int:user_id>")
+    def psych_manual(user_id: int):
+        """Форма ручной вставки ответа модели с проверкой структуры."""
+        if "user_profiles" not in tables():
+            abort(404)
+        up = Table("user_profiles", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            r = conn.execute(sa_select(up.columns.id, up.columns.username).where(
+                up.columns.user_id == user_id)).first()
+        if r is None:
+            abort(404)
+        return render("psych_manual", page="browse", uid=user_id, upk=r[0],
+                      answer=None, model_name=None, result=None, do_import="no", ph_sample=PSCH_SAMPLE)
+
+    def _psch_validate_form():
+        """Общий разбор POST-параметров формы ручной вставки.
+
+        Возвращает (user_id, answer_text, model_name, do_action, result|None, err|None);
+        result — dict для шаблона, err — сообщение о неверном user_id (уже готовый flash-редирект).
+        """
+        try:
+            uid = int(request.form.get("user_id") or "")
+        except ValueError:
+            return None, "", "", "validate", None, "Не указан корректный user_id."
+        answer_text = request.form.get("answer") or ""
+        model_name = (request.form.get("model") or "").strip() or None
+        do_action = "import" if request.form.get("do") == "import" else "validate"
+        result = None
+        try:
+            from app.services.llm_client import extract_json
+            from app.services.analysis_importer import parse_llm_answer, validate_answer
+
+            data = parse_llm_answer(extract_json(answer_text))
+            errs, warns = validate_answer(data)
+            result = {
+                "ok": not errs,
+                "errors": errs,
+                "warns": warns,
+                "mbti": ((data.get("mbti") or {}).get("type")) or "—",
+                "enneagram": ((data.get("enneagram") or {}).get("type")) or "—",
+                "signals": len(data.get("evidence") or []),
+                "interests": len(data.get("interests") or []),
+                "risks": len(data.get("risk_flags") or []),
+                "conf": data.get("confidence_overall"),
+            }
+        except Exception as e:  # noqa: BLE001
+            result = {"ok": False, "errors": [f"JSON не разобран: {e}"],
+                      "warns": [], "mbti": "—", "enneagram": "—",
+                      "signals": 0, "interests": 0, "risks": 0, "conf": None}
+        return uid, answer_text, model_name, do_action, result, None
+
+    @app.route("/psych/validate", methods=["POST"])
+    def psych_validate():
+        """Проверить (и при do=import — импортировать) вставленный ответ модели."""
+        uid, answer_text, model_name, do_action, result, err = _psch_validate_form()
+        if err:
+            flash(err, "error")
+            return redirect(url_for("dashboard"))
+        if do_action != "import":
+            # только проверка структуры — остаёмся на форме
+            return render("psych_manual", page="browse", uid=uid, upk=uid,
+                          answer=answer_text, model_name=model_name,
+                          result=result, do_import="no", ph_sample=PSCH_SAMPLE)
+        # ---- импорт новой версии профиля ----
+        if not result["ok"]:
+            audit("psych_import_manual", target=f"user={uid}",
+                  details=f"rejected: {result['errors'][0][:200]}", result="error")
+            flash("Импорт отклонён: структура ответа некорректна "
+                  f"(первая ошибка: {result['errors'][0]}).", "error")
+            return render("psych_manual", page="browse", uid=uid, upk=uid,
+                          answer=answer_text, model_name=model_name,
+                          result=result, do_import="yes", ph_sample=PSCH_SAMPLE)
+        try:
+            import hashlib
+
+            from app.services.analysis_importer import parse_llm_answer, import_analysis
+
+            data = parse_llm_answer(answer_text)
+            ph = hashlib.sha256(answer_text.encode("utf-8")).hexdigest()[:32]
+            pid = import_analysis(engine, uid, data,
+                                  model=model_name or "manual-paste",
+                                  prompt_hash=ph)
+            audit("psych_import_manual", target=f"user={uid}",
+                  details=f"profile_id={pid} model={model_name or 'manual-paste'}",
+                  result="ok")
+            flash(f"Психо профиль импортирован: новая версия #{pid}.", "ok")
+            return redirect(url_for("profile_view", pid=pid))
+        except Exception as e:  # noqa: BLE001
+            audit("psych_import_manual", target=f"user={uid}", result=f"error: {e}")
+            flash(f"Ошибка импорта: {e}", "error")
+            return render("psych_manual", page="browse", uid=uid, upk=uid,
+                          answer=answer_text, model_name=model_name,
+                          result=result, do_import="yes", ph_sample=PSCH_SAMPLE)
+
+    @app.route("/profile/<int:pid>")
+    def profile_view(pid: int):
+        if "psych_profiles" not in tables():
+            abort(404)
+        pp = Table("psych_profiles", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            p = conn.execute(sa_select(pp).where(pp.columns.id == pid)).mappings().first()
+        if p is None:
+            abort(404)
+        try:
+            # result_json — JSONB: psycopg отдаёт dict напрямую; строка поддержана
+            if isinstance(p.result_json, dict):
+                res = p.result_json
+            else:
+                res = json.loads(p.result_json) if p.result_json else {}
+        except Exception:
+            res = {}
+        bf = {
+            "openness": p.big_five_openness,
+            "conscientiousness": p.big_five_conscientiousness,
+            "extraversion": p.big_five_extraversion,
+            "agreeableness": p.big_five_agreeableness,
+            "neuroticism": p.big_five_neuroticism,
+        }
+        username = None
+        try:
+            up = Table("user_profiles", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                r = conn.execute(sa_select(up.columns.username).where(
+                    up.columns.user_id == p.user_id)).scalar()
+            username = r
+        except Exception:
+            pass
+        signals, interests = [], []
+        if "psych_signals" in tables():
+            t2 = Table("psych_signals", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                signals = conn.execute(
+                    sa_select(t2).where(t2.columns.profile_id == pid)
+                    .order_by(t2.columns.id)
+                ).mappings().all()
+        if "user_interests" in tables():
+            t3 = Table("user_interests", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                interests = conn.execute(
+                    sa_select(t3).where(t3.columns.user_id == p.user_id)
+                    .order_by(t3.columns.evidence_count.desc())
+                ).mappings().all()
+        risks = (res.get("risk_flags") or []) if isinstance(res, dict) else []
+        return render(
+            "profile_view", page="browse", p=p, res=res, bf=bf,
+            username=username, signals=signals, interests=interests, risks=risks,
+            raw_json_pretty=_json_pretty(p.result_json),
+            can_refresh=("user_profiles" in tables()),
+        )
+
+    # --- действия ---------------------------------------------------------------------
+    @app.route("/actions", methods=["GET", "POST"])
+    def actions_page():
+        last = session.get("last_action")
+        if request.method == "POST":
+            op = request.form.get("op", "vacuum")
+            if op == "vacuum":
+                # PostgreSQL: VACUUM нельзя выполнять внутри транзакции —
+                # отдельное соединение в режиме AUTOCOMMIT.
+                with engine.connect().execution_options(
+                    isolation_level="AUTOCOMMIT"
+                ) as conn:
+                    conn.execute(text("VACUUM"))
+                    conn.execute(text("ANALYZE"))
+                audit("vacuum_analyze", result="ok")
+                last = "VACUUM/ANALYZE выполнены."
+            session["last_action"] = last
+            flash(last, "ok")
+            return redirect(url_for("actions_page"))
+        return render("actions", page="actions", last=last)
+
+    return app
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Веб-админка поверх БД профайлера")
+    ap.add_argument("--db", default=None, help="PostgreSQL URL (иначе ENV DATABASE_URL)")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8777)
+    args = ap.parse_args()
+
+    load_dotenv(BASE_DIR / ".env")
+    from app.models.db import DEFAULT_DATABASE_URL
+
+    db = args.db or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
+    app = create_app(db)  # внутри — fail-fast, если это не PostgreSQL
+    print(f"Admin UI: http://{args.host}:{args.port}  (db={db})")
+    app.run(host=args.host, port=args.port, debug=False)

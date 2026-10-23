@@ -1,0 +1,45 @@
+<h2>{{ table }} · запись {{ pk }}</h2>
+    <p class='muted'><a href="{{ url_for('browse', table=table) }}">← к таблице</a></p>
+    <form method='post' class='card'>
+      <table style='background:transparent'>{% for f in fields %}
+      <tr>
+<td style='width:260px;border:0;padding:.3rem .6rem .3rem 0;white-space:normal'>
+  <b>{{ f.name }}</b>
+  <div class='muted'>{{ f.type }}{% if f.pk %} · PK{% endif %}{% if not f.nullable and not f.pk %} · обяз.%{% endif %}</div>
+</td>
+<td border='0' style='border:0;white-space:normal'>
+  {% if f.pk %}
+    <input type='text' value='{{ f.value }}' readonly style='background:#eee'>
+  {% elif f.kind == 'bool' %}
+    <select name='fld_{{ f.name }}' style='width:auto'>
+      {% if f.nullable %}<option value='' {{ 'selected' if f.value is none }}>NULL</option>{% endif %}
+      <option value='1' {{ 'selected' if f.value }}>true</option>
+      <option value='0' {{ 'selected' if (not f.value and f.value is not none) or (f.value is none and not f.nullable) }}>false</option>
+    </select>
+  {% elif f.kind in ('textarea',) %}
+    <textarea name='fld_{{ f.name }}'>{{ f.value if f.value is not none else '' }}</textarea>
+  {% else %}
+    <input type='text' name='fld_{{ f.name }}'
+           value='{{ f.value if f.value is not none else "" }}'
+           placeholder='{{ "пусто = NULL" if f.nullable else "обязательное поле" }}'>
+  {% endif %}
+</td>
+      </tr>{% endfor %}</table>
+      <br><button class='btn'>💾 Сохранить изменения</button>
+      <a class='btn gray' href='{{ url_for("browse", table=table) }}'>отмена</a>
+    </form>
+    {% if related %}
+    <div class='card'><h4>Связанные данные пользователя {{ uid }}</h4>
+      {% if related[0].count is defined %}
+<p>{% for r in related %}<a href="{{ url_for('browse', table=r.table) }}?col=user_id&val={{ uid }}">{{ r.table }}: {{ r.count }}</a>{{ ' · ' if not loop.last }}{% endfor %}</p>
+      {% else %}
+{% for block in related %}
+<h5><a href="{{ url_for('browse', table=block.table) }}?col=user_id&val={{ uid }}">{{ block.table }}</a> <span class='muted'>(до {{ block.rows|length }})</span></h5>
+<div style='overflow:auto'><table><tr>{% for c in block.cols %}<th>{{ c }}</th>{% endfor %}</tr>
+  {% for row2 in block.rows %}<tr>
+    {% for v in row2 %}<td title='{{ v }}'>{% if loop.index0 == 0 %}<a href="{{ url_for('record', table=block.table, pk=block.pks[loop.index0]) }}">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
+  </tr>{% endfor %}</table></div>
+{% endfor %}
+      {% endif %}
+    </div>
+    {% endif %}

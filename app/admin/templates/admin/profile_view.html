@@ -1,0 +1,50 @@
+<h2>Психопрофиль · запись {{ p.id }}</h2>
+    <p class='muted'><a href="{{ url_for('browse', table='psych_profiles') }}">← к списку</a> ·
+       <a href="{{ url_for('record', table='psych_profiles', pk=p.id) }}">редактировать сырые поля</a> ·
+       <a href="/browse/user_profiles?col=user_id&val={{ p.user_id }}">профиль пользователя</a></p>
+    {% if can_refresh %}
+    <form method='post' action='/psych/refresh/{{ p.user_id }}' style='margin:.4rem 0'
+  onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Пересобрать дело, отправить в бесплатный LLM API и сохранить новую версию профиля? Текущая станет архивной.');">
+      <button class='btn'>🧠 Обновить психо профиль</button>
+      <span class='muted'> — заново собрать дело из БД и получить ответ модели по API</span>
+    </form>
+    {% endif %}
+    <div class='card'>
+      <b>{{ username or p.user_id }}</b> · модель: {{ p.model or '?' }} ·
+      анализ за {{ p.period_from or '?' }} .. {{ p.period_to or '?' }},
+      сообщений: {{ p.messages_analyzed if p.messages_analyzed is not none else '?' }} ·
+      версия: {{ 'актуальная' if p.is_current else 'архивная' }} · создано {{ p.created_at }}
+    </div>
+    <div class='card'><h4>Big Five</h4>
+      <table><tr><th>открытость</th><th>добросовестность</th><th>экстраверсия</th><th>доброжелательность</th><th>нейротизм</th></tr>
+      <tr><td>{{ bf.openness }}</td><td>{{ bf.conscientiousness }}</td><td>{{ bf.extraversion }}</td>
+  <td>{{ bf.agreeableness }}</td><td>{{ bf.neuroticism }}</td></tr></table></div>
+    <div class='card'><h4>Типологии (гипотезы)</h4>
+      <p><b>MBTI:</b> {{ res.mbti.type if res.get('mbti') else p.mbti_type }}
+ alt: {{ (res.mbti.alt or [])|join(', ') if res.get('mbti') else '—' }}
+ confidence: {{ p.mbti_confidence }}</p>
+      <p><b>Эннеаграмма:</b> {{ res.enneagram.type if res.get('enneagram') else p.enneagram_type }}
+ alt: {{ (res.enneagram.alt or [])|join(', ') if res.get('enneagram') else '—' }}
+ confidence: {{ p.enneagram_confidence }}</p>
+      <p><b>Style:</b> {{ res.style or '—' }}</p>
+      <p><b>Tone:</b> {{ (res.tone or {}).get('dominant','—') }} ·
+ triggers: {{ ((res.tone or {}).get('triggers') or [])|join('; ') }}</p>
+      <p><b>Confidence overall:</b> {{ p.confidence_overall }} · max severity: {{ p.severity_max or '—' }}</p></div>
+    <div class='card'><h4>Интересы</h4>
+      {% if interests %}<ul>{% for i in interests %}
+<li><b>{{ i.topic }}</b> (×{{ i.evidence_count }}) — {{ i.evidence or '' }}</li>{% endfor %}</ul>
+      {% else %}<p class='muted'>пусто</p>{% endif %}</div>
+    <div class='card'><h4>Риск-флаги</h4>
+      {% if risks %}<table><tr><th>флаг</th><th>severity</th><th>пример</th></tr>
+{% for r in risks %}<tr><td>{{ r.flag }}</td>
+<td style='{{ "color:#c62828;font-weight:700" if r.severity=="high" else ("color:#e65100" if r.severity=="med" else "") }}'>{{ r.severity }}</td>
+<td class='json'>{{ r.evidence }}</td></tr>{% endfor %}</table>
+      {% else %}<p class='muted'>нет</p>{% endif %}</div>
+    <div class='card'><h4>Сигналы (psych_signals, дедуп)</h4>
+      {% if signals %}<table><tr><th>signal</th><th>цитата</th><th>сообщение</th><th>context</th></tr>
+{% for s in signals %}<tr><td>{{ s.signal_key }}</td><td class='json'>{{ s.quote }}</td>
+<td>{% if s.message_id %}<a href="/browse/messages/{{ s.message_id }}">{{ s.message_id }}</a>{% else %}—{% endif %}</td>
+<td>{{ s.context or '' }}</td></tr>{% endfor %}</table>
+      {% else %}<p class='muted'>пусто</p>{% endif %}</div>
+    <div class='card'><h4>Полный JSON ответа</h4>
+      <pre class='sql' style='max-height:500px'>{{ raw_json_pretty }}</pre></div>

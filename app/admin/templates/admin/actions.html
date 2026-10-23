@@ -1,0 +1,7 @@
+<h2>Админ-действия</h2>
+    <div class='card'><h4>VACUUM + ANALYZE (PostgreSQL)</h4>
+    <p class='muted'>Очистка мёртвых кортежей и пересчёт статистики планировщика
+    (VACUUM выполняется вне транзакции).</p>
+    <form method='post'><input type='hidden' name='op' value='vacuum'>
+    <button class='btn warn'>Выполнить</button></form></div>
+    {% if last %}<div class='card'><h4>Последний результат</h4><pre>{{ last }}</pre></div>{% endif %}

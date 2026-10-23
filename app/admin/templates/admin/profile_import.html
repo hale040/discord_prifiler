@@ -1,0 +1,28 @@
+<h2>Импорт ответа нейросети</h2>
+    <p class='muted'>JSON-ответ LLM сохраняется как новая версия психопрофиля:
+    метрики — в колонки, полный ответ — в result_json, evidence — в psych_signals
+    (дедуп по цитате), interests — в user_interests (накопление между срезами).
+    Дисклеймер не хранится: фиксируется период и число сообщений.</p>
+    {% if users %}
+    <form method='post' class='card'>
+      <label>Пользователь:</label>
+      <select name='user_id'>{% for u in users %}
+<option value='{{ u.id }}' {{ 'selected' if sel==u.id|string }}>{{ u.username }} ({{ u.id }}){% if u.priority %} ★{% endif %}</option>
+      {% endfor %}</select>
+      <br><br><label>Модель анализа (model):</label>
+      <input type='text' name='model' value='{{ model or "" }}' placeholder='openrouter:deepseek/deepseek-chat-v3.1:free'>
+      <div style='display:flex;gap:.5rem'>
+<div style='flex:1'><label class='muted'>период с (ГГГГ-ММ-ДД):</label>
+  <input type='text' name='period_from' value='{{ period_from or "" }}'></div>
+<div style='flex:1'><label class='muted'>период по:</label>
+  <input type='text' name='period_to' value='{{ period_to or "" }}'></div>
+<div style='flex:1'><label class='muted'>сообщений проанализировано:</label>
+  <input type='text' name='messages' value='{{ messages or "" }}'></div>
+      </div>
+      <br><label>JSON-ответ нейросети:</label>
+      <textarea name='answer' placeholder='{&quot;big_five&quot;: {...}, &quot;mbti&quot;: {...}}'>{{ answer or "" }}</textarea>
+      <br><br><button class='btn'>💾 Импортировать профиль</button>
+    </form>
+    {% else %}
+    <div class='flash err'>Нет пользователей в базе — сначала запустите сбор (python main.py).</div>
+    {% endif %}
