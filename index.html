@@ -22,6 +22,7 @@
         <a href="#catalog" class="nav__link">Каталог</a>
         <a href="#advantages" class="nav__link">Преимущества</a>
         <a href="#pricing" class="nav__link">Прайс-лист</a>
+        <a href="#docs" class="nav__link">Документы</a>
         <a href="#calculator" class="nav__link">Калькулятор</a>
         <a href="#about" class="nav__link">О компании</a>
         <a href="#contacts" class="nav__link">Контакты</a>
@@ -228,6 +229,40 @@
             <div>Итого: <span id="calcSum">—</span></div>
             <button class="btn btn--accent" id="calcOrder">Отправить расчёт менеджеру</button>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== DOCUMENTS ===== -->
+    <section class="section section--alt" id="docs">
+      <div class="container">
+        <h2 class="section__title">Документы и скачивания</h2>
+        <p class="section__subtitle">Актуальные прайсы, шаблоны документов и сертификаты.</p>
+        <div class="docs__grid">
+          <article class="doc-card reveal">
+            <span class="doc-card__badge doc-card__badge--pdf">PDF</span>
+            <h3>Прайс-лист «СтальПром»</h3>
+            <p>Цены за тонну, наличие на складе. Обновлено 01.10.2026.</p>
+            <button type="button" class="btn btn--outline btn--sm" data-doc="price-pdf">⬇ Скачать PDF</button>
+          </article>
+          <article class="doc-card reveal">
+            <span class="doc-card__badge doc-card__badge--csv">CSV</span>
+            <h3>Прайс для Excel</h3>
+            <p>Таблица с разделителем «;» и BOM — открывается в Excel корректно.</p>
+            <button type="button" class="btn btn--outline btn--sm" data-doc="price-csv">⬇ Скачать CSV</button>
+          </article>
+          <article class="doc-card reveal">
+            <span class="doc-card__badge doc-card__badge--doc">DOCX</span>
+            <h3>Заявка на поставку</h3>
+            <p>Шаблон заявки: заполните и отправьте — подготовим счёт в течение часа.</p>
+            <button type="button" class="btn btn--outline btn--sm" data-doc="request-docx">⬇ Скачать DOCX</button>
+          </article>
+          <article class="doc-card reveal">
+            <span class="doc-card__badge doc-card__badge--cert">ГОСТ</span>
+            <h3>Сертификаты качества</h3>
+            <p>Сертификаты соответствия ГОСТ на весь ассортимент со склада.</p>
+            <button type="button" class="btn btn--outline btn--sm" data-doc="certs">⬇ Скачать</button>
+          </article>
         </div>
       </div>
     </section>

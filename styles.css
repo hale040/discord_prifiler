@@ -286,3 +286,44 @@ main > .section:not(.section--dark) .price__note { color: #5b6672; }
   .hero { padding: 4rem 0 3rem; }
   .section { padding: 3.2rem 0; }
 }
+
+/* ===== Раздел «Документы и скачивания» ===== */
+.section--alt { background: #f4f5f7; }
+.docs__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+}
+.doc-card {
+  background: var(--card, #fff);
+  border: 1px solid rgba(0,0,0,.08);
+  border-radius: 12px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+  transition: transform .25s ease, box-shadow .25s ease;
+}
+.doc-card:hover { transform: translateY(-4px); box-shadow: 0 10px 24px rgba(0,0,0,.12); }
+.doc-card h3 { font-size: 1.05rem; margin: 0; }
+.doc-card p { color: var(--muted, #6b7280); font-size: .9rem; margin: 0; flex: 1; }
+.doc-card__badge {
+  align-self: flex-start;
+  font-weight: 700;
+  font-size: .75rem;
+  letter-spacing: .04em;
+  padding: .3rem .6rem;
+  border-radius: 6px;
+  color: #fff;
+}
+.doc-card__badge--pdf  { background: #c0392b; }
+.doc-card__badge--csv  { background: #1e8449; }
+.doc-card__badge--doc  { background: #2471a3; }
+.doc-card__badge--cert { background: #b9770e; }
+.btn--outline {
+  background: transparent;
+  border: 1.5px solid var(--accent, #e67e22);
+  color: var(--accent, #e67e22);
+}
+.btn--outline:hover { background: var(--accent, #e67e22); color: #fff; }
+.btn--sm { padding: .5rem .9rem; font-size: .85rem; }
