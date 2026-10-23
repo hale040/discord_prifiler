@@ -27,7 +27,7 @@
     psych_signals + user_interests через app.services.analysis_importer.
   * Автосборка психопрофиля (кнопка «🧠 Обновить психо профиль» в ленте
     user_profiles и карточке профиля, POST /psych/refresh/<user_id>):
-    дело+промпт из PostgreSQL (export_profiles.build_prompt_for_user) ->
+    дело+промпт из PostgreSQL (profile_export.build_prompt_for_user) ->
     бесплатный OpenRouter API (app/services/llm_client) -> import_analysis.
     Настройки: LLM_API_KEY / LLM_MODEL / LLM_BASE_URL в .env (см. README).
   * Читаемый вид психопрофиля (/profile/<id>) со сигналами и интересами.
@@ -1248,7 +1248,7 @@ def create_app(database_url: str) -> Flask:
     def psych_refresh(user_id: int):
         """Кнопка «Обновить психо профиль»: БД -> промпт -> бесплатный LLM API -> запись.
 
-        1) export_profiles.build_prompt_for_user собирает «дело» пользователя
+        1) profile_export.build_prompt_for_user собирает «дело» пользователя
            из PostgreSQL и готовый markdown-промпт (та же сборка, что и CLI);
         2) app.services.llm_client.analyze_prompt прогоняет его через OpenRouter
            (модель из LLM_MODEL, по умолчанию deepseek/deepseek-chat-v3.1:free);
@@ -1265,17 +1265,10 @@ def create_app(database_url: str) -> Flask:
             abort(404)
         audit("psych_refresh_start", target=f"user={user_id}", result="start")
         try:
-            import importlib.util as _ilu
-
             from app.services import llm_client
+            from app.services.profile_export import build_prompt_for_user
 
-            # экспортёр лежит файлом в корне проекта (не пакет) — грузим по пути
-            ep = BASE_DIR / "export_profiles.py"
-            spec = _ilu.spec_from_file_location("export_profiles_api", ep)
-            epmod = _ilu.module_from_spec(spec)
-            spec.loader.exec_module(epmod)
-
-            info = epmod.build_prompt_for_user(
+            info = build_prompt_for_user(
                 app.config["DATABASE_URL"], user_id)
             answer, model_used, ph = llm_client.analyze_prompt(info["prompt"])
 
