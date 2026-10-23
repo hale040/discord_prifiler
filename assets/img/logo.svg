@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- Тестовый логотип «СтальПром»: стальные балки + оранжевый акцент -->
+  <rect x="2" y="2" width="44" height="44" rx="10" fill="#171b21"/>
+  <g fill="#ff7a1a">
+    <path d="M9 12h12v3.5H16.5v17H21V36H9v-3.5h4.5v-17H9z"/>
+  </g>
+  <g fill="#aab4c0">
+    <path d="M26 12h13v3.5h-4.5v17H39V36H26v-3.5h4.5v-17H26z"/>
+  </g>
+</svg>

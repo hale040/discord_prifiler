@@ -59,7 +59,7 @@ a { color: inherit; text-decoration: none; }
   gap: 1.5rem; padding: .9rem 0;
 }
 .logo { display: flex; align-items: center; gap: .6rem; }
-.logo__icon { color: var(--accent); font-size: 1.4rem; letter-spacing: -3px; }
+.logo__icon { width: 40px; height: 40px; display: block; }
 .logo__text { font-size: 1.3rem; font-weight: 300; line-height: 1.1; }
 .logo__text b { color: var(--accent); font-weight: 800; }
 .logo__text small { display: block; font-size: .65rem; color: var(--muted); letter-spacing: .05em; }
@@ -86,8 +86,8 @@ a { color: inherit; text-decoration: none; }
   padding: 6rem 0 4rem;
   background:
     radial-gradient(circle at 80% 10%, rgba(255,122,26,.12), transparent 45%),
-    linear-gradient(rgba(20,24,29,.75), rgba(20,24,29,.9)),
-    repeating-linear-gradient(45deg, #1a1f26 0 20px, #171b21 20px 40px);
+    linear-gradient(rgba(20,24,29,.78), rgba(20,24,29,.92)),
+    url("assets/img/hero-steel.jpg") center/cover no-repeat;
   text-align: center;
 }
 .hero__title { font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 800; margin-bottom: 1rem; }
@@ -128,7 +128,12 @@ main > .section:not(.section--dark) .price__note { color: #5b6672; }
   display: flex; flex-direction: column; gap: .5rem;
 }
 .card:hover { transform: translateY(-5px); box-shadow: 0 12px 28px rgba(0,0,0,.12); }
-.card__img { font-size: 2.4rem; }
+.card__media { border-radius: 10px; overflow: hidden; margin-bottom: 1rem; aspect-ratio: 3 / 2; background: #e6eaf0; }
+.card__media img { width: 100%; height: 100%; object-fit: cover; transition: transform .4s ease; }
+.card:hover .card__media img { transform: scale(1.06); }
+.about__media { margin: 0 0 1.5rem; }
+.about__media img { border-radius: var(--radius); box-shadow: 0 14px 34px rgba(0,0,0,.12); }
+.about__media figcaption { font-size: .85rem; color: var(--muted); margin-top: .5rem; text-align: center; }
 .card__title { font-size: 1.15rem; }
 .card__desc { font-size: .9rem; color: #5b6672; flex: 1; }
 .card__price { font-weight: 800; color: var(--accent-dark); }
