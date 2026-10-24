@@ -655,6 +655,24 @@ def create_app(database_url: str) -> Flask:
             row = conn.execute(
                 sa_select(sa_tbl).where(sa_tbl.columns[pk_col] == pk_val)
             ).mappings().first()
+        # Удобные ссылки вида /browse/user_profiles/<user_id>: если значение
+        # не совпало с PK (id), пробуем найти запись по user_id — и дальше
+        # работаем уже с настоящим PK, чтобы redirect/ссылки были корректны.
+        if row is None and table == "user_profiles" \
+                and pk_col != "user_id" and "user_id" in sa_tbl.columns:
+            try:
+                uid_val_ = int(pk)
+            except ValueError:
+                uid_val_ = None
+            if uid_val_ is not None:
+                with engine.connect() as conn:
+                    row = conn.execute(
+                        sa_select(sa_tbl).where(
+                            sa_tbl.columns.user_id == uid_val_)
+                    ).mappings().first()
+                if row is not None:
+                    pk = str(row[pk_col])
+                    pk_val = row[pk_col]
         if row is None:
             abort(404, description=f"Запись {table}.{pk} не найдена")
 
@@ -799,7 +817,12 @@ def create_app(database_url: str) -> Flask:
         with engine.begin() as conn:
             n = conn.execute(
                 sa_update(sa_tbl).where(sa_tbl.columns.user_id == user_id)
-                .values(dm_fetch=bool(enabled))
+                .values(
+                    dm_fetch=bool(enabled),
+                    # включение кнопки сбрасывает диагностику сбоев (v12):
+                    # пользователь явно хочет продолжить — dm-loop возобновит
+                    **({"dm_fail_count": 0, "dm_last_error": None} if enabled else {})
+                )
             ).rowcount
         if n == 0 and enabled:
             # профиля ещё нет (пользователь виден только по id из сообщений) —

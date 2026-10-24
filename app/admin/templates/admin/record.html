@@ -60,6 +60,11 @@
       <p class='muted'>ЛС: включён · сообщений сохранено: {{ values.get('dm_messages_total') or 0 }} ·
         канал {{ values.get('dm_channel_id') or '—' }} ·
         последняя синхронизация: {{ values.get('dm_synced_at') or 'ещё не выполнялась (ждём следующий тик dm-loop)' }}</p>
+      {% if values.get('dm_last_error') %}
+      <p class='warn'>⚠ ЛС: {{ values.get('dm_last_error') }}
+        {# после серии сбоев dm-loop приостанавливает пользователя; повторное
+           нажатие «💬 Собрать ЛС» сбросит счётчик и возобновит сбор #}</p>
+      {% endif %}
       {% endif %}
       <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
             onsubmit="return confirm('Удалить строку {{ table }}={{ pk }} без возврата?');">

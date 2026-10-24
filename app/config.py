@@ -57,6 +57,11 @@ class Settings:
         default_factory=lambda: os.getenv("DM_FULL_RESCAN", "").strip().lower()
         in {"1", "true", "yes", "on"}
     )
+    # После N подряд идущих сбоев ЛС-цикла для пользователя (например,
+    # «нет доступа к ЛС» 403) сбор приостанавливается — предупреждение не
+    # будет повторяться вечно. Возобновить: выключить/включить «💬 Собрать ЛС».
+    dm_max_consecutive_fails: int = field(
+        default_factory=lambda: _env_int("DM_MAX_CONSECUTIVE_FAILS", 5))
     # Сохранять полный сырой JSON сообщений в messages.raw_json (диск).
     # По умолчанию ВЫКЛЮЧЕНО: все нужные поля уже смаплены в колонки, а
     # raw_json раздувал базу в разы. Включить: STORE_RAW_JSON=1.

@@ -470,18 +470,38 @@ class CollectionService:
                     break
                 try:
                     await self._sync_dm_for(uid)
-                except discord.Forbidden:
+                except discord.Forbidden as exc:
                     # Причина в discord.py-self — там Forbidden поднимается и
                     # на 403, и на «нет канала/закрытый ЛС» (code 20003/50001).
-                    log.warning(
-                        "dm-loop %s: нет доступа к ЛС. Возможные причины: "
-                        "(1) у пользователя закрыты ЛС от не-друзей / вы его "
-                        "заблокировали; (2) диалог удалён; (3) взаимных друзей "
-                        "нет. Если ЛС откроются — цикл подхватит сам.", uid)
-                except Exception:  # noqa: BLE001
+                    await self._dm_fail(
+                        uid,
+                        f"нет доступа к ЛС ({exc}); причины: закрытые ЛС от "
+                        "не-друзей / блокировка / диалог удалён")
+                except Exception as exc:  # noqa: BLE001
                     log.exception("dm-loop: сбой выгрузки ЛС для %s", uid)
+                    await self._dm_fail(uid, f"{type(exc).__name__}: {exc}")
+                else:
+                    # успешный проход — очищаем диагностику
+                    await asyncio.to_thread(
+                        self.repo.update_dm_cursor, uid, last_error=None, fail_count=0)
                 await human_delay(3.0, 6.0)  # пауза между пользователями
             await asyncio.sleep(getattr(self.s, "dm_poll_interval_sec", 300))
+
+    async def _dm_fail(self, user_id: int, reason: str) -> None:
+        """Записать сбой ЛС-цикла; после серии — приостановить пользователя."""
+        limit = int(getattr(self.s, "dm_max_consecutive_fails", 5) or 5)
+        prof = await asyncio.to_thread(self.repo.get_user, user_id)
+        n = int(getattr(prof, "dm_fail_count", 0) or 0) + 1 if prof else 1
+        msg = reason
+        if n >= limit:
+            msg = (f"{reason} · сбор ПРИОСТАНОВЛЕН после {n} сбоев подряд — "
+                   "выключите и снова включите «💬 Собрать ЛС», когда ЛС откроются")
+            log.warning("dm-loop %s: %s", user_id, msg)
+        else:
+            log.warning("dm-loop %s: нет доступа к ЛС (%d/%d): %s",
+                        user_id, n, limit, reason)
+        await asyncio.to_thread(
+            self.repo.update_dm_cursor, user_id, last_error=msg[:900], fail_count=n)
 
     def _find_cached_dm(self, user_id: int):
         """Найти существующий DM-канал с пользователем в кэше клиента.

@@ -512,6 +512,25 @@ def _v11_dm_collection(engine: Engine) -> None:
     log.info("Миграция v11: ЛС-сбор (dm_* колонки + индекс) готов.")
 
 
+def _v12_dm_diagnostics(engine: Engine) -> None:
+    """v12: диагностика ЛС-цикла.
+
+    dm_last_error — человекочитаемая причина последнего сбоя (403/нет канала),
+    dm_fail_count — число подряд идущих сбоев. После DM_MAX_CONSECUTIVE_FAILS
+    dm-loop приостанавливает сбор для пользователя (и пишет это в dm_last_error),
+    чтобы предупреждение «нет доступа к ЛС» не повторялось вечно. Кнопка
+    «💬 Собрать ЛС» (повторное включение) сбрасывает счётчик и возобновляет.
+    """
+    ddl = [
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_last_error TEXT",
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_fail_count INTEGER DEFAULT 0",
+    ]
+    with engine.begin() as conn:
+        for stmt in ddl:
+            conn.execute(text(stmt))
+    log.info("Миграция v12: диагностика ЛС-сбора (dm_last_error, dm_fail_count) готова.")
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
@@ -524,6 +543,7 @@ MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("postgres: BIGINT+bigserial PK, TIMESTAMPTZ timestamps", _v09_postgres_schema),
     ("v10: message_revisions, reaction_events, presence_snapshots, interaction_aggregates + триггеры", _v10_dynamic_signals),
     ("v11: ЛС-сбор — флаги/курсоры в user_profiles (dm_fetch, dm_channel_id, dm_last_message_id)", _v11_dm_collection),
+    ("v12: диагностика ЛС-сбора — dm_last_error, dm_fail_count (пауза после серии сбоев)", _v12_dm_diagnostics),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

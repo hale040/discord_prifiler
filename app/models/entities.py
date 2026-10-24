@@ -125,6 +125,12 @@ class UserProfile(Base):
         DateTime(timezone=True), nullable=True
     )
     dm_messages_total: Mapped[int] = mapped_column(Integer, default=0)
+    # Диагностика (миграция v12): последняя ошибка ЛС-цикла и счётчик
+    # подряд идущих сбоев. После DM_MAX_CONSECUTIVE_FAILS (по умолч. 5)
+    # сбор для пользователя приостанавливается — чтобы «нет доступа к ЛС»
+    # не повторялось каждые 5 минут вечно.
+    dm_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dm_fail_count: Mapped[int] = mapped_column(Integer, default=0)
     premium_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Локаль/часовой пояс, если доступны

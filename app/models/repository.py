@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.entities import (
@@ -240,11 +240,20 @@ class Repository:
             )}
 
     def dm_fetch_user_ids(self) -> list[int]:
-        """user_id пользователей, у которых включён сбор ЛС (dm_fetch = True)."""
+        """user_id пользователей, у которых включён сбор ЛС (dm_fetch = True).
+
+        Приостановленные после серии сбоев (dm_fail_count >= 5) не
+        возвращаются — чтобы «нет доступа к ЛС» не повторялось вечно.
+        Повторное нажатие кнопки в админке сбрасывает счётчик.
+        """
         with self._sf() as s:
             return list(s.scalars(
                 select(UserProfile.user_id)
                 .where(UserProfile.dm_fetch.is_(True))
+                .where(or_(
+                    UserProfile.dm_fail_count.is_(None),
+                    UserProfile.dm_fail_count < 5,
+                ))
                 .order_by(UserProfile.user_id)
             ))
 
@@ -258,12 +267,17 @@ class Repository:
         messages_total: int | None = None,
         synced: bool = False,
         reset_cursor: bool = False,
+        last_error: str | None = ...,
+        fail_count: int | None = ...,
     ) -> None:
         """Прдвинуть курсоры ЛС-выгрузки. synced=True — поставить dm_synced_at=now.
 
         oldest_message_id записывается только если он меньше текущего курса
         (или курсора нет) — курсор всегда указывает на самый старый загруженный
         id, чтобы рестарт не пропускал и не повторял сообщения.
+
+        last_error/fail_count (миграция v12): диагностика сбоев. Sentinel `...`
+        означает «не трогать»; None для last_error — очистить ошибку.
         """
         from sqlalchemy import update
         with self._sf() as s:
@@ -276,6 +290,10 @@ class Repository:
                 vals["dm_first_message_id"] = newest_message_id
             if synced:
                 vals["dm_synced_at"] = datetime.now(timezone.utc)
+            if last_error is not ...:
+                vals["dm_last_error"] = last_error
+            if fail_count is not ...:
+                vals["dm_fail_count"] = fail_count
             if reset_cursor:
                 # ЛС-диалог открылся после «нет доступа» или канал сменился:
                 # старые курсоры невалидны — начинаем выгрузку заново.
@@ -284,6 +302,8 @@ class Repository:
                     "dm_last_message_id": None,
                     "dm_first_message_id": None,
                     "dm_messages_total": 0,
+                    "dm_last_error": None,
+                    "dm_fail_count": 0,
                 })
             if vals:
                 s.execute(
