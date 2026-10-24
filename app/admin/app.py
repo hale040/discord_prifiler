@@ -789,7 +789,8 @@ def create_app(database_url: str) -> Flask:
         истории диалога, далее — дешёвый инкремент новых сообщений).
         """
         enabled = request.form.get("enabled", "1") in ("1", "true", "on")
-        if not engine.has_table("user_profiles"):
+        # Engine не имеет has_table — только через Inspector (в SQLAlchemy 2.x)
+        if "user_profiles" not in inspect(engine).get_table_names():
             abort(404)
         sa_tbl = Table("user_profiles", MetaData(), autoload_with=engine)
         if "dm_fetch" not in sa_tbl.columns:
