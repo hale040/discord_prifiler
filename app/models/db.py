@@ -1,6 +1,7 @@
 """Инициализация БД (PostgreSQL + SQLAlchemy 2.x)."""
 from __future__ import annotations
 
+import logging
 import os
 import re
 
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.models.entities import Base
+
+log = logging.getLogger(__name__)
 
 # Значение по умолчанию — PostgreSQL (SQLite больше не поддерживается).
 DEFAULT_DATABASE_URL = "postgresql+psycopg://profiler:profiler@localhost:5682/profiling"
@@ -58,18 +61,45 @@ def ensure_schema(engine) -> None:
     exist). Миграционный модуль идемпотентен: сам читает версию схемы из
     таблицы schema_migrations и применяет только недостающие шаги.
     """
-    from app.models.migrations import get_current_version, migrate, stamp_baseline
+    from app.models.migrations import (
+        LATEST_VERSION,
+        _columns,
+        _table_exists,
+        get_current_version,
+        migrate,
+        run_migrations,
+        stamp_baseline,
+    )
 
     try:
         # Порядок важен: migrate() сам читает версию схемы. Если таблицу версий
         # стемпить LATEST до проверки (stamp_baseline это делает безусловно),
         # база, созданная до v10/v11, будет считаться актуальной и недостающие
         # шаги никогда не применятся — отсюда UndefinedColumn на dm_fetch.
-        if get_current_version(engine) > 0:
+        version = get_current_version(engine)
+        if version > 0:
             migrate(engine)     # старая БД: ALTER'ом добавить новые таблицы/колонки
+        elif _table_exists(engine, "messages"):
+            # Stray-БД: таблицы есть, но версии нулевые (миграции включены
+            # позже create_all). run_migrations сам определяет физическое
+            # состояние схемы и применит недостающие шаги (v10/v11).
+            run_migrations(engine)
         else:
-            stamp_baseline(engine)  # fresh-БД (или ad-hoc): проставить LATEST;
-            migrate(engine)         # run_migrations сам разберётся с stray-базой
+            stamp_baseline(engine)  # fresh-БД: создать таблицы версий + v9-нормы
+        # Финальная страховка (физическая проверка, независимо от версии):
+        # если после всех шагов в схеме чего-то не хватает из LATEST —
+        # применяем недостающие миграции напрямую. Это исключает ситуацию,
+        # когда код модели ссылается на колонку, которой нет в живой БД
+        # (psycopg.errors.UndefinedColumn: column user_profiles.dm_fetch...).
+        if (
+            _table_exists(engine, "user_profiles")
+            and "dm_fetch" not in _columns(engine, "user_profiles")
+        ):
+            log.warning(
+                "ensure_schema: колонка dm_fetch отсутствует — принудительный "
+                "прогон run_migrations (доведёт схему до v%s).", LATEST_VERSION,
+            )
+            run_migrations(engine)
     except Exception as exc:  # noqa: BLE001
         import logging
 
