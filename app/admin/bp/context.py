@@ -39,8 +39,9 @@ VIEW_COLUMNS: dict[str, list[str]] = {
         "reaction_total",
     ],
     "user_profiles": [
-        "id", "user_id", "username", "global_name", "priority",
-        "created_at_discord", "bot", "about", "premium_type", "last_updated",
+        "id", "user_id", "username", "global_name", "dm_fetch",
+        "dm_messages_total", "created_at_discord", "bot", "about",
+        "premium_type", "last_updated",
     ],
     "guild_member_profiles": [
         "id", "user_id", "guild_id", "nick", "joined_at", "timeout_until",

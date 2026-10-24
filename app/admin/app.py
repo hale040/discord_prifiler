@@ -351,6 +351,37 @@ def create_app(database_url: str) -> Flask:
         except Exception:
             return None
 
+    def psych_map_for(user_ids: list) -> dict:
+        """Один запрос: user_id -> актуальный профиль {id, model, mbti_type}.
+
+        Для ленты профилей: бейдж 🧠 без N+1 (раньше на каждую строку шёл
+        отдельный current_psych()). Возвращает {} при любой ошибке — лента
+        должна переживать отсутствие таблицы/колок.
+        """
+        ids = [int(u) for u in user_ids if str(u).lstrip("-").isdigit()]
+        if not ids or "psych_profiles" not in tables():
+            return {}
+        try:
+            pp = Table("psych_profiles", MetaData(), autoload_with=engine)
+            cols = set(pp.columns.keys())
+            sel_cols = [pp.columns.user_id, pp.columns.id]
+            if "mbti_type" in cols:
+                sel_cols.append(pp.columns.mbti_type)
+            q = sa_select(*sel_cols).where(pp.columns.user_id.in_(ids))
+            if "is_current" in cols:
+                q = q.where(pp.columns.is_current.is_(True))
+            if "created_at" in cols:
+                q = q.order_by(pp.columns.created_at.desc())
+            out: dict[int, dict] = {}
+            with engine.connect() as conn:
+                for r in conn.execute(q).all():
+                    # первый на каждого пользователя = самый свежий (DESC)
+                    if r[0] not in out:
+                        out[r[0]] = {"id": r[1], "mbti_type": (r[2] if len(r) > 2 else None)}
+            return out
+        except Exception:
+            return {}
+
     def editable_fields(sa_tbl: Table) -> list[dict]:
         """Редактируемые поля записи по схеме SQLAlchemy (тип/nullable/PK)."""
         fields = []
@@ -625,15 +656,11 @@ def create_app(database_url: str) -> Flask:
             {"pk": r[pk], "cells": [fmt_cell(r[c]) for c in cols]}
             for r in rows_raw
         ]
-        # «Обновить психо профиль»: user_id -> актуальная версия профиля (для ленты)
+        # «Обновить психо профиль»: user_id -> актуальная версия профиля (лента).
+        # Один IN-запрос вместо N вызовов current_psych() на страницу.
         psych_map: dict[str, dict | None] = {}
         if table == "user_profiles" and "user_id" in cols:
-            for r in rows_raw:
-                try:
-                    uid_key = str(r["user_id"])
-                except Exception:
-                    continue
-                psych_map[uid_key] = current_psych(uid_key) if uid_key.isdigit() else None
+            psych_map = psych_map_for([r["user_id"] for r in rows_raw])
         # Подписи user_id -> @username для колонок-ссылок (одним запросом).
         uids = {r["cells"][cols.index("user_id")][0] for r in rows} \
             if "user_id" in cols else set()
@@ -656,6 +683,38 @@ def create_app(database_url: str) -> Flask:
                 base += "&cur=" + cur
             return base
 
+        # Ширины колонок ленты: PK/статусы узкие, тексты — резиновые.
+        # Один источник правды для <colgroup>: таблица никогда не расползается
+        # за экран (главный жалобщик был горизонтальный скролл).
+        WIDE = {"about", "content", "clean_content", "prev_content", "new_content",
+                "quote", "evidence", "status_text", "raw_json", "details",
+                "context", "filename", "activity_name", "top_role", "target",
+                "result", "action"}
+        NARROW = {pk: "70px"}
+        for c in cols:
+            if c == pk:
+                continue
+            if c in ("user_id", "author_id", "message_id", "channel_id", "guild_id",
+                     "reply_to_author_id", "msg_author_id", "source_user_id",
+                     "target_user_id"):
+                NARROW[c] = "128px"
+            elif c in ("timestamp", "created_at", "last_updated", "edited_at",
+                       "occurred_at", "observed_at", "dm_synced_at", "joined_at",
+                       "created_at_discord", "period_from", "period_to",
+                       "first_seen", "last_seen", "updated_at", "taken_at",
+                       "recorded_at", "last_poll_at"):
+                NARROW[c] = "132px"
+            elif c in ("priority", "bot", "is_system", "mute", "deaf", "emoji",
+                       "action", "kind", "status", "mbti_type", "severity",
+                       "severity_max", "confidence_overall", "mbti_confidence",
+                       "enneagram_type", "premium_type", "dm_fetch",
+                       "dm_messages_total", "word_count", "has_attachment",
+                       "reaction_total", "is_current", "downloaded", "is_image",
+                       "size", "position", "edit_number", "changed"):
+                NARROW[c] = "64px"
+        widths = [{"name": c, "w": NARROW.get(c),
+                   "wide": (c in WIDE and c not in NARROW)} for c in cols]
+
         return render(
             "browse", page="browse", table=table, cols=cols, rows=rows,
             total=total, q=q, col=col, val=val, cur_page=page,
@@ -663,7 +722,7 @@ def create_app(database_url: str) -> Flask:
             hidden_count=len(all_cols) - len(cols),
             prio=prio, has_priority="priority" in all_cols, pk_col=pk,
             cur=cur, is_psych_profiles=(table == "psych_profiles"),
-            uid_map=uid_map, psych_map=psych_map,
+            uid_map=uid_map, psych_map=psych_map, widths=widths,
         )
 
     # --- карточка записи: просмотр + редактирование -------------------------
@@ -829,7 +888,28 @@ def create_app(database_url: str) -> Flask:
         return render("record", page="browse", table=table, pk=pk,
                       fields=form_fields, related=related,
                       values=values, uid=uid_val,
+                      # человекочитаемый заголовок карточки вместо «user_profiles · запись 12»
+                      rec_title=_rec_title(table, row),
                       is_psych_profiles=(table == "psych_profiles"))
+
+    def _rec_title(table: str, row) -> str:
+        """Заголовок карточки: имя/тип объекта — а не только имя таблицы и PK."""
+        try:
+            if table == "user_profiles":
+                name = row.get("global_name") or row.get("username") or ""
+                uid = row.get("user_id")
+                star = "★ " if row.get("priority") else ""
+                return f"{star}{name or uid} · {uid}"
+            if table == "messages":
+                c = (row.get("clean_content") or row.get("content") or "").strip()
+                return (c[:60] + "…") if len(c) > 60 else (c or "сообщение")
+            if table == "psych_profiles":
+                mbti = row.get("mbti_type")
+                cur = "актуальная" if row.get("is_current") else "архивная"
+                return f"психо · user {row.get('user_id')} · {mbti or '?'} · {cur}"
+        except Exception:
+            pass
+        return ""
 
     @app.post("/dm/toggle/<int:user_id>")
     def dm_toggle(user_id: int):

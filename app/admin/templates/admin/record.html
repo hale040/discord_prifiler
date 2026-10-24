@@ -1,10 +1,17 @@
-<h2>{{ table }} · запись {{ pk }}</h2>
+<h2>{% if rec_title %}{{ rec_title }} <span class='muted' style='font-weight:400;font-size:.9rem'>· {{ table }} #{{ pk }}</span>{% else %}{{ table }} · запись {{ pk }}{% endif %}</h2>
 <p class='muted'><a href="{{ url_for('browse', table=table) }}" style='color:var(--accent);text-decoration:none'>← к таблице «{{ table }}»</a></p>
 
 {# ================= Действия: верхняя панель (главное — на виду) ========== #}
 {% if table == 'user_profiles' %}
 <div class='card'><h4>⚡ Действия</h4>
   {% set ps = current_psych(uid) %}
+  {# ---- ЛС-виджет: статусы/числа вычисляются один раз, не в шаблонных тернарах ---- #}
+  {% set dm_on = values.get('dm_fetch') %}
+  {% set dm_st = values.get('dm_status') or '' %}
+  {% set dm_err = values.get('dm_last_error') or '' %}
+  {% set dm_run = {'running': '⏳ выгрузка идёт…', 'pending': '⏳ очередь на выгрузку',
+                   'ok': '✅ синхронизировано', 'error': '⚠ ошибка'}.get(dm_st, '⏳ ожидание первого прохода') %}
+  {% set dm_cls = 'pill ok' if dm_st == 'ok' else ('pill warn' if dm_st in ('error', 'running', 'pending') else 'pill') %}
   <div style='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center'>
     <form method='post' action='/psych/refresh/{{ uid }}' style='display:inline'
           onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.');">
@@ -38,10 +45,11 @@
 
   {% if dm_on %}
   {# ---- Живой прогресс ЛС-сбора: виджет опрашивает /dm/status/<uid> каждые 10 сек;
-         «▶ Выполнить сейчас» ставит pending_dm — dm-loop обработает вне очереди #}
+         «▶ Выполнить сейчас» ставит pending_dm — dm-loop обработает вне очереди.
+         Начальные значения берутся из БД (values) — без мигания «⏳ статус…». #}
   <div style='margin-top:.8rem;padding:.7rem .9rem;background:#f6f8ff;border:1px solid var(--line);border-radius:10px'>
     <div style='display:flex;gap:.6rem;flex-wrap:wrap;align-items:center'>
-      <span class='pill' id='dm-state'>⏳ статус…</span>
+      <span class='{{ dm_cls }}' id='dm-state'>{{ dm_run }}</span>
       <span class='muted'>сохранено: <b id='dm-total'>{{ values.get('dm_messages_total') or 0 }}</b> сообщ.</span>
       <span class='muted'>канал: <b>{{ values.get('dm_channel_id') or '—' }}</b>{% if values.get('dm_channel_manual') %} <i>(ручной)</i>{% endif %}</span>
       <span class='muted'>синхронизация: <b id='dm-synced'>{{ values.get('dm_synced_at') or 'ещё не выполнялась' }}</b></span>
@@ -52,8 +60,8 @@
       </form>
     </div>
     <span id='dm-live' class='muted'></span>
-    {% if values.get('dm_last_error') %}
-    <p style='color:var(--warn);font-size:.85rem;margin:.5rem 0 0'>⚠ ЛС: {{ values.get('dm_last_error') }}
+    {% if dm_err %}
+    <p style='color:var(--warn);font-size:.85rem;margin:.5rem 0 0'>⚠ {{ dm_err }}
       {# после серии сбоев dm-loop приостанавливает пользователя; повторное
          нажатие «💬 Собрать ЛС» или «▶ Выполнить сейчас» сбросит счётчик и возобновит сбор #}</p>
     {% endif %}
@@ -85,27 +93,24 @@
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (st) {
           if (!st) return;
-          var live = document.getElementById('dm-live');
           var btn = document.getElementById('dm-run-now');
           var pill = document.getElementById('dm-state');
           var total = document.getElementById('dm-total');
           var synced = document.getElementById('dm-synced');
           if (total && st.dm_messages_total != null) total.textContent = st.dm_messages_total;
           if (synced && st.dm_synced_at) synced.textContent = st.dm_synced_at;
-          if (st.dm_status === 'running' && !st.stale_running) {
-            if (pill) { pill.textContent = '⏳ выгрузка идёт…'; pill.className = 'pill warn'; }
-            if (live) live.innerHTML = '';
-            if (btn) btn.disabled = true;
-          } else {
-            if (st.dm_status === 'ok') {
-              if (pill) { pill.textContent = '✅ синхронизировано'; pill.className = 'pill ok'; }
-              if (live) live.innerHTML = '';
-            } else {
-              if (pill) { pill.textContent = '⚠ ошибка'; pill.className = 'pill warn'; }
-              if (live) live.innerHTML = st.dm_last_error ? '' : '';
-            }
-            if (btn) btn.disabled = false;
+          // Карта статусов совпадает с серверным рендером (dm_run/dm_cls выше) —
+          // никаких мигающих «статус…», плавная замена значения.
+          var LBL = {running: '⏳ выгрузка идёт…', pending: '⏳ очередь на выгрузку',
+                     ok: '✅ синхронизировано', error: '⚠ ошибка'};
+          var s = st.dm_status || '';
+          if (pill) {
+            pill.textContent = LBL[s] || '⏳ ожидание первого прохода';
+            pill.className = (s === 'ok') ? 'pill ok'
+                           : (s === 'error' || s === 'running' || s === 'pending')
+                             ? 'pill warn' : 'pill';
           }
+          if (btn) btn.disabled = (s === 'running' && !st.stale_running);
         })
         .catch(function () {});
     }
