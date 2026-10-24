@@ -115,15 +115,83 @@ def _stamp_legacy_base(engine) -> None:
     """
     from alembic import command
 
+    from app.models.migrations import _columns, _table_exists
+
     ver, has_data = _legacy_migration_state(engine)
     if ver == 0 and not has_data:
         return  # чистый лист — пусть upgrade() создаст всё с нуля
-    command.stamp(_alembic_config(), revision=ALEMBIC_HEAD if ver >= 15 else "a00000000001")
+    target = ALEMBIC_HEAD if ver >= 15 else "a00000000001"
+    command.stamp(_alembic_config(), revision=target)
+    # Физическая сверка после стемпа: «живая» база может быть неполной
+    # (например, упавший прогон миграций оставил schema_version=15 без
+    # dm_* колонок). Стемп «на глаз» в таком случае запрещён — сразу
+    # доливаем недостающее идемпотентным DDL, иначе первое же обращение
+    # к user_profiles упадёт с UndefinedColumn.
+    if _table_exists(engine, "user_profiles"):
+        have = _columns(engine, "user_profiles")
+        watch = {c.name for c in UserProfile.__table__.columns
+                 if c.name.startswith("dm_")} | {"pending_dm"}
+        missing = sorted(watch - have)
+        if missing:
+            log.warning(
+                "Alembic: после стемпа %s физически отсутствуют колонки %s — "
+                "доливаю прямой идемпотентный DDL.",
+                target, ", ".join(missing),
+            )
+            _apply_dm_ddl(engine, missing)
     log.info(
-        "Alembic: живая база (self-made v%s, данные=%s) стемплена; "
+        "Alembic: живая база (self-made v%s, данные=%s) стемплена в %s; "
         "исторические шаги v1..v15 повторно не применяются.",
-        ver, has_data,
+        ver, has_data, target,
     )
+
+
+def _apply_dm_ddl(engine, missing: list[str]) -> None:
+    """Прямой идемпотентный DDL для недостающих dm-колонок user_profiles.
+
+    Страховка против ложных стемпов (упавшие прогоны миграций, ручные
+    правки БД). Использует исторические функции v11..v15 целиком, затем
+    точечно добавляет то, что они не покрыли.
+    """
+    from sqlalchemy import text as _text
+
+    from app.models.migrations import (
+        _columns,
+        _table_exists,
+        _v11_dm_collection,
+        _v12_dm_diagnostics,
+        _v13_dm_manual_channel,
+        _v14_dm_status,
+        _v15_dm_pending_flag,
+    )
+
+    for fix in (_v11_dm_collection, _v12_dm_diagnostics,
+                _v13_dm_manual_channel, _v14_dm_status, _v15_dm_pending_flag):
+        fix(engine)
+    have = _columns(engine, "user_profiles")
+    still = sorted(set(missing) - have)
+    if not still:
+        return
+    with engine.begin() as conn:
+        for col in still:
+            if col in ("dm_last_error", "dm_status"):
+                conn.execute(_text(
+                    f"ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS {col} TEXT"))
+            elif col in ("dm_fail_count", "dm_messages_total"):
+                conn.execute(_text(
+                    f"ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS {col} "
+                    f"INTEGER DEFAULT 0"))
+            elif col in ("dm_fetch", "dm_channel_manual", "pending_dm"):
+                conn.execute(_text(
+                    f"ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS {col} BOOLEAN"
+                    + (" DEFAULT FALSE" if col != "dm_fetch" else "")))
+            elif col == "dm_synced_at":
+                conn.execute(_text(
+                    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_synced_at "
+                    "TIMESTAMP WITH TIME ZONE"))
+            else:
+                conn.execute(_text(
+                    f"ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS {col} BIGINT"))
 
 
 def ensure_schema(engine) -> None:
@@ -179,44 +247,7 @@ def ensure_schema(engine) -> None:
                     "прямой идемпотентный DDL (ревизии a00000000001/2).",
                     ", ".join(missing_dm),
                 )
-                from sqlalchemy import text as _text
-
-                from app.models.migrations import (
-                    _v11_dm_collection,
-                    _v12_dm_diagnostics,
-                    _v13_dm_manual_channel,
-                    _v14_dm_status,
-                    _v15_dm_pending_flag,
-                )
-
-                for fix in (_v11_dm_collection, _v12_dm_diagnostics,
-                            _v13_dm_manual_channel,
-                            _v14_dm_status, _v15_dm_pending_flag):
-                    fix(engine)
-                with engine.begin() as conn:
-                    for col in missing_dm:
-                        if col == "dm_channel_manual":
-                            conn.execute(_text(
-                                "ALTER TABLE user_profiles ADD COLUMN IF "
-                                "NOT EXISTS dm_channel_manual BOOLEAN "
-                                "DEFAULT FALSE"))
-                        elif col in ("dm_last_error", "dm_status"):
-                            conn.execute(_text(
-                                f"ALTER TABLE user_profiles ADD COLUMN IF "
-                                f"NOT EXISTS {col} TEXT"))
-                        elif col in ("dm_fail_count", "dm_messages_total"):
-                            conn.execute(_text(
-                                f"ALTER TABLE user_profiles ADD COLUMN IF "
-                                f"NOT EXISTS {col} INTEGER DEFAULT 0"))
-                        elif col == "pending_dm":
-                            conn.execute(_text(
-                                "ALTER TABLE user_profiles ADD COLUMN IF "
-                                "NOT EXISTS pending_dm BOOLEAN "
-                                "DEFAULT FALSE"))
-                        else:
-                            conn.execute(_text(
-                                f"ALTER TABLE user_profiles ADD COLUMN IF "
-                                f"NOT EXISTS {col} BIGINT"))
+                _apply_dm_ddl(engine, missing_dm)
     except Exception as exc:  # noqa: BLE001
         log.error(
             "Миграции схемы не прошли (%s). Проверьте DATABASE_URL и "
