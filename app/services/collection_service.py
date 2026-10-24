@@ -141,6 +141,7 @@ class CollectionService:
             asyncio.create_task(self._profile_worker(), name="profile-worker"),
             asyncio.create_task(self._attachment_worker(), name="attachment-worker"),
             asyncio.create_task(self._refresh_loop(), name="profile-refresh-loop"),
+            asyncio.create_task(self._dm_loop(), name="dm-loop"),
         ]
 
     async def stop(self) -> None:
@@ -377,9 +378,12 @@ class CollectionService:
         Вызывается либо напрямую из event loop (live-события), либо через
         asyncio.to_thread во время bulk-backfill — чтобы долгие SQLite-коммиты
         не блокировали gateway-сокет (иначе Discord видит лаги и рвёт сессию).
+
+        guild_id=None + is_dm=True — сообщение из ЛС; для таких фильтр по
+        дате начала сбора не применяется (история диалога выгружается целиком).
         """
         # Фильтр по дате начала сбора: всё, что раньше START_DATE, игнорируем.
-        if self.s.start_date is not None:
+        if self.s.start_date is not None and guild_id is not None:
             ts = getattr(msg, "created_at", None)
             if ts is not None and ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
@@ -392,7 +396,8 @@ class CollectionService:
         # прочитает всё после старого курсора; дедупликация вставки безопасна).
         state = self.repo.get_state(msg.channel.id)
         if (
-            state is not None
+            guild_id is not None
+            and state is not None
             and state.last_message_id
             and msg.id > state.last_message_id + 4096
             and not self._backfill_running
@@ -440,6 +445,168 @@ class CollectionService:
         self._profile_queue.put_nowait(user_id)
 
     # ------------------------------------------------- profile refresh loop
+    # ------------------------------------------------------------- ЛС-сбор
+    async def _dm_loop(self) -> None:
+        """Цикл выгрузки личных сообщений (ЛС).
+
+        Работает ТОЛЬКО для пользователей, у которых в карточке админки
+        нажата кнопка «💬 Собрать ЛС» (dm_fetch = True). Каждую итерацию
+        читаем список из БД — включили кнопку, и на следующем тике диалог
+        начал грузиться; выключили — цикл его пропускает.
+
+        После первой полной выгрузки диалога проход становится дешёвым:
+        one-shot запрос history(after=dm_first_message_id) забирает только
+        новые сообщения с момента последней синхронизации.
+        """
+        await asyncio.sleep(10)  # дать онбордингу/главному poll-циклу стартовать
+        while self._running:
+            try:
+                ids = await asyncio.to_thread(self.repo.dm_fetch_user_ids)
+            except Exception:  # noqa: BLE001
+                log.exception("dm-loop: не удалось прочитать список dm_fetch")
+                ids = []
+            for uid in ids:
+                if not self._running:
+                    break
+                try:
+                    await self._sync_dm_for(uid)
+                except discord.Forbidden:
+                    log.warning("dm-loop %s: нет доступа к ЛС (канала нет/заблокирован)", uid)
+                except Exception:  # noqa: BLE001
+                    log.exception("dm-loop: сбой выгрузки ЛС для %s", uid)
+                await human_delay(3.0, 6.0)  # пауза между пользователями
+            await asyncio.sleep(getattr(self.s, "dm_poll_interval_sec", 300))
+
+    async def _sync_dm_new(self, user_id: int, channel, after_id: int) -> int:
+        """Инкрементальная докачка новых ЛС-сообщений (after=последний id).
+
+        Возвращает число сохранённых новых сообщений. Ошибки сети/лимитов
+        здесь не критичны: полный обратный проход всё равно дособерёт пропуск.
+        """
+        added = 0
+        newest = after_id
+        try:
+            async for msg in channel.history(
+                limit=self.s.fetch_limit, after=_to_snowflake(after_id), oldest_first=True
+            ):
+                saved = await asyncio.to_thread(self._handle_message_sync, msg, None)
+                added += 1 if saved else 0
+                newest = max(newest, msg.id)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("dm-loop %s: инкремент пропущен (%s)", user_id, exc)
+            return 0
+        if added or newest != after_id:
+            await asyncio.to_thread(
+                self.repo.update_dm_cursor,
+                user_id,
+                channel_id=int(channel.id),
+                newest_message_id=newest,
+                synced=True,
+            )
+        return added
+
+    async def _sync_dm_for(self, user_id: int) -> int:
+        """Выгрузить историю ЛС с пользователем. Возвращает число новых сообщений.
+
+        Канал находим по id в client.cached_channels, иначе создаём DM
+        (open_dm — стандартный путь user-токена). Идём от новых к старым
+        страницами history(before=курсор); курсор dm_last_message_id — самый
+        старый загруженный id, поэтому рестарт продолжает без дублей.
+        Обратная перемотка останавливается на начале истории или когда
+        дошли до уже загруженной границы.
+        """
+        channel = None
+        known_cid = None
+        prof = await asyncio.to_thread(self.repo.get_user, user_id)
+        if prof is not None and prof.dm_channel_id:
+            known_cid = int(prof.dm_channel_id)
+            channel = await self.client.safe_fetch_channel(known_cid)
+        if channel is None:
+            user = self.client.get_user(user_id) or await self.client.fetch_user(user_id)
+            channel = await user.create_dm() if hasattr(user, "create_dm") else None
+        if channel is None:
+            return 0
+
+        before: int | None = None
+        if known_cid == int(channel.id) and prof is not None and prof.dm_last_message_id:
+            before = int(prof.dm_last_message_id)  # продолжаем от старого курсора
+
+        # Диалог уже выгружен до начала истории (есть курсор + newest id):
+        # вместо дорогой полной перемотки — дешёвый инкремент новых сообщений.
+        if (
+            before is not None
+            and prof is not None
+            and prof.dm_first_message_id
+            and getattr(self.s, "dm_full_rescan", False) is not True
+        ):
+            added_new = await self._sync_dm_new(user_id, channel, int(prof.dm_first_message_id))
+            total = await asyncio.to_thread(self._count_dm_messages, int(channel.id))
+            await asyncio.to_thread(
+                self.repo.update_dm_cursor, user_id, messages_total=total, synced=True
+            )
+            return added_new
+        newest_seen: int | None = None
+        oldest_seen: int | None = None
+        added_total = 0
+        first_run = before is None
+
+        while self._running:
+            page: list[discord.Message] = []
+            async for msg in channel.history(
+                limit=50, before=_to_snowflake(before), oldest_first=False
+            ):
+                page.append(msg)
+            if not page:
+                break
+            page.sort(key=lambda m: m.id)  # обрабатываем старые -> новые
+            for m in page:
+                saved = await asyncio.to_thread(self._handle_message_sync, m, None)
+                added_total += 1 if saved else 0
+            oldest_page = page[0].id
+            newest_page = page[-1].id
+            oldest_seen = min(oldest_seen or newest_page, oldest_page)
+            newest_seen = max(newest_seen or oldest_page, newest_page)
+            # фиксируем прогресс после каждой страницы — рестарт безопасен
+            await asyncio.to_thread(
+                self.repo.update_dm_cursor,
+                user_id,
+                channel_id=int(channel.id),
+                oldest_message_id=oldest_page,
+                newest_message_id=newest_seen,
+                synced=True,
+            )
+            if len(page) < 50:
+                break  # до самого начала истории
+            if not first_run and oldest_page >= (before or 0):
+                break  # курсор не сдвинулся — защита от зацикливания
+            before = oldest_page
+            await human_delay(self.s.request_delay_min, self.s.request_delay_max * 2)
+
+        if added_total or first_run:
+            total = await asyncio.to_thread(self._count_dm_messages, int(channel.id))
+            await asyncio.to_thread(
+                self.repo.update_dm_cursor, user_id, messages_total=total, synced=True
+            )
+        log.info(
+            "dm-loop %s: канал %s, новых %d, oldest=%s",
+            user_id, channel.id, added_total, oldest_seen,
+        )
+        return added_total
+
+    def _count_dm_messages(self, channel_id: int) -> int:
+        from sqlalchemy import func as sa_func
+        from sqlalchemy import select as sa_select
+        from app.models.entities import Message
+        with self.repo._sf() as s:  # noqa: SLF001 — лёгкий счётчик по индексу
+            return int(
+                s.scalar(
+                    sa_select(sa_func.count())
+                    .select_from(Message)
+                    .where(Message.channel_id == channel_id)
+                )
+                or 0
+            )
+
     async def _refresh_loop(self) -> None:
         """Раз в PROFILE_REFRESH_DAYS (по умолчанию 14) пере-запрашивает
         профили всех известных пользователей: обновляются bio/бейджи/

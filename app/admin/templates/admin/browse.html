@@ -19,7 +19,8 @@
     <p class='muted'>В ленте только нужные столбцы{% if hidden_count %} · {{ hidden_count }}
     скрытых (raw/json) см. в карточке записи{% endif %}. Клик по id — открыть/править.
     {% if has_priority %}★ — отметить/снять приоритет одним кликом.{% endif %}
-    {% if is_psych_profiles %}👁 — читаемое представление результата LLM.{% endif %}</p>
+    {% if is_psych_profiles %}👁 — читаемое представление результата LLM.{% endif %}
+    Все действия — внутри карточки записи («открыть ▸»).</p>
     <div style='overflow:auto'><table><tr>
       {% if has_priority %}<th title='приоритетный пользователь'>★</th>{% endif %}
       {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr>
@@ -36,27 +37,13 @@
   {% elif cols[loop.index0] == 'mbti_type' and cell[0] != '—' %}<b>{{ cell[0] }}</b>
   {% elif cols[loop.index0] == 'severity_max' and cell[0] == 'high' %}<span style='color:#c62828;font-weight:700'>high</span>
   {% else %}{{ cell[0] }}{% endif %}</td>{% endfor %}
-<td style='white-space:nowrap'>
-  {% if table == 'user_profiles' %}
-    {% set ps = psych_map.get(row.cells[cols.index('user_id')][0]) %}
-    <form method='post' action='/psych/refresh/{{ row.cells[cols.index('user_id')][0] }}'
-          style='display:inline'
-          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.');">
-      <button class='btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
-      >🧠 {{ 'Обновить психо профиль' if ps else 'Построить психо профиль' }}</button>
-    </form>
-    <a class='btn gray' style='text-decoration:none'
-       title='вставить ответ нейросети вручную с проверкой структуры JSON'
-       href="/psych/manual/{{ row.cells[cols.index('user_id')][0] }}">📋 Вставить ответ модели</a>
-    {% if ps %}<a class='btn gray' title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
-       href="{{ url_for('profile_view', pid=ps.id) }}">👁</a>{% endif %}
-  {% endif %}
+<td class='nowrap'>
+  {# Все действия (🧠 профиль / 📋 ручной импорт / ✎ правка / ✕ удаление) —
+     внутри карточки записи. В списке остаётся только ★ приоритет и 👁
+     читаемого вида — они не раздувают ширину таблицы. #}
   {% if is_psych_profiles %}<a class='btn gray' title='читаемый вид результата LLM'
      href="{{ url_for('profile_view', pid=row.pk) }}">👁</a>{% endif %}
-  <a class='btn' href="{{ url_for('record', table=table, pk=row.pk) }}">✎</a>
-  <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
-        onsubmit="return confirm('Удалить строку {{ table }}={{ row.pk }}?');">
-    <input type='hidden' name='pk' value='{{ row.pk }}'><button class='btn warn'>✕</button></form></td>
+  <a class='btn' href="{{ url_for('record', table=table, pk=row.pk) }}">открыть ▸</a></td>
       </tr>{% endfor %}</table></div>
     <p class='pager'>
       {% if cur_page > 1 %}<a class='btn gray' href='{{ href(cur_page-1) }}'>← назад</a>{% endif %}

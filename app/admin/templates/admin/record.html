@@ -28,6 +28,56 @@
       <br><button class='btn'>💾 Сохранить изменения</button>
       <a class='btn gray' href='{{ url_for("browse", table=table) }}'>отмена</a>
     </form>
+    {# ---------- Действия: всё внутри карточки (админка v11) ---------- #}
+    {% if table == 'user_profiles' %}
+    <div class='card'><h4>⚡ Действия</h4>
+      {% set ps = current_psych(uid) %}
+      <form method='post' action='/psych/refresh/{{ uid }}' style='display:inline'
+            onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.');">
+        <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
+        <button class='btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
+        >🧠 {{ 'Обновить психо профиль' if ps else 'Построить психо профиль' }}</button>
+      </form>
+      <a class='btn gray' style='text-decoration:none'
+         title='вставить ответ нейросети вручную с проверкой структуры JSON'
+         href="/psych/manual/{{ uid }}">📋 Вставить ответ модели</a>
+      {% if ps %}<a class='btn gray' style='text-decoration:none'
+         title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
+         href="{{ url_for('profile_view', pid=ps.id) }}">👁 Текущий профиль</a>{% endif %}
+      {# ---- ЛС-сбор: выгрузка истории диалога по кнопке (dm-loop) ---- #}
+      {% set dm_on = values.get('dm_fetch') %}
+      <form method='post' action='/dm/toggle/{{ uid }}' style='display:inline'
+            onsubmit="this.querySelector('button').disabled=true;">
+        <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
+        <input type='hidden' name='enabled' value='{{ 0 if dm_on else 1 }}'>
+        {% if dm_on %}
+        <button class='btn warn' title='история ЛС грузится циклом dm-loop; повторный клик — остановить'>💬 ЛС: стоп</button>
+        {% else %}
+        <button class='btn' title='включить выгрузку всей истории личных сообщений (первый проход может занять время)'>💬 Собрать ЛС</button>
+        {% endif %}
+      </form>
+      {% if dm_on %}
+      <p class='muted'>ЛС: включён · сообщений сохранено: {{ values.get('dm_messages_total') or 0 }} ·
+        канал {{ values.get('dm_channel_id') or '—' }} ·
+        последняя синхронизация: {{ values.get('dm_synced_at') or 'ещё не выполнялась (ждём следующий тик dm-loop)' }}</p>
+      {% endif %}
+      <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
+            onsubmit="return confirm('Удалить строку {{ table }}={{ pk }} без возврата?');">
+        <input type='hidden' name='pk' value='{{ pk }}'>
+        <button class='btn warn' style='float:right'>✕ Удалить запись</button></form>
+    </div>
+    {% elif is_psych_profiles|default(false) %}
+    <div class='card'>
+      <a class='btn gray' style='text-decoration:none' href="{{ url_for('profile_view', pid=pk) }}">👁 Читаемый вид профиля</a>
+    </div>
+    {% else %}
+    <div class='card'>
+      <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
+            onsubmit="return confirm('Удалить строку {{ table }}={{ pk }} без возврата?');">
+        <input type='hidden' name='pk' value='{{ pk }}'>
+        <button class='btn warn'>✕ Удалить запись</button></form>
+    </div>
+    {% endif %}
     {% if related %}
     <div class='card'><h4>Связанные данные пользователя {{ uid }}</h4>
       {% if related[0].count is defined %}

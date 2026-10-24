@@ -111,6 +111,20 @@ class UserProfile(Base):
 
     # Premium/подписка
     premium_type: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- ЛС-сбор (миграция v11) -------------------------------------------
+    # Флаг включён кнопкой «💬 Собрать ЛС» в карточке пользователя; цикл
+    # dm-loop в CollectionService выгружает историю диалога только для тех,
+    # у кого dm_fetch = True. Курсор last_dm_id — самый старый загруженный
+    # id (резюм после рестарта без повторной скачки того же).
+    dm_fetch: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+    dm_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dm_last_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dm_first_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dm_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    dm_messages_total: Mapped[int] = mapped_column(Integer, default=0)
     premium_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Локаль/часовой пояс, если доступны

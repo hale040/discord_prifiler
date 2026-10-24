@@ -209,6 +209,91 @@ class Repository:
         with self._sf() as s:
             return list(s.scalars(select(UserProfile.user_id).order_by(UserProfile.user_id)))
 
+    # -------------------------------------------------------------- ЛС-сбор
+    def set_dm_fetch(self, user_id: int, enabled: bool) -> bool:
+        """Включить/выключить сбор ЛС (кнопка в карточке пользователя).
+
+        Если профиль ещё не собран (пользователь виден только по id из
+        сообщений), создаём заглушку — dm-loop сам догрузит профиль через
+        /users/{id}/profile.
+        """
+        from sqlalchemy import update
+        with self._sf() as s:
+            res = s.execute(
+                update(UserProfile)
+                .where(UserProfile.user_id == user_id)
+                .values(dm_fetch=bool(enabled))
+            )
+            if res.rowcount == 0 and enabled:
+                s.add(UserProfile(user_id=user_id, dm_fetch=True))
+            s.commit()
+            return True
+
+    def dm_channel_ids(self) -> set[int]:
+        """id каналов ЛС, для которых включён сбор — live-события из этих
+        каналов обрабатываются даже когда основной цикл сбора выключен."""
+        with self._sf() as s:
+            return {int(cid) for cid in s.scalars(
+                select(UserProfile.dm_channel_id)
+                .where(UserProfile.dm_fetch.is_(True))
+                .where(UserProfile.dm_channel_id.isnot(None))
+            )}
+
+    def dm_fetch_user_ids(self) -> list[int]:
+        """user_id пользователей, у которых включён сбор ЛС (dm_fetch = True)."""
+        with self._sf() as s:
+            return list(s.scalars(
+                select(UserProfile.user_id)
+                .where(UserProfile.dm_fetch.is_(True))
+                .order_by(UserProfile.user_id)
+            ))
+
+    def update_dm_cursor(
+        self,
+        user_id: int,
+        *,
+        channel_id: int | None = None,
+        oldest_message_id: int | None = None,
+        newest_message_id: int | None = None,
+        messages_total: int | None = None,
+        synced: bool = False,
+    ) -> None:
+        """Прдвинуть курсоры ЛС-выгрузки. synced=True — поставить dm_synced_at=now.
+
+        oldest_message_id записывается только если он меньше текущего курса
+        (или курсора нет) — курсор всегда указывает на самый старый загруженный
+        id, чтобы рестарт не пропускал и не повторял сообщения.
+        """
+        from sqlalchemy import update
+        with self._sf() as s:
+            vals: dict[str, Any] = {}
+            if channel_id is not None:
+                vals["dm_channel_id"] = channel_id
+            if messages_total is not None:
+                vals["dm_messages_total"] = messages_total
+            if newest_message_id is not None:
+                vals["dm_first_message_id"] = newest_message_id
+            if synced:
+                vals["dm_synced_at"] = datetime.now(timezone.utc)
+            if vals:
+                s.execute(
+                    update(UserProfile)
+                    .where(UserProfile.user_id == user_id)
+                    .values(**vals)
+                )
+            if oldest_message_id is not None:
+                cur = s.scalars(
+                    select(UserProfile.dm_last_message_id)
+                    .where(UserProfile.user_id == user_id)
+                ).first()
+                if cur is None or oldest_message_id < cur:
+                    s.execute(
+                        update(UserProfile)
+                        .where(UserProfile.user_id == user_id)
+                        .values(dm_last_message_id=oldest_message_id)
+                    )
+            s.commit()
+
     def profile_needs_refresh(self, user_id: int, days: float) -> bool:
         """True, если профиль не обновлялся дольше `days` дней (или никогда)."""
         u = self.get_user(user_id)

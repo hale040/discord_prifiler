@@ -23,7 +23,7 @@ from flask import (
     url_for,
 )
 from sqlalchemy import Boolean, MetaData, Table, Text, cast as sa_cast, create_engine, func, inspect, select as sa_select, text
-from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update
+from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update, insert as sa_insert
 from sqlalchemy import String
 from sqlalchemy.dialects.postgresql import CHAR, VARCHAR
 from markupsafe import Markup
@@ -416,6 +416,9 @@ def create_app(database_url: str) -> Flask:
 
     def render(tpl: str, **ctx):
         """Страница = layout.html с подставленным содержимым templates/admin/<tpl>.html."""
+        # current_psych доступен шаблонам (карточка пользователя показывает
+        # кнопку 🧠 «Обновить», только если профиль уже строился)
+        ctx.setdefault("current_psych", current_psych)
         return render_template(
             "admin/layout.html",
             content=Markup(render_template(f"admin/{tpl}.html", **ctx)),
@@ -755,7 +758,39 @@ def create_app(database_url: str) -> Flask:
 
         return render("record", page="browse", table=table, pk=pk,
                       fields=form_fields, related=related,
-                      uid=uid_val)
+                      values=values, uid=uid_val,
+                      is_psych_profiles=(table == "psych_profiles"))
+
+    @app.post("/dm/toggle/<int:user_id>")
+    def dm_toggle(user_id: int):
+        """Кнопка «💬 Собрать ЛС» / «💬 ЛС: стоп» в карточке пользователя.
+
+        Просто ставим/снимаем dm_fetch; тяжёлую работу делает dm-loop в
+        CollectionService (первый тик после включения — полная выгрузка
+        истории диалога, далее — дешёвый инкремент новых сообщений).
+        """
+        enabled = request.form.get("enabled", "1") in ("1", "true", "on")
+        if not engine.has_table("user_profiles"):
+            abort(404)
+        sa_tbl = Table("user_profiles", MetaData(), autoload_with=engine)
+        if "dm_fetch" not in sa_tbl.columns:
+            flash("Миграция v11 не применена (нет колонки dm_fetch) — обновите БД.", "error")
+            return redirect(url_for("record", table="user_profiles", pk=user_id))
+        with engine.begin() as conn:
+            n = conn.execute(
+                sa_update(sa_tbl).where(sa_tbl.columns.user_id == user_id)
+                .values(dm_fetch=bool(enabled))
+            ).rowcount
+        if n == 0 and enabled:
+            # профиля ещё нет (пользователь виден только по id из сообщений) —
+            # создаём заглушку, dm-loop догрузит данные сам
+            with engine.begin() as conn:
+                conn.execute(sa_insert(sa_tbl).values(user_id=user_id, dm_fetch=True))
+        audit("dm_fetch", target=f"user={user_id}", result="on" if enabled else "off")
+        flash(("💬 Сбор ЛС включён — история диалога начнёт выгружаться на следующем "
+               "тике dm-loop (по умолчанию ≤ DM_POLL_INTERVAL_SEC секунд)."
+               if enabled else "💬 Сбор ЛС остановлен."), "ok")
+        return redirect(url_for("record", table="user_profiles", pk=user_id))
 
     @app.post("/browse/<table>/delete")
     def delete_row(table: str):

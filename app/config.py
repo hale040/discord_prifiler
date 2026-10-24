@@ -46,6 +46,17 @@ class Settings:
 
     # Периодичность опроса канала, сек
     poll_interval_sec: int = field(default_factory=lambda: _env_int("POLL_INTERVAL_SEC", 300))
+    # Периодичность прохода dm-loop (сбор ЛС по кнопке в админке), сек.
+    # Каждые N секунд проверяем список dm_fetch=TRUE и докачиваем свежие
+    # сообщения диалогов (полная история выгружается за один проход).
+    dm_poll_interval_sec: int = field(default_factory=lambda: _env_int("DM_POLL_INTERVAL_SEC", 300))
+    # Принудительная полная перемотка истории ЛС при каждом проходе (по
+    # умолчанию выключено — после первой выгрузки работает дешёвый инкремент).
+    # Включить для разовой пересинхронизации: DM_FULL_RESCAN=1.
+    dm_full_rescan: bool = field(
+        default_factory=lambda: os.getenv("DM_FULL_RESCAN", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     # Сохранять полный сырой JSON сообщений в messages.raw_json (диск).
     # По умолчанию ВЫКЛЮЧЕНО: все нужные поля уже смаплены в колонки, а
     # raw_json раздувал базу в разы. Включить: STORE_RAW_JSON=1.

@@ -484,6 +484,34 @@ def _v10_dynamic_signals(engine: Engine) -> None:
         log.warning("v10: триггеры взаимодействия не применены: %s", exc)
 
 
+def _v11_dm_collection(engine: Engine) -> None:
+    """v11: сбор ЛС по кнопке в админке.
+
+    Сбор истории диалога (ЛС) включается ТОЛЬКО для пользователей, у которых
+    в карточке нажата кнопка «💬 Собрать ЛС» (dm_fetch = True). Цикл dm-loop
+    в CollectionService выгружает сообщения из DM-канала пользователя,
+    двигаясь от новых к старым; курсор dm_last_message_id (самый старый
+    загруженный id) позволяет возобновлять после рестарта без дублей.
+    Сообщения пишутся в обычную таблицу messages с guild_id = NULL и
+    channel_id = id DM-канала — никаких новых таблиц не нужно.
+    """
+    ddl = [
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_fetch BOOLEAN",
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_channel_id BIGINT",
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_last_message_id BIGINT",
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_first_message_id BIGINT",
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_synced_at TIMESTAMPTZ",
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_messages_total INTEGER DEFAULT 0",
+        # частичный индекс: dm-loop выбирает только включённых пользователей
+        "CREATE INDEX IF NOT EXISTS ix_user_profiles_dm_fetch "
+        "ON user_profiles (user_id) WHERE dm_fetch IS TRUE",
+    ]
+    with engine.begin() as conn:
+        for stmt in ddl:
+            conn.execute(text(stmt))
+    log.info("Миграция v11: ЛС-сбор (dm_* колонки + индекс) готов.")
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
@@ -495,6 +523,7 @@ MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("psych_profiles/psych_signals/user_interests: психопрофиль от LLM (миграция v8)", _v08_psych_profiles),
     ("postgres: BIGINT+bigserial PK, TIMESTAMPTZ timestamps", _v09_postgres_schema),
     ("v10: message_revisions, reaction_events, presence_snapshots, interaction_aggregates + триггеры", _v10_dynamic_signals),
+    ("v11: ЛС-сбор — флаги/курсоры в user_profiles (dm_fetch, dm_channel_id, dm_last_message_id)", _v11_dm_collection),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]
