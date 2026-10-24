@@ -37,7 +37,7 @@ app/
 ├── admin/                     # веб-админка (Flask), python -m app.admin
 │   ├── app.py                 #   приложение: маршруты, CRUD, SQL-редактор, аудит,
 │   │                          #   psych-импорт, переключатель ЛС-сбора (/dm/toggle/<id>)
-│   ├── security.py            #   CSRF + LoginRateLimiter (вход по ADMIN_PASSWORD)
+│   ├── security.py            #   LoginRateLimiter (вход по ADMIN_PASSWORD); CSRF выключен (локальный запуск)
 │   ├── bp/context.py          #   AdminContext: таблицы, VIEW_COLUMNS, общие хелперы
 │   ├── __main__.py            #   точка входа python -m app.admin
 │   └── templates/admin/       #   ВЕСЬ HTML отдельными файлами Jinja2:

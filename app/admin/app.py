@@ -152,9 +152,8 @@ def create_app(database_url: str) -> Flask:
         template_folder=str(BASE_DIR / "app" / "admin" / "templates"),
     )
     app.secret_key = secret
-    # CSRF-защита форм + rate-limit входа (app/admin/security.py).
-    # Регистрирует before_request-хук и context_processor с csrf_token()
-    # для шаблонов — без этого {{ csrf_token() }} в record.html падает 500.
+    # context_processor csrf_token() (now no-op: CSRF выключен, проект локальный)
+    # — нужен, чтобы {{ csrf_token() }} в record.html не падал 500.
     from app.admin.security import csrf_protect
     csrf_protect(app)
     app.config["DATABASE_URL"] = database_url

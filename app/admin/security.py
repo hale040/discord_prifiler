@@ -1,12 +1,16 @@
-"""Security-слой админки: CSRF-защита форм и rate-limit страницы входа.
+"""Security-слой админки: rate-limit страницы входа.
 
-CSRF — double-submit cookie
----------------------------
-На каждый запрос выдаётся токен в http-only cookie ``admin_csrf`` и
-одновременно кладётся в ``g.csrf_token`` для шаблонов. Все POST-запросы
-обязаны содержать поле ``csrf_token``, равное cookie — сверка через
-``secrets.compare_digest`` (против timing-атак). GET/HEAD/OPTIONS не
-проверяются (не должны менять состояние; «не трогать» по стандарту RFC 9110).
+CSRF-защита выключена (осознанный отказ, 2026-10-24)
+-----------------------------------------------------
+Проект запускается только локально (bind на 127.0.0.1), доступ к админке
+есть лишь у владельца машины. Double-submit cookie создавал проблемы:
+падение record.html с 500 при отсутствии context_processor и ложные 400
+«CSRF-токен отсутствует или не совпадает» при работе с несколькими
+вкладками/рестартах процесса. Функция ``csrf_protect`` сохранена как
+no-op: шаблоны могут использовать ``{{ csrf_token() }}`` (вернёт пустую
+строку), а скрытые поля ``name='csrf_token'`` просто игнорируются на
+бэкенде. Если проект когда-нибудь выйдет за пределы localhost —
+восстановите реализацию из истории git.
 
 Rate-limit входа
 ----------------
@@ -20,73 +24,31 @@ Rate-limit входа
 from __future__ import annotations
 
 import os
-import secrets
 import time
 from collections import defaultdict
 from typing import Callable
 
-from flask import abort, g, request
+from flask import request
 
-CSRF_COOKIE = "admin_csrf"
-CSRF_FIELD = "csrf_token"
+CSRF_COOKIE = "admin_csrf"   # legacy: cookie больше не ставится и не проверяется
+CSRF_FIELD = "csrf_token"    # legacy: поле в формах игнорируется
 
 
 # --------------------------------------------------------------------------- #
-# CSRF                                                                         #
+# CSRF (выключен)                                                              #
 # --------------------------------------------------------------------------- #
 
 def csrf_protect(app) -> None:
-    """Регистрирует before_request-хук CSRF-защиты и токен для шаблонов."""
+    """No-op. Проверка CSRF отключена: проект работает только локально.
 
-    @app.before_request
-    def _csrf_check():
-        # Токен на каждый запрос (для форм): cookie + g для {{ csrf_token() }}.
-        token = request.cookies.get(CSRF_COOKIE)
-        if not token or len(token) < 16:
-            token = secrets.token_hex(32)
-        g.csrf_token = token
-
-        if request.method in ("GET", "HEAD", "OPTIONS"):
-            return None
-        if request.endpoint == "static":
-            return None
-
-        submitted = ""
-        if request.mimetype in ("application/x-www-form-urlencoded", "multipart/form-data"):
-            submitted = request.form.get(CSRF_FIELD, "")
-        elif request.is_json:
-            try:
-                submitted = (request.get_json(silent=True) or {}).get(CSRF_FIELD, "")
-            except Exception:  # noqa: BLE001
-                submitted = ""
-        else:
-            submitted = request.headers.get("X-CSRF-Token", "")
-
-        cookie = request.cookies.get(CSRF_COOKIE, "")
-        if not cookie or not submitted or \
-                not secrets.compare_digest(str(submitted), str(cookie)):
-            abort(400, description="CSRF-токен отсутствует или не совпадает. "
-                                   "Перезагрузите страницу и повторите действие.")
-        return None
-
-    @app.after_request
-    def _csrf_cookie(resp):
-        # Cookie всегда синхронна с токеном страницы (SameSite=Lax — формы
-        # с внешних сайтов не получат ни cookie, ни возможности его подделать).
-        resp.set_cookie(
-            CSRF_COOKIE,
-            g.get("csrf_token", ""),
-            httponly=True,
-            samesite="Lax",
-            secure=bool(os.getenv("ADMIN_COOKIE_SECURE", "").strip()),
-        )
-        return resp
+    Оставлен context_processor, чтобы {{ csrf_token() }} в шаблонах не падал
+    с UndefinedError (вернёт пустую строку). Скрытые поля csrf_token в формах
+     игнорируются — проверка на бэкенде не выполняется.
+    """
 
     @app.context_processor
     def _csrf_inject() -> dict[str, Callable[[], str]]:
-        # Использование в шаблонах: <input type="hidden" name="csrf_token"
-        #                            value="{{ csrf_token() }}">
-        return {"csrf_token": lambda: getattr(g, "csrf_token", "")}
+        return {"csrf_token": lambda: ""}
 
 
 # --------------------------------------------------------------------------- #
