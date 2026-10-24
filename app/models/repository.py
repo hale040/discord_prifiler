@@ -307,6 +307,77 @@ class Repository:
                 .order_by(UserProfile.user_id)
             ))
 
+    def pending_dm_user_ids(self) -> list[int]:
+        """Пользователи с сигналом «▶ Выполнить сейчас» (миграция v15).
+
+        Отдельно от dm_fetch_user_ids: внеочередной проход выполняется и для
+        приостановленных после серии сбоев — явная команда человека важнее
+        автомата (счётчик сбоев сбрасывает сам обработчик).
+        """
+        with self._sf() as s:
+            return list(s.scalars(
+                select(UserProfile.user_id)
+                .where(UserProfile.pending_dm.is_(True))
+                .order_by(UserProfile.user_id)
+            ))
+
+    def claim_pending_dm(self, user_id: int) -> bool:
+        """Атомарно забрать сигнал «выполнить сейчас»: pending_dm True->False.
+
+        Возвращает True, если флаг принадлежал нам (защита от двойного
+        выполнения, если два прохода/процесса увидели один сигнал).
+        """
+        from sqlalchemy import update
+        with self._sf() as s:
+            res = s.execute(
+                update(UserProfile)
+                .where(UserProfile.user_id == user_id)
+                .where(UserProfile.pending_dm.is_(True))
+                .values(pending_dm=False)
+            )
+            s.commit()
+            return res.rowcount > 0
+
+    def set_pending_dm(self, user_id: int) -> bool:
+        """Поставить сигнал «выполнить сейчас» из админки (v15).
+
+        Сбрасывает диагностику сбоев (fail_count/last_error): ручная команда
+        возвращает в игру и приостановленных пользователей. Профиль должен
+        существовать; возвращает False, если строки нет.
+        """
+        from sqlalchemy import update
+        with self._sf() as s:
+            res = s.execute(
+                update(UserProfile)
+                .where(UserProfile.user_id == user_id)
+                .values(pending_dm=True, dm_fail_count=0, dm_last_error=None)
+            )
+            s.commit()
+            return res.rowcount > 0
+
+    def claim_dm_run(self, user_id: int) -> bool:
+        """Атомарно занять пользователя для немедленного прохода («выполнить сейчас»).
+
+        Ставит dm_status='running' только если он ещё не 'running'
+        (UPDATE ... WHERE dm_status IS DISTINCT FROM 'running'). Возвращает
+        True, если место заняли мы — защита от параллельных выгрузок одного
+        диалога из dm-loop и ручного запуска.
+        """
+        from sqlalchemy import update
+        with self._sf() as s:
+            res = s.execute(
+                update(UserProfile)
+                .where(UserProfile.user_id == user_id)
+                .where(UserProfile.dm_status.is_distinct_from("running"))
+                .values(dm_status="running")
+            )
+            s.commit()
+            return res.rowcount > 0
+
+    def release_dm_run(self, user_id: int, status: str | None = None) -> None:
+        """Освободить занятие прохода: running -> ok/error/None."""
+        self.update_dm_cursor(user_id, status=status)
+
     def update_dm_cursor(
         self,
         user_id: int,
@@ -319,6 +390,7 @@ class Repository:
         reset_cursor: bool = False,
         last_error: str | None = ...,
         fail_count: int | None = ...,
+        status: str | None = ...,
     ) -> None:
         """Прдвинуть курсоры ЛС-выгрузки. synced=True — поставить dm_synced_at=now.
 
@@ -328,6 +400,9 @@ class Repository:
 
         last_error/fail_count (миграция v12): диагностика сбоев. Sentinel `...`
         означает «не трогать»; None для last_error — очистить ошибку.
+
+        status (миграция v14): 'running'/'ok'/'error'/None — живой прогресс
+        прохода dm-loop для виджета в админке. Sentinel `...` — не трогать.
         """
         from sqlalchemy import update
         with self._sf() as s:
@@ -344,6 +419,8 @@ class Repository:
                 vals["dm_last_error"] = last_error
             if fail_count is not ...:
                 vals["dm_fail_count"] = fail_count
+            if status is not ...:
+                vals["dm_status"] = status
             if reset_cursor:
                 # ЛС-диалог открылся после «нет доступа» или канал сменился:
                 # старые курсоры невалидны — начинаем выгрузку заново.

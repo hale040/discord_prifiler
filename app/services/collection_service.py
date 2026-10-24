@@ -20,6 +20,7 @@ import hashlib
 import logging
 import os
 import random
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -55,10 +56,19 @@ def _to_snowflake(value: int | None) -> discord.Object | None:
 
 
 class CollectionService:
+    # Класс-реестр активного сервиса: админка (отдельный процесс) находит
+    # им экземпляр, чтобы вызвать немедленный проход ЛС «▶ Выполнить сейчас».
+    _active_instance: "CollectionService | None" = None
+
+    @classmethod
+    def active(cls) -> "CollectionService | None":
+        return cls._active_instance
+
     def __init__(self, settings: Settings, repo: Repository, client: UserbotClient) -> None:
         self.s = settings
         self.repo = repo
         self.client = client
+        CollectionService._active_instance = self
         # view может быть подменён контроллером для доклада о прогрессе
         self.view = None
         # кэш уже опрофиленных пользователей в рамках процесса
@@ -70,6 +80,9 @@ class CollectionService:
         # курсоры в рамках процесса: куда догружали историю (после restart —
         # резюм по oldest_message_id из БД)
         self._backfill_cursor: int | None = None
+        # пользователи с активным немедленным проходом «▶ Выполнить сейчас»
+        # (v14): dm-loop их пропускает, повторный клик не создаёт вторую выгрузку
+        self._dm_manual_set: set[int] = set()
         # предыдущий poll-обход был усечён лимитом API (429/retry_after):
         # следующий проход выполняется немедленно, без паузы POLL_INTERVAL_SEC
         self._poll_incomplete = False
@@ -460,6 +473,42 @@ class CollectionService:
         """
         await asyncio.sleep(10)  # дать онбордингу/главному poll-циклу стартовать
         while self._running:
+            # --- внеочередные проходы «▶ Выполнить сейчас» (миграция v15) ---
+            # Админка — отдельный процесс, прямого вызова в наш event loop нет;
+            # сигнал живёт в БД (pending_dm). Обрабатываем их до обычной
+            # очереди и коротким переопросом (каждые ~15 сек), чтобы кнопка
+            # отзывалась быстро, а не к концу DM_POLL_INTERVAL_SEC.
+            pending_deadline = time.monotonic() + getattr(
+                self.s, "dm_poll_interval_sec", 300)
+            while self._running and time.monotonic() < pending_deadline:
+                try:
+                    pend = await asyncio.to_thread(self.repo.pending_dm_user_ids)
+                except Exception:  # noqa: BLE001
+                    log.exception("dm-loop: не удалось прочитать pending_dm")
+                    pend = []
+                for uid in pend:
+                    if not self._running:
+                        break
+                    # атомарно забираем сигнал: второй обработчик его не увидит
+                    if not await asyncio.to_thread(self.repo.claim_pending_dm, uid):
+                        continue
+                    # ручная команда важнее автомата: возвращаем в игру даже
+                    # приостановленного после серии сбоев пользователя
+                    await asyncio.to_thread(
+                        self.repo.update_dm_cursor, uid,
+                        fail_count=0, last_error=None)
+                    if uid in self._dm_manual_set:
+                        continue
+                    if not await asyncio.to_thread(self.repo.claim_dm_run, uid):
+                        log.info("dm-now %s: выгрузка уже идёт — сигнал снят, "
+                                 "повторный проход не запускаем", uid)
+                        continue
+                    log.info("dm-now %s: внеочередной проход по кнопке "
+                             "«Выполнить сейчас»", uid)
+                    await self._run_dm_sync(uid)
+                    await human_delay(1.0, 2.0)
+                await asyncio.sleep(15)  # частота опроса сигнала из админки
+
             try:
                 ids = await asyncio.to_thread(self.repo.dm_fetch_user_ids)
             except Exception:  # noqa: BLE001
@@ -468,24 +517,74 @@ class CollectionService:
             for uid in ids:
                 if not self._running:
                     break
-                try:
-                    await self._sync_dm_for(uid)
-                except discord.Forbidden as exc:
-                    # Причина в discord.py-self — там Forbidden поднимается и
-                    # на 403, и на «нет канала/закрытый ЛС» (code 20003/50001).
-                    await self._dm_fail(
-                        uid,
-                        f"нет доступа к ЛС ({exc}); причины: закрытые ЛС от "
-                        "не-друзей / блокировка / диалог удалён")
-                except Exception as exc:  # noqa: BLE001
-                    log.exception("dm-loop: сбой выгрузки ЛС для %s", uid)
-                    await self._dm_fail(uid, f"{type(exc).__name__}: {exc}")
-                else:
-                    # успешный проход — очищаем диагностику
-                    await asyncio.to_thread(
-                        self.repo.update_dm_cursor, uid, last_error=None, fail_count=0)
+                # «выполнить сейчас» из админки уже занял этот диалог — пропускаем
+                if uid in self._dm_manual_set:
+                    continue
+                # атомарно занимаем проход (v14): если status уже 'running' —
+                # значит выгрузка идёт прямо сейчас, не лезем
+                if not await asyncio.to_thread(self.repo.claim_dm_run, uid):
+                    continue
+                await self._run_dm_sync(uid)
                 await human_delay(3.0, 6.0)  # пауза между пользователями
             await asyncio.sleep(getattr(self.s, "dm_poll_interval_sec", 300))
+
+    async def request_dm_now(self, user_id: int) -> bool:
+        """Немедленный проход ЛС по кнопке «▶ Выполнить сейчас» (админка).
+
+        Возвращает False, если проход уже выполняется (dm-loop или предыдущий
+        ручной запуск) — админка покажет «уже идёт» вместо второй выгрузки.
+        Работает даже при приостановленном после серии сбоев пользователем:
+        явная команда человека важнее автомата (счётчик сбоев сбрасывается).
+        """
+        prof = await asyncio.to_thread(self.repo.get_user, user_id)
+        if prof is None or not prof.dm_fetch:
+            return False
+        if user_id in self._dm_manual_set:
+            return False
+        if not await asyncio.to_thread(self.repo.claim_dm_run, user_id):
+            return False
+        await asyncio.to_thread(
+            self.repo.update_dm_cursor, user_id, fail_count=0, last_error=None)
+        self._dm_manual_set.add(user_id)
+        asyncio.create_task(
+            self._manual_dm_pass(user_id), name=f"dm-now-{user_id}")
+        return True
+
+    async def _manual_dm_pass(self, user_id: int) -> None:
+        try:
+            added = await self._sync_dm_for(user_id)
+            await asyncio.to_thread(
+                self.repo.update_dm_cursor, user_id,
+                last_error=None, fail_count=0, status="ok")
+            log.info("dm-now %s: немедленный проход завершён (новых %d)",
+                     user_id, added)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("dm-now %s: сбой: %s", user_id, exc)
+            await asyncio.to_thread(
+                self.repo.update_dm_cursor, user_id,
+                status="error", last_error=f"{type(exc).__name__}: {exc}"[:900])
+        finally:
+            self._dm_manual_set.discard(user_id)
+
+    async def _run_dm_sync(self, uid: int) -> None:
+        """Один проход dm-loop для пользователя + учёт статуса/диагностики."""
+        try:
+            await self._sync_dm_for(uid)
+        except discord.Forbidden as exc:
+            # Причина в discord.py-self — там Forbidden поднимается и
+            # на 403, и на «нет канала/закрытый ЛС» (code 20003/50001).
+            await self._dm_fail(
+                uid,
+                f"нет доступа к ЛС ({exc}); причины: закрытые ЛС от "
+                "не-друзей / блокировка / диалог удалён")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("dm-loop: сбой выгрузки ЛС для %s", uid)
+            await self._dm_fail(uid, f"{type(exc).__name__}: {exc}")
+        else:
+            # успешный проход — очищаем диагностику, освобождаем статус (v14)
+            await asyncio.to_thread(
+                self.repo.update_dm_cursor, uid,
+                last_error=None, fail_count=0, status="ok")
 
     async def _dm_fail(self, user_id: int, reason: str) -> None:
         """Записать сбой ЛС-цикла; после серии — приостановить пользователя."""
@@ -501,7 +600,8 @@ class CollectionService:
             log.warning("dm-loop %s: нет доступа к ЛС (%d/%d): %s",
                         user_id, n, limit, reason)
         await asyncio.to_thread(
-            self.repo.update_dm_cursor, user_id, last_error=msg[:900], fail_count=n)
+            self.repo.update_dm_cursor, user_id,
+            last_error=msg[:900], fail_count=n, status="error")
 
     def _find_cached_dm(self, user_id: int):
         """Найти существующий DM-канал с пользователем в кэше клиента.

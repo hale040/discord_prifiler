@@ -99,11 +99,13 @@ def ensure_schema(engine) -> None:
         # расхождении доливаем недостающее напрямую идемпотентным DDL.
         # Это исключает psycopg.errors.UndefinedColumn: user_profiles.dm_fetch.
         if _table_exists(engine, "user_profiles"):
-            missing_dm = [
-                c.name for c in UserProfile.__table__.columns
-                if c.name.startswith("dm_")
-                and c.name not in _columns(engine, "user_profiles")
-            ]
+            # Покрываем и dm_*, и служебные поля ЛС без префикса (pending_dm —
+            # миграция v15): список строим по фактически отсутствующим
+            # колонкам моделей, а не по одному лишь префиксу.
+            have = _columns(engine, "user_profiles")
+            watch = {c.name for c in UserProfile.__table__.columns
+                     if c.name.startswith("dm_")} | {"pending_dm"}
+            missing_dm = sorted(watch - have)
             if missing_dm:
                 log.warning(
                     "ensure_schema: в живой БД отсутствуют колонки %s — "
@@ -123,6 +125,8 @@ def ensure_schema(engine) -> None:
                         _v11_dm_collection,
                         _v12_dm_diagnostics,
                         _v13_dm_manual_channel,
+                        _v14_dm_status,
+                        _v15_dm_pending_flag,
                     )
 
                     log.warning(
@@ -130,7 +134,8 @@ def ensure_schema(engine) -> None:
                         ", ".join(still),
                     )
                     for fix in (_v11_dm_collection, _v12_dm_diagnostics,
-                                _v13_dm_manual_channel):
+                                _v13_dm_manual_channel,
+                                _v14_dm_status, _v15_dm_pending_flag):
                         fix(engine)
                     # Прямой ALTER на случай, если модуль миграций не обновлён.
                     with engine.begin() as conn:
@@ -149,6 +154,15 @@ def ensure_schema(engine) -> None:
                                     "ALTER TABLE user_profiles ADD COLUMN IF "
                                     "NOT EXISTS dm_fail_count INTEGER "
                                     "DEFAULT 0"))
+                            elif col == "dm_status":
+                                conn.execute(_text(
+                                    "ALTER TABLE user_profiles ADD COLUMN IF "
+                                    "NOT EXISTS dm_status TEXT"))
+                            elif col == "pending_dm":
+                                conn.execute(_text(
+                                    "ALTER TABLE user_profiles ADD COLUMN IF "
+                                    "NOT EXISTS pending_dm BOOLEAN "
+                                    "DEFAULT FALSE"))
     except Exception as exc:  # noqa: BLE001
         import logging
 

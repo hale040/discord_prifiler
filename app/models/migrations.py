@@ -194,7 +194,7 @@ def _v04_compact_raw_json(engine: Engine) -> None:
     with engine.begin() as conn:
         n = conn.execute(
             text("SELECT COUNT(*) FROM messages WHERE raw_json IS NOT NULL "
-                 "AND LENGTH(raw_json) > 4096")
+                 "AND LENGTH(raw_json::text) > 4096")
         ).scalar() or 0
         if not n:
             return
@@ -208,13 +208,13 @@ def _v04_compact_raw_json(engine: Engine) -> None:
             text(
                 "INSERT INTO _backup_v4_raw_json (id, raw_json) "
                 "SELECT id, raw_json FROM messages "
-                "WHERE raw_json IS NOT NULL AND LENGTH(raw_json) > 4096"
+                "WHERE raw_json IS NOT NULL AND LENGTH(raw_json::text) > 4096"
             )
         )
     with engine.begin() as conn:
         conn.execute(
             text("UPDATE messages SET raw_json = NULL "
-                 "WHERE raw_json IS NOT NULL AND LENGTH(raw_json) > 4096")
+                 "WHERE raw_json IS NOT NULL AND LENGTH(raw_json::text) > 4096")
         )
     log.info("Миграция v4: очищено raw_json в %s сообщениях; бэкап: _backup_v4_raw_json", n)
 
@@ -550,6 +550,42 @@ def _v13_dm_manual_channel(engine: Engine) -> None:
     log.info("Миграция v13: ручной DM-канал (dm_channel_manual) готов.")
 
 
+def _v14_dm_status(engine: Engine) -> None:
+    """v14: живой статус проходов dm-loop.
+
+    dm_status ∈ {running, ok, error} — пишет сам цикл в начале/конце прохода.
+    Админка (/dm/status/<uid>) отдаёт его вместе с курсорами и счётчиком,
+    карточка пользователя показывает прогресс без ожидания следующего тика;
+    кнопка «▶ Выполнить сейчас» блокируется пока status=running.
+    """
+    ddl = [
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dm_status TEXT",
+    ]
+    with engine.begin() as conn:
+        for stmt in ddl:
+            conn.execute(text(stmt))
+    log.info("Миграция v14: dm_status (живой прогресс ЛС-сбора) готов.")
+
+
+def _v15_dm_pending_flag(engine: Engine) -> None:
+    """v15: сигнал «выполнить сейчас» между процессами.
+
+    Админка и коллектор — отдельные процессы. Кнопка «▶ Выполнить сейчас»
+    в админке ставит pending_dm=True; живой dm-loop при каждом тике выбирает
+    таких пользователей, сбрасывает флаг и выполняет проход диалога вне
+    очереди, не дожидаясь DM_POLL_INTERVAL_SEC.
+    """
+    ddl = [
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS pending_dm BOOLEAN DEFAULT FALSE",
+        "CREATE INDEX IF NOT EXISTS ix_user_profiles_pending_dm "
+        "ON user_profiles (user_id) WHERE pending_dm IS TRUE",
+    ]
+    with engine.begin() as conn:
+        for stmt in ddl:
+            conn.execute(text(stmt))
+    log.info("Миграция v15: pending_dm (внеочередной ЛС-проход) готова.")
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
@@ -564,6 +600,8 @@ MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("v11: ЛС-сбор — флаги/курсоры в user_profiles (dm_fetch, dm_channel_id, dm_last_message_id)", _v11_dm_collection),
     ("v12: диагностика ЛС-сбора — dm_last_error, dm_fail_count (пауза после серии сбоев)", _v12_dm_diagnostics),
     ("v13: ручной DM-канал — dm_channel_manual (ЛС закрыты, но канал уже открыт)", _v13_dm_manual_channel),
+    ("v14: живой статус ЛС-сбора — dm_status (running/ok/error) для прогресса в админке", _v14_dm_status),
+    ("v15: сигнал внеочередного прохода — pending_dm (кнопка «▶ Выполнить сейчас» из админки)", _v15_dm_pending_flag),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

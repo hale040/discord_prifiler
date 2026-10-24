@@ -16,6 +16,7 @@ from flask import (
     Flask,
     abort,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -900,6 +901,105 @@ def create_app(database_url: str) -> Flask:
         flash(("🔗 Канал ЛС зафиксирован: dm-loop будет читать историю только "
                "по нему (создание нового канала не выполняется)."
                if channel_id else "Привязка канала снята — авто-режим."), "ok")
+        return redirect(url_for("record", table="user_profiles", pk=user_id))
+
+    def _dm_state_row(user_id: int) -> dict | None:
+        """Снимок ЛС-полей профиля для виджета прогресса (v14)."""
+        up = Table("user_profiles", MetaData(), autoload_with=engine)
+        cols = ["dm_fetch", "dm_status", "dm_channel_id", "dm_channel_manual",
+                "dm_messages_total", "dm_synced_at", "dm_last_error",
+                "dm_fail_count", "dm_last_message_id"]
+        have = [c for c in cols if c in up.columns]
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa_select(*[up.columns[c] for c in have])
+                .where(up.columns.user_id == user_id)
+            ).mappings().first()
+        if row is None:
+            return None
+        state = dict(zip(have, tuple(row)))
+        # «живой» признак выгрузки в текущем процессе недоступен из админки
+        # (коллектор — отдельный процесс), поэтому ориентир — dm_status +
+        # время синхронизации: running старше 30 минут считаем зависшим.
+        st = state.get("dm_status")
+        synced = state.get("dm_synced_at")
+        stale = False
+        if st == "running" and synced is not None:
+            try:
+                age = (datetime.now(timezone.utc) - synced).total_seconds()
+                stale = age > 1800
+            except Exception:  # noqa: BLE001
+                pass
+        state["stale_running"] = stale
+        return state
+
+    @app.get("/dm/status/<int:user_id>")
+    def dm_status(user_id: int):
+        """JSON для JS-виджета прогресса ЛС-сбора (карточка пользователя).
+
+        Админка и коллектор — отдельные процессы, общего состояния нет;
+        источник истины — БД (dm_status/dm_synced_at пишет dm-loop).
+        """
+        if "user_profiles" not in tables():
+            abort(404)
+        st = _dm_state_row(user_id)
+        if st is None:
+            abort(404)
+        return jsonify(st)
+
+    @app.post("/dm/run_now/<int:user_id>")
+    def dm_run_now(user_id: int):
+        """«▶ Выполнить сейчас»: немедленный проход без ожидания тика dm-loop.
+
+        Коллектор живёт в отдельном процессе (main.py), прямого вызова к его
+        event loop нет. Поэтому здесь — прямое указание через БД: сбрасываем
+        счётчик сбоев и ставим dm_status=NULL, а живой dm-loop в цикле
+        проверяет это поле и выполняет внеочередной проход диалога сразу
+        (см. CollectionService._dm_loop). Если выгрузка уже идёт — вернём
+        «already running», вторую параллельную скачку не запускаем.
+        """
+        if "user_profiles" not in tables():
+            abort(404)
+        up = Table("user_profiles", MetaData(), autoload_with=engine)
+        if "dm_status" not in up.columns or "dm_fetch" not in up.columns:
+            flash("Миграция v14 не применена — обновите код и перезапустите.", "error")
+            return redirect(url_for("record", table="user_profiles", pk=user_id))
+        with engine.connect() as conn:
+            prof = conn.execute(
+                sa_select(up.columns.dm_fetch, up.columns.dm_status,
+                          up.columns.dm_synced_at)
+                .where(up.columns.user_id == user_id)
+            ).first()
+        if prof is None:
+            abort(404)
+        enabled, status, synced = prof
+        if not enabled:
+            flash("Сначала включите «💬 Собрать ЛС».", "error")
+            return redirect(url_for("record", table="user_profiles", pk=user_id))
+        fresh_running = False
+        if status == "running":
+            try:
+                fresh_running = ((datetime.now(timezone.utc) - synced).total_seconds()
+                                 < 1800) if synced is not None else True
+            except Exception:  # noqa: BLE001
+                fresh_running = True
+        if fresh_running:
+            flash("⏳ Выгрузка уже идёт (dm-loop занят этим диалогом) — "
+                  "дождитесь завершения, повторный запуск не требуется.", "ok")
+            return redirect(url_for("record", table="user_profiles", pk=user_id))
+        # сигнал внеочередного прохода: dm-loop увидит pending_dm=True
+        with engine.begin() as conn:
+            conn.execute(
+                sa_update(up).where(up.columns.user_id == user_id).values(
+                    pending_dm=True,
+                    dm_fail_count=0,
+                    dm_last_error=None,
+                )
+            )
+        audit("dm_run_now", target=f"user={user_id}")
+        flash("▶ Команда передана коллектору: dm-loop выполнит проход "
+              "вне очереди (обычно в течение нескольких секунд). "
+              "Прогресс — ниже на этой странице.", "ok")
         return redirect(url_for("record", table="user_profiles", pk=user_id))
 
     @app.post("/browse/<table>/delete")

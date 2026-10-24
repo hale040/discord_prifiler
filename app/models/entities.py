@@ -131,6 +131,17 @@ class UserProfile(Base):
     # не повторялось каждые 5 минут вечно.
     dm_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     dm_fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Статус последнего прохода dm-loop (миграция v14): running — идёт
+    # выгрузка прямо сейчас; ok — проход завершился успешно; error — сбой.
+    # Админка показывает живой прогресс и включает кнопку «▶ Выполнить
+    # сейчас» только когда статус не running (защита от параллельных выгрузок).
+    dm_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Сигнал «выполнить сейчас» (миграция v15): админка и коллектор — разные
+    # процессы, прямого вызова в event loop коллектора нет. Кнопка «▶ Выполнить
+    # сейчас» ставит pending_dm=True; живой dm-loop при каждом тике выбирает
+    # таких пользователей вне очереди (не дожидаясь DM_POLL_INTERVAL_SEC),
+    # атомарно сбрасывает флаг (claim_pending_dm) и выполняет проход диалога.
+    pending_dm: Mapped[bool] = mapped_column(Boolean, default=False)
     # Ручной DM-канал (миграция v13): id задан из админки, когда ЛС закрыты
     # и create_dm/fetch_channel недоступны, но канал уже открыт в клиенте.
     # dm-loop читает историю по этому id и НЕ перезаписывает его и не сбрасывает

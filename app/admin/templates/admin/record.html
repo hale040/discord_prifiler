@@ -57,13 +57,52 @@
         {% endif %}
       </form>
       {% if dm_on %}
-      <p class='muted'>ЛС: включён · сообщений сохранено: {{ values.get('dm_messages_total') or 0 }} ·
+      {# ---- Живой прогресс ЛС-сбора (миграции v14/v15): виджет опрашивает
+             /dm/status/<uid> каждые 10 сек; «▶ Выполнить сейчас» ставит
+             pending_dm — dm-loop обработает вне очереди за ~15 сек #}
+      <p class='muted'>ЛС: включён · сообщений сохранено: <span id='dm-total'>{{ values.get('dm_messages_total') or 0 }}</span> ·
         канал {{ values.get('dm_channel_id') or '—' }}{% if values.get('dm_channel_manual') %} (ручной){% endif %} ·
-        последняя синхронизация: {{ values.get('dm_synced_at') or 'ещё не выполнялась (ждём следующий тик dm-loop)' }}</p>
+        последняя синхронизация: <span id='dm-synced'>{{ values.get('dm_synced_at') or 'ещё не выполнялась' }}</span></p>
+      <form method='post' action='/dm/run_now/{{ uid }}' style='display:inline'
+            onsubmit="this.querySelector('button').disabled=true;">
+        <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
+        <button class='btn' id='dm-run-now' title='не ждать следующего тика dm-loop — выгрузить диалог прямо сейчас'>▶ Выполнить сейчас</button>
+      </form>
+      <span id='dm-live' class='muted'></span>
+      <script>
+      (function () {
+        var uid = '{{ uid }}';
+        function tick() {
+          fetch('/dm/status/' + uid, {cache: 'no-store'})
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (st) {
+              if (!st) return;
+              var live = document.getElementById('dm-live');
+              var btn = document.getElementById('dm-run-now');
+              var total = document.getElementById('dm-total');
+              var synced = document.getElementById('dm-synced');
+              if (total && st.dm_messages_total != null) total.textContent = st.dm_messages_total;
+              if (synced && st.dm_synced_at) synced.textContent = st.dm_synced_at;
+              if (st.dm_status === 'running' && !st.stale_running) {
+                if (live) live.innerHTML = '⏳ <b>выгрузка идёт…</b>';
+                if (btn) btn.disabled = true;
+              } else {
+                if (live) live.innerHTML = st.dm_status === 'ok'
+                  ? '✅ последний проход завершён успешно'
+                  : (st.dm_last_error ? '⚠ ' + st.dm_last_error : '');
+                if (btn) btn.disabled = false;
+              }
+            })
+            .catch(function () {});
+        }
+        setInterval(tick, 10000);
+        tick();
+      })();
+      </script>
       {% if values.get('dm_last_error') %}
       <p class='warn'>⚠ ЛС: {{ values.get('dm_last_error') }}
         {# после серии сбоев dm-loop приостанавливает пользователя; повторное
-           нажатие «💬 Собрать ЛС» сбросит счётчик и возобновит сбор #}</p>
+           нажатие «💬 Собрать ЛС» или «▶ Выполнить сейчас» сбросит счётчик и возобновит сбор #}</p>
       {% endif %}
       {# ---- Ручной DM-канал (v13): когда ЛС закрыты от не-друзей, но диалог
              уже открыт — id канала виден в адресной строке Discord:
