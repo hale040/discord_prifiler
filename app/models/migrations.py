@@ -620,11 +620,31 @@ def run_migrations(engine: Engine) -> int:
                 conn.execute(
                     text(
                         f"INSERT INTO {MIGRATION_TABLE} (version, description) "
-                        "VALUES (:v, :d)"
+                        "VALUES (:v, :d) "
+                        "ON CONFLICT (version) DO NOTHING"
                     ),
                     {"v": 1, "d": "adopted pre-existing ad-hoc schema"},
                 )
                 current = 1
+            # Stray-БД v2: схема актуальна вплоть до v10 (таблицы динамических
+            # сигналов на месте), но таблицы версий не было вовсе — типично для
+            # баз, созданных create_all до включения миграций. Не гоняем историю
+            # v1..v9 (её шаги уже отражены в схеме), а принимаем версию v10 и
+            # штатно применяем недостающий шаг v11 (dm_* колонки). Иначе живой
+            # пользователь получает psycopg.errors.UndefinedColumn: dm_fetch.
+            elif _table_exists(engine, "message_revisions") and _table_exists(
+                engine, "interaction_aggregates"
+            ):
+                conn.execute(
+                    text(
+                        f"INSERT INTO {MIGRATION_TABLE} (version, description) "
+                        "VALUES (:v, :d) "
+                        "ON CONFLICT (version) DO NOTHING"
+                    ),
+                    {"v": len(MIGRATIONS) - 1,
+                     "d": "adopted pre-v11 schema via create_all (tables present)"},
+                )
+                current = len(MIGRATIONS) - 1
 
     applied = 0
     for idx in range(current, LATEST_VERSION):

@@ -160,6 +160,21 @@ def create_app(database_url: str) -> Flask:
     engine: Engine = create_engine(_sync_url(database_url), future=True)
     app.config["ENGINE"] = engine
 
+    # Схема могла остаться от версии до v10/v11 (create_all новые КОЛОНКИ не
+    # добавляет) — доводим до LATEST перед первым запросом. Идемпотентно и
+    # дёшево на актуальной базе; при ошибке не роняем админку (коллектор
+    # тоже вызывает миграции при старте).
+    try:
+        from app.models.db import ensure_schema
+
+        ensure_schema(engine)
+    except Exception as _mig_exc:  # noqa: BLE001
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "Админка: миграции схемы пропущены (%s). Примените вручную: "
+            "python -m app.models.migrations", _mig_exc)
+
     # --- аудит -------------------------------------------------------------
     def audit(action: str, target: str = "", details: str = "", result: str = "ok") -> None:
         try:

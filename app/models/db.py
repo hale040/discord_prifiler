@@ -48,6 +48,39 @@ def create_db_engine(url: str):
     return create_engine(_to_sync_url(require_postgres(url)), echo=False, future=True, pool_pre_ping=True)
 
 
+def ensure_schema(engine) -> None:
+    """Довести схему существующей базы до LATEST_VERSION.
+
+    Base.metadata.create_all создаёт только отсутствующие ТАБЛИЦЫ и никогда
+    не добавляет новые КОЛОНКИ в уже существующие таблицы. Без этого шага
+    база, созданная до v10/v11, падает на первом же запросе к новым полям
+    (psycopg.errors.UndefinedColumn: column user_profiles.dm_fetch does not
+    exist). Миграционный модуль идемпотентен: сам читает версию схемы из
+    таблицы schema_migrations и применяет только недостающие шаги.
+    """
+    from app.models.migrations import get_current_version, migrate, stamp_baseline
+
+    try:
+        # Порядок важен: migrate() сам читает версию схемы. Если таблицу версий
+        # стемпить LATEST до проверки (stamp_baseline это делает безусловно),
+        # база, созданная до v10/v11, будет считаться актуальной и недостающие
+        # шаги никогда не применятся — отсюда UndefinedColumn на dm_fetch.
+        if get_current_version(engine) > 0:
+            migrate(engine)     # старая БД: ALTER'ом добавить новые таблицы/колонки
+        else:
+            stamp_baseline(engine)  # fresh-БД (или ad-hoc): проставить LATEST;
+            migrate(engine)         # run_migrations сам разберётся с stray-базой
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).error(
+            "Миграции схемы не прошли (%s). Если используются новые поля — "
+            "примените вручную: python -m app.models.migrations \"$DATABASE_URL\"",
+            exc,
+        )
+        raise
+
+
 def init_db(settings: Settings) -> sessionmaker[Session]:
     sync_url = _to_sync_url(require_postgres(settings.database_url))
     engine = create_engine(
@@ -62,11 +95,14 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
         pool_recycle=1800,    # пересоздавать соединения раньше таймаута PG/LB
     )
 
-    # Миграции намеренно отключены: база новая и схема создаётся целиком
-    # из моделей (create_all). Модуль app.models.migrations сохранён для
-    # будущих версий схемы — подключать вызов migrate()/stamp_baseline()
-    # здесь, когда появятся данные, которые нужно доводить по шагам.
+    # create_all создаёт только ОТСУТСТВУЮЩИЕ таблицы — новые колонки в
+    # уже существующих таблицах он НЕ добавляет. Поэтому после него
+    # обязательно прогоняем миграционный модуль: он идемпотентен, сам
+    # определит версию схемы и ALTER'ом доведёт базу до LATEST_VERSION
+    # (например, v11 dm_* колонки в user_profiles на базе, созданной до v11).
     Base.metadata.create_all(engine)
+
+    ensure_schema(engine)
 
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
