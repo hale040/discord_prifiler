@@ -174,7 +174,7 @@ def create_app(database_url: str) -> Flask:
 
         _logging.getLogger(__name__).warning(
             "Админка: миграции схемы пропущены (%s). Примените вручную: "
-            "python -m app.models.migrations", _mig_exc)
+            "alembic upgrade head", _mig_exc)
 
     # --- аудит -------------------------------------------------------------
     def audit(action: str, target: str = "", details: str = "", result: str = "ok") -> None:

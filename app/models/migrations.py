@@ -1,19 +1,14 @@
-"""Версионируемые миграции схемы БД поверх SQLAlchemy/PostgreSQL (без Alembic).
+"""Идемпотентный DDL исторических миграций схемы (self-made v1..v15).
 
-Механизм:
-- Таблица `schema_version` хранит одну строку с текущей версией схемы.
-- Список MIGRATIONS упорядочен; индекс i -> миграция переходит из версии i в i+1.
-- Каждая миграция идемпотентна (проверяет существование колонок/индексов),
-  поэтому безопасна и на новых БД, и на старых схемах.
-- Запуск: автоматически при init_db() либо вручную `python -m app.models.migrations [database_url]`.
+С 2026-10-24 механизм применения миграций — Alembic (каталог app/migrations/,
+alembic.ini в корне проекта). Этот модуль сохранён как источник готовых
+идемпотентных шагов, которые вызываются из ревизий:
+  a00000000001_baseline_v15.py       — полная схема для новых БД;
+  a00000000002_legacy_schema_fixes.py — «доливка» недостающего поверх живых БД.
 
-Диалект: PostgreSQL. SQLite больше не поддерживается (исторические шаги v1..v8
-сохранены — они идемпотентны и корректно работают на PG-схемах; специфичные
-для SQLite ветки заменены на PG-эквиваленты).
-
-Правило для разработчиков: ЛЮБОЕ изменение модели (новая колонка/таблица/индекс)
-обязательно сопровождается записью в конец списка MIGRATIONS — номер = версия,
-в которую это изменение превращает схему.
+Правило для разработчиков: ЛЮБОЕ изменение модели сопровождается новой
+Alembic-ревизией: `alembic revision -m "описание"` в app/migrations/versions/.
+Старый исполнитель (schema_version/MIGRATIONS/run_migrations) удалён.
 """
 from __future__ import annotations
 
@@ -610,175 +605,24 @@ LATEST_VERSION = len(MIGRATIONS)
 
 
 # --------------------------------------------------------------------------- #
-# Исполнитель                                                                 #
+# Легаси-исполнитель УДАЛЁН (2026-10-24): миграции схемы — только Alembic.    #
+# Шаги v1..v15 выше используются как идемпотентный DDL из ревизий             #
+# app/migrations/versions/a00000000001_baseline_v15.py и                      #
+# a00000000002_legacy_schema_fixes.py; точка входа — ensure_schema в          #
+# app/models/db.py (alembic command.upgrade/stamp).                           #
 # --------------------------------------------------------------------------- #
-
-def get_current_version(engine: Engine) -> int:
-    """Текущая версия схемы: 0, если таблицы версий ещё нет."""
-    if not _table_exists(engine, MIGRATION_TABLE):
-        return 0
-    with engine.connect() as conn:
-        row = conn.execute(text(f"SELECT MAX(version) FROM {MIGRATION_TABLE}")).scalar()
-    return int(row or 0)
-
-
-def _version_table_ddl() -> str:
-    return (
-        f"CREATE TABLE IF NOT EXISTS {MIGRATION_TABLE} ("
-        " version INTEGER PRIMARY KEY,"
-        " description TEXT NOT NULL,"
-        " applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
-    )
-
-
-def stamp_baseline(engine: Engine) -> None:
-    """Для новых БД: создать таблицу версий и пометить её как LATEST.
-
-    Схема уже полностью создана Base.metadata.create_all из актуальных моделей,
-    прогонять исторические шаги бессмысленно (они и так идемпотентны — но
-    быстрее и чище сразу проставить версию). После стемпа всё равно запускается
-    v9 — привести PK/timestamps к PostgreSQL-нормам (fresh-БД из create_all
-    используют identity-PK с int32-лимитом).
-    """
-    with engine.begin() as conn:
-        conn.execute(text(_version_table_ddl()))
-        cur = conn.execute(text(f"SELECT COUNT(*) FROM {MIGRATION_TABLE}")).scalar()
-        if not cur:
-            conn.execute(
-                text(
-                    f"INSERT INTO {MIGRATION_TABLE} (version, description) "
-                    "VALUES (:v, :d)"
-                ),
-                {"v": LATEST_VERSION, "d": "initial schema via create_all"},
-            )
-    # PostgreSQL-нормы (bigserial PK) применяются даже к свежим БД — дешёвая
-    # идемпотентная проверка внутри каждого шага.
-    _v09_postgres_schema(engine)
-
-
-def run_migrations(engine: Engine) -> int:
-    """Применить все отсутствующие миграции; вернуть применённое число шагов."""
-    current = get_current_version(engine)
-    if current > LATEST_VERSION:
-        raise RuntimeError(
-            f"Версия схемы {current} новее кода (LATEST={LATEST_VERSION}). "
-            "Обновите приложение — откатывать схему автоматически безопасно нельзя."
-        )
-    if current == LATEST_VERSION:
-        # САМОВОССТАНОВЛЕНИЕ: даже на «актуальной» базе следим за bigserial-PK
-        # (свежие БД создаются create_all из моделей; шаг дешёвый и идемпотентный).
-        from app.models.entities import Base
-
-        fixed = 0
-        for tname in Base.metadata.tables:
-            try:
-                _pg_bigserial_pk(engine, tname)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Само-восстановление PK для %s не удалось: %s", tname, exc)
-        if fixed:
-            log.info("Миграции: само-восстановление PK выполнено.")
-        else:
-            log.debug("Миграции: схема уже в актуальной версии v%s.", current)
-        return 0
-
-    # Создаём таблицу версий, если её нет (миграция с ad-hoc ALTER'ов).
-    with engine.begin() as conn:
-        conn.execute(text(_version_table_ddl()))
-        # Stray-БД: таблицы есть, но версии нулевые. Версию определяем по
-        # ФИЗИЧЕСКОМУ состоянию схемы, а не по наличию отдельных таблиц:
-        # create_all мог создать таблицы v10 из моделей, но часть колонок
-        # (например, user_profiles.dm_fetch) отсутствовала бы, и стемп
-        # «v10 adopted» привёл бы к psycopg.errors.UndefinedColumn в рантайме.
-        if current == 0 and _table_exists(engine, "messages"):
-            mcols = _columns(engine, "messages")
-            cscols = _columns(engine, "channel_states")
-            if (
-                "reference_id" in mcols
-                and "reply_to_author_id" in mcols
-                and "deleted_at" in mcols
-                and "oldest_message_id" in cscols
-            ):
-                conn.execute(
-                    text(
-                        f"INSERT INTO {MIGRATION_TABLE} (version, description) "
-                        "VALUES (:v, :d) "
-                        "ON CONFLICT (version) DO NOTHING"
-                    ),
-                    {"v": 1, "d": "adopted pre-existing ad-hoc schema"},
-                )
-                current = 1
-                # create_all мог создать ТАКЖЕ таблицы v10 прямо из актуальных
-                # моделей (база собиралась новым кодом). Тогда история v2..v9
-                # уже отражена в схеме — принимаем v10 и идём штатно к v11.
-                if all(_table_exists(engine, t) for t in (
-                        "message_revisions", "reaction_events",
-                        "presence_snapshots", "interaction_aggregates",
-                    )):
-                    conn.execute(
-                        text(
-                            f"INSERT INTO {MIGRATION_TABLE} (version, description) "
-                            "VALUES (:v, :d) ON CONFLICT (version) DO NOTHING"
-                        ),
-                        {"v": len(MIGRATIONS) - 1,
-                         "d": "adopted v10 tables created via create_all"},
-                    )
-                    current = len(MIGRATIONS) - 1
-            # Stray-БД v2: схема актуальна вплоть до v10 (таблицы динамических
-            # сигналов на месте), но таблицы версий не было вовсе — типично для
-            # баз, созданных create_all до включения миграций. Не гоняем историю
-            # v1..v9 (её шаги уже отражены в схеме), а принимаем версию v10 и
-            # штатно применяем недостающий шаг v11 (dm_* колонки). Иначе живой
-            # пользователь получает psycopg.errors.UndefinedColumn: dm_fetch.
-            elif all(_table_exists(engine, t) for t in (
-                    "message_revisions", "reaction_events",
-                    "presence_snapshots", "interaction_aggregates",
-                )) and "dm_fetch" in _columns(engine, "user_profiles"):
-                conn.execute(
-                    text(
-                        f"INSERT INTO {MIGRATION_TABLE} (version, description) "
-                        "VALUES (:v, :d) "
-                        "ON CONFLICT (version) DO NOTHING"
-                    ),
-                    {"v": len(MIGRATIONS) - 1,
-                     "d": "adopted pre-v11 schema via create_all (tables present)"},
-                )
-                current = len(MIGRATIONS) - 1
-
-    applied = 0
-    for idx in range(current, LATEST_VERSION):
-        description, fn = MIGRATIONS[idx]
-        target = idx + 1
-        with engine.begin() as conn:
-            fn(conn.engine if hasattr(conn, "engine") else engine)
-            conn.execute(
-                text(
-                    f"INSERT INTO {MIGRATION_TABLE} (version, description) "
-                    "VALUES (:v, :d) "
-                    "ON CONFLICT (version) DO UPDATE SET description = EXCLUDED.description"
-                ),
-                {"v": target, "d": description},
-            )
-        applied += 1
-        log.info("Миграция v%s применена: %s", target, description)
-    return applied
-
-
-def migrate(engine: Engine) -> None:
-    """Точка входа для init_db: довести схему до LATEST_VERSION."""
-    run_migrations(engine)
 
 
 if __name__ == "__main__":  # ручной CLI: python -m app.models.migrations [url]
     import os
     import sys
 
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     from sqlalchemy import create_engine
 
-    from app.models.db import DEFAULT_DATABASE_URL, _to_sync_url
+    from app.models.db import DEFAULT_DATABASE_URL, _to_sync_url, ensure_schema
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     url = sys.argv[1] if len(sys.argv) > 1 else os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
     eng = create_engine(_to_sync_url(url), future=True)
-    before = get_current_version(eng)
-    n = run_migrations(eng)
-    print(f"Версия схемы: v{before} -> v{get_current_version(eng)} (применено шагов: {n})")
+    ensure_schema(eng)  # Alembic: stamp живых баз + upgrade head
+    print(f"Схема доведена Alembic до head: {url.split('@')[-1]}")

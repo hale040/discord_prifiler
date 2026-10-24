@@ -51,57 +51,124 @@ def create_db_engine(url: str):
     return create_engine(_to_sync_url(require_postgres(url)), echo=False, future=True, pool_pre_ping=True)
 
 
-def ensure_schema(engine) -> None:
-    """Довести схему существующей базы до LATEST_VERSION.
+# --- Alembic -----------------------------------------------------------------
+# Единственный механизм миграций схемы с 2026-10-24. Исторические self-made
+# шаги v1..v15 перенесены в две baseline-ревизии (app/migrations/versions):
+#   a00000000001 — полная схема (эквивалент v1..v10 + dm-полей),
+#   a00000000002 — уточнение типов dm-колонок.
+ALEMBIC_INI = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "alembic.ini")
+ALEMBIC_HEAD = "a00000000002"
 
-    Base.metadata.create_all создаёт только отсутствующие ТАБЛИЦЫ и никогда
-    не добавляет новые КОЛОНКИ в уже существующие таблицы. Без этого шага
-    база, созданная до v10/v11, падает на первом же запросе к новым полям
-    (psycopg.errors.UndefinedColumn: column user_profiles.dm_fetch does not
-    exist). Миграционный модуль идемпотентен: сам читает версию схемы из
-    таблицы schema_migrations и применяет только недостающие шаги.
+
+def _alembic_config():
+    from alembic.config import Config
+
+    cfg = Config(ALEMBIC_INI)
+    return cfg
+
+
+def _alembic_version(engine) -> str | None:
+    """Текущая ревизия Alembic в базе (None, если таблицы версий нет)."""
+    from sqlalchemy import inspect as sa_inspect, text as _text
+
+    if "alembic_version" not in sa_inspect(engine).get_table_names():
+        return None
+    with engine.connect() as conn:
+        return conn.execute(_text("SELECT version_num FROM alembic_version")).scalar()
+
+
+def _legacy_migration_state(engine) -> tuple[int, bool]:
+    """(версия self-made миграций, есть ли данные в messages).
+
+    Возвращает (0, False), если таблицы schema_version нет вовсе.
     """
-    from app.models.migrations import (
-        LATEST_VERSION,
-        _columns,
-        _table_exists,
-        get_current_version,
-        migrate,
-        run_migrations,
-        stamp_baseline,
+    from sqlalchemy import inspect as sa_inspect, text as _text
+
+    tables = set(sa_inspect(engine).get_table_names())
+    if "schema_version" not in tables:
+        return 0, ("messages" in tables and _has_rows(engine, "messages"))
+    with engine.connect() as conn:
+        ver = conn.execute(_text("SELECT MAX(version) FROM schema_version")).scalar() or 0
+        has_data = False
+        if "messages" in tables:
+            has_data = bool(conn.execute(_text("SELECT 1 FROM messages LIMIT 1")).scalar())
+    return int(ver), has_data
+
+
+def _has_rows(engine, table: str) -> bool:
+    from sqlalchemy import inspect as sa_inspect, text as _text
+
+    if table not in sa_inspect(engine).get_table_names():
+        return False
+    with engine.connect() as conn:
+        return bool(conn.execute(_text(f"SELECT 1 FROM {table} LIMIT 1")).scalar())
+
+
+def _stamp_legacy_base(engine) -> None:
+    """Перенос учёта версий со self-made схемы (schema_version) на Alembic.
+
+    Живые базы (миграции v1..vN уже применены историческим механизмом)
+    стемпятся базовой ревизией Alembic без переприменения DDL — это и есть
+    «перенос существующих миграций» в Alembic. Пустые базы не стемпятся:
+    для них штатно прогоняется upgrade().
+    """
+    from alembic import command
+
+    ver, has_data = _legacy_migration_state(engine)
+    if ver == 0 and not has_data:
+        return  # чистый лист — пусть upgrade() создаст всё с нуля
+    command.stamp(_alembic_config(), revision=ALEMBIC_HEAD if ver >= 15 else "a00000000001")
+    log.info(
+        "Alembic: живая база (self-made v%s, данные=%s) стемплена; "
+        "исторические шаги v1..v15 повторно не применяются.",
+        ver, has_data,
     )
 
-    try:
-        # Сначала — таблицы из актуальных моделей (идемпотентно, checkfirst).
-        # Без этого шага ensure_schema на пустой базе стемпил бы версию и
-        # не создал НИ ОДНОЙ таблицы (баг fresh-БД: stamp_baseline без
-        # create_all). В существующей БД create_all — дешёвый no-op.
-        Base.metadata.create_all(engine)
 
-        # Порядок важен: migrate() сам читает версию схемы. Если таблицу версий
-        # стемпить LATEST до проверки (stamp_baseline это делает безусловно),
-        # база, созданная до v10/v11, будет считаться актуальной и недостающие
-        # шаги никогда не применятся — отсюда UndefinedColumn на dm_fetch.
-        version = get_current_version(engine)
-        if version > 0:
-            migrate(engine)     # старая БД: ALTER'ом добавить новые таблицы/колонки
-        elif _table_exists(engine, "messages"):
-            # Stray-БД: таблицы есть, но версии нулевые (миграции включены
-            # позже create_all). run_migrations сам определяет физическое
-            # состояние схемы и применит недостающие шаги (v10/v11).
-            run_migrations(engine)
-        else:
-            stamp_baseline(engine)  # fresh-БД: создать таблицы версий + v9-нормы
-        # ГАРАНТИЯ ФИЗИЧЕСКОЙ ЦЕЛОСТНОСТИ (независимо от таблицы версий):
-        # версия в schema_migrations может быть ложной (например, stamp_baseline
-        # выполнился частично, или строка версии осталась от запуска, который
-        # упал до ALTER'ов). Поэтому сверяем РЕАЛЬНУЮ схему с моделями и при
-        # расхождении доливаем недостающее напрямую идемпотентным DDL.
-        # Это исключает psycopg.errors.UndefinedColumn: user_profiles.dm_fetch.
+def ensure_schema(engine) -> None:
+    """Гарант целостности схемы перед первым запросом приложения.
+
+    Порядок:
+    1. Первичная инициализация полной схемы из моделей выполняется ТОЛЬКО
+       для пустых баз (нет ни таблиц, ни alembic_version). Для живых баз
+       create_all не вызывается — единственным источником структуры БД после
+       перехода на Alembic являются ревизии.
+    2. Перенос учёта версий: живые базы со self-made schema_version стемпятся
+       базовой Alembic-ревизией (их DDL уже применён исторически).
+    3. alembic upgrade head — применяет все недостающие ревизии.
+
+    Страховка: если после upgrade физически отсутствуют dm_* колонки
+    (ложный стемп, ручные правки БД) — прогоняется прямой идемпотентный DDL.
+    """
+    from app.models.migrations import _columns, _table_exists
+
+    try:
+        tables_now = set(__import__("sqlalchemy").inspect(engine).get_table_names())
+        alembic_ver = _alembic_version(engine)
+
+        # 1. Первичная инициализация полной схемы — только для пустых баз.
+        if not tables_now and alembic_ver is None:
+            Base.metadata.create_all(engine)
+            tables_now = set(__import__("sqlalchemy").inspect(engine).get_table_names())
+
+        # 2. Перенос учёта версий со self-made миграций на Alembic:
+        #    живые базы стемпятся, их исторические ALTER'ы не повторяются.
+        if alembic_ver is None and tables_now:
+            _stamp_legacy_base(engine)
+            alembic_ver = _alembic_version(engine)
+
+        # 3. Alembic — единственный механизм применения новых ревизий.
+        #    На стемпленных живых бадах upgrade() no-op; на пустых создаёт всё.
+        if _alembic_version(engine) != ALEMBIC_HEAD:
+            from alembic import command
+
+            command.upgrade(_alembic_config(), "head")
+            log.info("Alembic: схема доведена до head (%s).", _alembic_version(engine))
+
+        # 4. Страховка физической целостности (ложный стемп / ручные правки):
+        #    при отсутствии dm_* колонок доливаем прямой идемпотентный DDL.
         if _table_exists(engine, "user_profiles"):
-            # Покрываем и dm_*, и служебные поля ЛС без префикса (pending_dm —
-            # миграция v15): список строим по фактически отсутствующим
-            # колонкам моделей, а не по одному лишь префиксу.
             have = _columns(engine, "user_profiles")
             watch = {c.name for c in UserProfile.__table__.columns
                      if c.name.startswith("dm_")} | {"pending_dm"}
@@ -109,66 +176,51 @@ def ensure_schema(engine) -> None:
             if missing_dm:
                 log.warning(
                     "ensure_schema: в живой БД отсутствуют колонки %s — "
-                    "принудительный прогон run_migrations (доведёт схему до v%s).",
-                    ", ".join(missing_dm), LATEST_VERSION,
+                    "прямой идемпотентный DDL (ревизии a00000000001/2).",
+                    ", ".join(missing_dm),
                 )
-                run_migrations(engine)
-                still = [c for c in missing_dm
-                         if c not in _columns(engine, "user_profiles")]
-                if still:
-                    # Страховка последнего рубежа: точечный идемпотентный DDL
-                    # по недостающим dm_* колонкам (шаги v11/v12/v13). Иначе
-                    # коллектор и админка падают 500/UndefinedColumn.
-                    from sqlalchemy import text as _text
+                from sqlalchemy import text as _text
 
-                    from app.models.migrations import (
-                        _v11_dm_collection,
-                        _v12_dm_diagnostics,
-                        _v13_dm_manual_channel,
-                        _v14_dm_status,
-                        _v15_dm_pending_flag,
-                    )
+                from app.models.migrations import (
+                    _v11_dm_collection,
+                    _v12_dm_diagnostics,
+                    _v13_dm_manual_channel,
+                    _v14_dm_status,
+                    _v15_dm_pending_flag,
+                )
 
-                    log.warning(
-                        "ensure_schema: run_migrations не долил %s — прямой DDL.",
-                        ", ".join(still),
-                    )
-                    for fix in (_v11_dm_collection, _v12_dm_diagnostics,
-                                _v13_dm_manual_channel,
-                                _v14_dm_status, _v15_dm_pending_flag):
-                        fix(engine)
-                    # Прямой ALTER на случай, если модуль миграций не обновлён.
-                    with engine.begin() as conn:
-                        for col in still:
-                            if col == "dm_channel_manual":
-                                conn.execute(_text(
-                                    "ALTER TABLE user_profiles ADD COLUMN IF "
-                                    "NOT EXISTS dm_channel_manual BOOLEAN "
-                                    "DEFAULT FALSE"))
-                            elif col in ("dm_last_error",):
-                                conn.execute(_text(
-                                    "ALTER TABLE user_profiles ADD COLUMN IF "
-                                    "NOT EXISTS dm_last_error TEXT"))
-                            elif col == "dm_fail_count":
-                                conn.execute(_text(
-                                    "ALTER TABLE user_profiles ADD COLUMN IF "
-                                    "NOT EXISTS dm_fail_count INTEGER "
-                                    "DEFAULT 0"))
-                            elif col == "dm_status":
-                                conn.execute(_text(
-                                    "ALTER TABLE user_profiles ADD COLUMN IF "
-                                    "NOT EXISTS dm_status TEXT"))
-                            elif col == "pending_dm":
-                                conn.execute(_text(
-                                    "ALTER TABLE user_profiles ADD COLUMN IF "
-                                    "NOT EXISTS pending_dm BOOLEAN "
-                                    "DEFAULT FALSE"))
+                for fix in (_v11_dm_collection, _v12_dm_diagnostics,
+                            _v13_dm_manual_channel,
+                            _v14_dm_status, _v15_dm_pending_flag):
+                    fix(engine)
+                with engine.begin() as conn:
+                    for col in missing_dm:
+                        if col == "dm_channel_manual":
+                            conn.execute(_text(
+                                "ALTER TABLE user_profiles ADD COLUMN IF "
+                                "NOT EXISTS dm_channel_manual BOOLEAN "
+                                "DEFAULT FALSE"))
+                        elif col in ("dm_last_error", "dm_status"):
+                            conn.execute(_text(
+                                f"ALTER TABLE user_profiles ADD COLUMN IF "
+                                f"NOT EXISTS {col} TEXT"))
+                        elif col in ("dm_fail_count", "dm_messages_total"):
+                            conn.execute(_text(
+                                f"ALTER TABLE user_profiles ADD COLUMN IF "
+                                f"NOT EXISTS {col} INTEGER DEFAULT 0"))
+                        elif col == "pending_dm":
+                            conn.execute(_text(
+                                "ALTER TABLE user_profiles ADD COLUMN IF "
+                                "NOT EXISTS pending_dm BOOLEAN "
+                                "DEFAULT FALSE"))
+                        else:
+                            conn.execute(_text(
+                                f"ALTER TABLE user_profiles ADD COLUMN IF "
+                                f"NOT EXISTS {col} BIGINT"))
     except Exception as exc:  # noqa: BLE001
-        import logging
-
-        logging.getLogger(__name__).error(
-            "Миграции схемы не прошли (%s). Если используются новые поля — "
-            "примените вручную: python -m app.models.migrations \"$DATABASE_URL\"",
+        log.error(
+            "Миграции схемы не прошли (%s). Проверьте DATABASE_URL и "
+            "права; вручную: alembic upgrade head",
             exc,
         )
         raise
@@ -188,13 +240,10 @@ def init_db(settings: Settings) -> sessionmaker[Session]:
         pool_recycle=1800,    # пересоздавать соединения раньше таймаута PG/LB
     )
 
-    # create_all создаёт только ОТСУТСТВУЮЩИЕ таблицы — новые колонки в
-    # уже существующих таблицах он НЕ добавляет. Поэтому после него
-    # обязательно прогоняем миграционный модуль: он идемпотентен, сам
-    # определит версию схемы и ALTER'ом доведёт базу до LATEST_VERSION
-    # (например, v11 dm_* колонки в user_profiles на базе, созданной до v11).
-    Base.metadata.create_all(engine)
-
+    # Единственный механизм миграций — Alembic (см. ensure_schema):
+    # пустая база получает полную схему из ревизий, живая стемпится и
+    # доводится недостающими ревизиями. create_all внутри ensure_schema
+    # вызывается только для пустых баз (первичная инициализация).
     ensure_schema(engine)
 
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)
