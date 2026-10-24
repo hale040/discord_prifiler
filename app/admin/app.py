@@ -462,10 +462,32 @@ def create_app(database_url: str) -> Flask:
         if not session.get("admin_ok"):
             return redirect(url_for("login"))
 
+    # --- UI-навигация (дизайн v16): таблицы сгруппированы по смыслу, а не
+    # вываливаются списком из 15 пунктов. Ключевые рабочие области — сверху:
+    # профили и психо; сырые ленты собраны в раскрывающуюся группу «Данные».
+    NAV_GROUPS = [
+        ("Профили", [("user_profiles", "👤 Пользователи")]),
+        ("Психо", [("psych_profiles", "🧠 Психопрофили")]),
+        ("Мессенджер", [("messages", "💬 Сообщения"),
+                        ("message_revisions", "✏️ Правки"),
+                        ("reaction_events", "😀 Реакции")]),
+        ("Контекст", [("guild_members", "🏛 Участники"),
+                      ("presence_snapshots", "🟢 Присутствие"),
+                      ("interaction_aggregates", "↔ Взаимодействия"),
+                      ("channel_stats", "📊 Статы каналов")]),
+    ]
+
     @app.context_processor
     def inject_nav():
-        return {"nav_tables": tables(), "page": "",
-                "has_psych": "psych_profiles" in tables()}
+        have = set(tables())
+        groups = [(title, [(t, label) for t, label in items if t in have])
+                  for title, items in NAV_GROUPS]
+        groups = [(t, its) for t, its in groups if its]
+        extra = [t for t in tables()
+                 if t not in {x for _, its in groups for x, _ in its}]
+        return {"nav_tables": tables(), "nav_groups": groups,
+                "nav_extra": extra, "page": "",
+                "has_psych": "psych_profiles" in have}
 
     @app.route("/login", methods=["GET", "POST"])
     def login():

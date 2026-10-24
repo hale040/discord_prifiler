@@ -1,32 +1,37 @@
-<h2>Таблица «{{ table }}» <span class='muted'>({{ total }} строк)</span></h2>
-    <form method='get' class='card' style='display:flex;gap:.5rem;align-items:end'>
-      <div style='flex:1'><label class='muted'>Поиск подстрокой</label>
-      <input type='text' name='q' value='{{ q }}' placeholder='подстрока в любом столбце'></div>
-      <div style='flex:1'><label class='muted'>Фильтр</label>
+<h2>Таблица «{{ table }}» <span class='pill'>{{ total }} строк</span></h2>
+
+<form method='get' class='card'>
+  <div class='formrow'>
+    <div style='flex:2'><label>Поиск подстрокой</label>
+      <input type='search' name='q' value='{{ q }}' placeholder='подстрока в любом столбце'></div>
+    <div><label>Фильтр: столбец</label>
       <select name='col'><option value=''>—</option>
       {% for c in cols %}<option {{ 'selected' if col==c }}>{{ c }}</option>{% endfor %}</select></div>
-      <div style='flex:1'><label class='muted'>= значение</label>
+    <div><label>= значение</label>
       <input type='text' name='val' value='{{ val }}'></div>
-      {% if has_priority %}<label style='white-space:nowrap;padding-bottom:.45rem'>
-<input type='checkbox' name='prio' value='1' {{ 'checked' if prio=='1' }}>
-только ★ приоритетные</label>{% endif %}
-      {% if is_psych_profiles %}<label style='white-space:nowrap;padding-bottom:.45rem'>
-<input type='checkbox' name='cur' value='1' {{ 'checked' if cur=='1' }}>
-только активные версии</label>{% endif %}
+    <div style='flex:0;min-width:auto;display:flex;gap:.5rem;align-items:end;padding-bottom:1px'>
+      {% if has_priority %}<label style='display:flex;align-items:center;gap:.3rem;color:var(--ink)'>
+        <input type='checkbox' name='prio' value='1' {{ 'checked' if prio=='1' }} style='width:auto'>
+        только ★ приоритетные</label>{% endif %}
+      {% if is_psych_profiles %}<label style='display:flex;align-items:center;gap:.3rem;color:var(--ink)'>
+        <input type='checkbox' name='cur' value='1' {{ 'checked' if cur=='1' }} style='width:auto'>
+        только активные версии</label>{% endif %}
       <button class='btn'>Применить</button>
       <a class='btn gray' href='{{ url_for('browse', table=table) }}'>сброс</a>
-    </form>
-    <p class='muted'>В ленте только нужные столбцы{% if hidden_count %} · {{ hidden_count }}
-    скрытых (raw/json) см. в карточке записи{% endif %}. Клик по id — открыть/править.
-    {% if has_priority %}★ — отметить/снять приоритет одним кликом.{% endif %}
-    {% if is_psych_profiles %}👁 — читаемое представление результата LLM.{% endif %}
-    Все действия — внутри карточки записи («открыть ▸»).</p>
-    <div style='overflow:auto'><table><tr>
-      {% if has_priority %}<th title='приоритетный пользователь'>★</th>{% endif %}
-      {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr>
-      {% for row in rows %}<tr>
+    </div>
+  </div>
+  <p class='muted' style='margin:.6rem 0 0'>Клик по id — открыть карточку.
+    {% if has_priority %}★ — приоритет одним кликом. {% endif %}
+    {% if is_psych_profiles %}👁 — читаемый вид результата LLM. {% endif %}
+    Все действия — внутри карточки записи.</p>
+</form>
+
+<div class='tbl-wrap'><table><tr>
+  {% if has_priority %}<th style='width:44px' title='приоритетный пользователь'>★</th>{% endif %}
+  {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th style='width:110px'></th></tr>
+  {% for row in rows %}<tr>
 {% if has_priority %}<td style='text-align:center;white-space:nowrap'>
-  <a class='btn gray' style='padding:.05rem .35rem' title='переключить priority'
+  <a class='btn gray sm' style='padding:.05rem .35rem' title='переключить priority'
      href='/browse/{{ table|e }}?star={{ row.pk }}&page={{ cur_page }}'
      {%- if q %}&q={{ q|urlencode }}{% endif -%}
      {%- if prio %}&prio=1{% endif %}}>{{ '★' if row.cells[cols.index('priority')][0] not in ('None','—','0','False','false') else '☆' }}</a></td>{% endif %}
@@ -41,12 +46,13 @@
   {# Все действия (🧠 профиль / 📋 ручной импорт / ✎ правка / ✕ удаление) —
      внутри карточки записи. В списке остаётся только ★ приоритет и 👁
      читаемого вида — они не раздувают ширину таблицы. #}
-  {% if is_psych_profiles %}<a class='btn gray' title='читаемый вид результата LLM'
+  {% if is_psych_profiles %}<a class='btn gray sm' title='читаемый вид результата LLM'
      href="{{ url_for('profile_view', pid=row.pk) }}">👁</a>{% endif %}
-  <a class='btn' href="{{ url_for('record', table=table, pk=row.pk) }}">открыть ▸</a></td>
-      </tr>{% endfor %}</table></div>
-    <p class='pager'>
-      {% if cur_page > 1 %}<a class='btn gray' href='{{ href(cur_page-1) }}'>← назад</a>{% endif %}
-      стр. {{ cur_page }} / {{ pages }}
-      {% if cur_page < pages %}<a class='btn gray' href='{{ href(cur_page+1) }}'>вперёд →</a>{% endif %}
-    </p>
+  <a class='btn sm' href="{{ url_for('record', table=table, pk=row.pk) }}">открыть ▸</a></td>
+  </tr>{% endfor %}</table></div>
+
+<p class='pager'>
+  {% if cur_page > 1 %}<a class='btn gray sm' href='{{ href(cur_page-1) }}'>← назад</a>{% endif %}
+  <span class='muted'>стр. {{ cur_page }} / {{ pages }}</span>
+  {% if cur_page < pages %}<a class='btn gray sm' href='{{ href(cur_page+1) }}'>вперёд →</a>{% endif %}
+</p>

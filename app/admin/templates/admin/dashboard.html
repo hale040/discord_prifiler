@@ -1,10 +1,11 @@
 <h2>Дашборд</h2>
-    <p class='muted'>БД: {{ db }} · всего строк: {{ total }}</p>
-    <div class='grid'>{% for name, cnt in counts %}
-      <div class='card'><b>{{ name }}</b><br><span style='font-size:1.4rem'>{{ cnt }}</span><br>
-      <a href="{{ url_for('browse', table=name) }}">просмотр →</a></div>{% endfor %}</div>
-    <div class='card'><h3>Последние действия</h3>
-      {% if recent %}<table><tr><th>когда</th><th>действие</th><th>объект</th><th>результат</th></tr>
-      {% for r in recent %}<tr><td>{{ r.created_at }}</td><td>{{ r.action }}</td>
-      <td>{{ r.target }}</td><td>{{ r.result }}</td></tr>{% endfor %}</table>
-      {% else %}<p class='muted'>пусто</p>{% endif %}</div>
+<p class='muted'>БД: {{ db }} · всего строк: {{ total }}</p>
+<div class='grid'>{% for name, cnt in counts %}
+  <div class='card stat' style='margin:0'><span class='muted'>{{ name }}</span>
+    <b>{{ '{:,}'.format(cnt).replace(',',' ') }}</b>
+    <a href="{{ url_for('browse', table=name) }}">просмотр →</a></div>{% endfor %}</div>
+<div class='card'><h4>Последние действия</h4>
+  {% if recent %}<div class='tbl-wrap' style='border:0;box-shadow:none'><table><tr><th style='width:170px'>когда</th><th style='width:180px'>действие</th><th>объект</th><th>результат</th></tr>
+  {% for r in recent %}<tr><td class='nowrap'>{{ r.created_at }}</td><td>{{ r.action }}</td>
+  <td>{{ r.target }}</td><td>{{ r.result }}</td></tr>{% endfor %}</table></div>
+  {% else %}<p class='muted'>пусто</p>{% endif %}</div>

@@ -3,45 +3,152 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
     <style>
-      body{font-family:system-ui,sans-serif;margin:0;background:#f4f5f7;color:#222}
-      nav{background:#1e1f2b;padding:.6rem 1rem;display:flex;gap:1rem;flex-wrap:wrap}
-      nav a{color:#cfd3ff;text-decoration:none;font-size:.9rem}
-      nav a.on{color:#fff;font-weight:700}
-      main{max-width:1200px;margin:1rem auto;padding:0 1rem}
-      /* фиксированная раскладка + перенос слов — таблица никогда не даёт
-         горизонтальный скролл окна браузера (контейнер overflow:auto остаётся
-         как страховка для очень широких блоков) */
-      table{border-collapse:collapse;width:100%;table-layout:fixed;background:#fff;font-size:.82rem}
-      th,td{border:1px solid #ddd;padding:.3rem .5rem;vertical-align:top;
-    overflow:hidden;text-overflow:ellipsis;white-space:normal;
-    word-break:break-word;overflow-wrap:anywhere;max-width:380px}
-      td.json{white-space:pre-wrap;word-break:break-all}
+      /* ===== Дизайн v16: чистая, спокойная админка без горизонтального скролла ===== */
+      :root{
+        --bg:#f6f7fb; --panel:#fff; --ink:#1c2333; --muted:#6b7280;
+        --line:#e5e8f0; --accent:#4550e5; --accent-h:#3743cf;
+        --danger:#c62828; --ok:#1e8e4a; --warn:#b26a00;
+        --radius:12px; --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 6px rgba(16,24,40,.05);
+      }
+      *{box-sizing:border-box}
+      body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;margin:0;
+           background:var(--bg);color:var(--ink);font-size:15px;line-height:1.45}
+
+      /* --- шапка: бренд + группы навигации + утилиты --- */
+      .topbar{background:var(--panel);border-bottom:1px solid var(--line);
+              position:sticky;top:0;z-index:10}
+      .topbar-in{max-width:1280px;margin:0 auto;padding:.55rem 1rem;
+                display:flex;align-items:center;gap:.9rem;flex-wrap:wrap}
+      .brand{display:flex;align-items:center;gap:.45rem;font-weight:700;
+             color:var(--ink);text-decoration:none;font-size:1rem;white-space:nowrap}
+      .brand img{width:22px;height:22px;border-radius:6px}
+      .navgroup{position:relative;display:inline-flex;align-items:center}
+      .navgroup > summary,.navgroup > .ng-title{list-style:none;cursor:pointer;
+        padding:.35rem .7rem;border-radius:8px;color:var(--muted);font-size:.88rem;
+        text-decoration:none;user-select:none;white-space:nowrap}
+      .navgroup > summary:hover,.navgroup.open > .ng-title{background:#eef0fb;color:var(--ink)}
+      .navgroup.active > .ng-title{background:#eef0fb;color:var(--accent);font-weight:600}
+      .ng-menu{display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:20;
+        background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        box-shadow:var(--shadow);padding:.35rem;min-width:210px}
+      .navgroup:hover .ng-menu,.navgroup:focus-within .ng-menu{display:block}
+      .ng-menu a{display:block;padding:.4rem .6rem;border-radius:7px;color:var(--ink);
+        text-decoration:none;font-size:.88rem;white-space:nowrap}
+      .ng-menu a:hover{background:#f2f4fd}
+      .ng-menu a.on{background:#eef0fb;color:var(--accent);font-weight:600}
+      .nav-direct{padding:.35rem .7rem;border-radius:8px;color:var(--muted);
+        font-size:.88rem;text-decoration:none;white-space:nowrap}
+      .nav-direct:hover{background:#eef0fb;color:var(--ink)}
+      .nav-direct.on{background:#eef0fb;color:var(--accent);font-weight:600}
+      .spacer{flex:1}
+      .utils{display:flex;align-items:center;gap:.4rem}
+
+      main{max-width:1280px;margin:1.1rem auto;padding:0 1rem 3rem}
+      h2{font-size:1.25rem;margin:.2rem 0 .8rem}
+      h4{margin:0 0 .6rem}
+
+      /* --- карточки --- */
+      .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+            padding:1rem 1.1rem;margin:0 0 .9rem;box-shadow:var(--shadow)}
+      .card h4{font-size:.95rem;color:var(--muted);text-transform:uppercase;
+               letter-spacing:.03em;margin:0 0 .7rem}
+
+      /* --- таблицы: фиксированная раскладка, никаких горизонтальных скроллов окна --- */
+      .tbl-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--line);
+                background:var(--panel);box-shadow:var(--shadow)}
+      table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:.85rem;background:transparent}
+      th,td{border-bottom:1px solid var(--line);padding:.5rem .65rem;vertical-align:top;
+            overflow:hidden;word-break:break-word;overflow-wrap:anywhere;text-align:left}
+      tr:last-child td{border-bottom:0}
+      tbody tr:hover,tr:hover{background:#fafbff}
+      th{background:#f2f4fa;color:var(--muted);font-weight:600;font-size:.78rem;
+         text-transform:uppercase;letter-spacing:.02em;position:sticky;top:0}
+      td.json{white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,monospace;font-size:.78rem}
       td.nowrap{white-space:nowrap}
-      th{background:#eef}
-      .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:1rem;margin:.6rem 0}
-      .btn{background:#4550e5;color:#fff;border:0;border-radius:6px;padding:.45rem .9rem;cursor:pointer}
-      .btn.warn{background:#c62828}.btn.gray{background:#666}
-      input[type=password],input[type=text],textarea,select{padding:.45rem;border:1px solid #bbb;
-    border-radius:6px;font:inherit;width:100%;box-sizing:border-box}
-      textarea{min-height:110px;font-family:ui-monospace,monospace}
-      .flash{background:#dff5e1;border:1px solid #9c9;padding:.5rem .8rem;border-radius:6px;margin:.5rem 0}
-      .err{background:#ffd7d7;border-color:#c62828}
-      .muted{color:#777;font-size:.8rem}
-      .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.6rem}
-      pre.sql{background:#111;color:#8f8;padding:.6rem;border-radius:6px;overflow:auto}
-      .pager a,.pager span{margin-right:.4rem}
+      td a{color:var(--accent);text-decoration:none}
+      td a:hover{text-decoration:underline}
+
+      /* --- кнопки: три размера, последовательные состояния --- */
+      .btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:8px;
+           padding:.5rem 1rem;cursor:pointer;font:inherit;font-size:.9rem;text-decoration:none;
+           transition:background .12s;line-height:1.3}
+      .btn:hover{background:var(--accent-h)}
+      .btn:disabled{opacity:.55;cursor:default}
+      .btn.warn{background:var(--danger)}
+      .btn.gray{background:#eceef5;color:var(--ink)}
+      .btn.gray:hover{background:#e0e3ee}
+      .btn.sm{padding:.28rem .6rem;font-size:.82rem;border-radius:7px}
+
+      /* --- формы --- */
+      input[type=password],input[type=text],input[type=search],textarea,select{
+        padding:.5rem .7rem;border:1px solid #ccd2e0;border-radius:8px;font:inherit;
+        width:100%;background:#fff;color:var(--ink)}
+      input:focus,textarea:focus,select:focus{outline:2px solid #c3caff;border-color:var(--accent)}
+      textarea{min-height:110px;font-family:ui-monospace,monospace;font-size:.85rem}
+      label{font-size:.85rem;color:var(--muted)}
+      .formrow{display:flex;gap:.6rem;align-items:end;flex-wrap:wrap}
+      .formrow > div{flex:1;min-width:160px}
+
+      /* --- статусы/подсказки --- */
+      .flash{padding:.6rem .9rem;border-radius:10px;margin:0 0 .9rem;font-size:.9rem;
+             background:#e7f6ec;border:1px solid #b7dfc4;color:#14532d}
+      .flash.err{background:#fdeaea;border-color:#f2bcbc;color:#7f1d1d}
+      .muted{color:var(--muted);font-size:.83rem}
+      .pill{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.78rem;
+            font-weight:600;background:#eef0fb;color:var(--accent)}
+      .pill.ok{background:#e7f6ec;color:var(--ok)}
+      .pill.warn{background:#fdf3e3;color:var(--warn)}
+      .pager{display:flex;gap:.5rem;align-items:center;margin-top:.8rem}
+      pre.sql{background:#141824;color:#9fe3a4;padding:.8rem;border-radius:10px;overflow:auto;
+              font-size:.85rem}
+      .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.8rem}
+      .stat b{display:block;font-size:1.5rem;margin:.2rem 0}
+      .stat a{color:var(--accent);text-decoration:none;font-size:.85rem}
+      @media (max-width:720px){.topbar-in{gap:.4rem}.navgroup > summary{padding:.3rem .5rem}}
     </style></head><body>
     {% if session.get('admin_ok') %}
-    <nav>
-      <a href="{{ url_for('dashboard') }}" class="{{ 'on' if page=='dash' }}"><img src="{{ url_for('static', filename='logo.png') }}" alt="" style="width:20px;height:20px;border-radius:5px;vertical-align:-4px;margin-right:.3rem">Профайлер</a>
-      {% for tb in nav_tables %}<a href="{{ url_for('browse', table=tb) }}"
- class="{{ 'on' if page=='browse' and table==tb }}">{{ tb }}</a>{% endfor %}
-      <a href="{{ url_for('sql_page') }}" class="{{ 'on' if page=='sql' }}">SQL</a>
-      {% if has_psych %}<a href="{{ url_for('profile_import') }}" class="{{ 'on' if page=='profimport' }}">🧠 Импорт LLM</a>{% endif %}
-      <a href="{{ url_for('audit_page') }}" class="{{ 'on' if page=='audit' }}">Аудит</a>
-      <a href="{{ url_for('actions_page') }}" class="{{ 'on' if page=='actions' }}">⚙️ Действия</a>
-      <a href="{{ url_for('logout') }}">Выйти</a>
-    </nav>
+    <header class="topbar"><div class="topbar-in">
+      <a class="brand" href="{{ url_for('dashboard') }}">
+        <img src="{{ url_for('static', filename='logo.png') }}" alt="">Профайлер</a>
+
+      {# Прямые пункты: рабочие области #}
+      <a class="nav-direct {{ 'on' if page=='dash' }}" href="{{ url_for('dashboard') }}">Дашборд</a>
+            {# Группы с выпадающими меню (Мессенджер / Контекст) #}
+      {% for title, items in nav_groups %}
+        {% if items|length == 1 %}
+          {% set t0, l0 = items[0] %}
+          <a class="nav-direct {{ 'on' if page=='browse' and table==t0 }}"
+             href="{{ url_for('browse', table=t0) }}">{{ l0 }}</a>
+        {% else %}
+          <span class="navgroup {{ 'active' if page=='browse' and table in items|map(attribute=0)|list }}">
+            <span class="ng-title">{{ title }} ▾</span>
+            <span class="ng-menu">
+              {% for t, l in items %}<a class="{{ 'on' if page=='browse' and table==t }}"
+                 href="{{ url_for('browse', table=t) }}">{{ l }}</a>{% endfor %}
+            </span>
+          </span>
+        {% endif %}
+      {% endfor %}
+
+      <span class="spacer"></span>
+      <span class="utils">
+        {% if nav_extra %}
+        <span class="navgroup">
+          <span class="ng-title">Ещё ▾</span>
+          <span class="ng-menu">
+            {% for t in nav_extra %}<a class="{{ 'on' if page=='browse' and table==t }}"
+               href="{{ url_for('browse', table=t) }}">{{ t }}</a>{% endfor %}
+          </span>
+        </span>
+        {% endif %}
+        {% if has_psych %}<a class="nav-direct {{ 'on' if page=='profimport' }}"
+           href="{{ url_for('profile_import') }}">🧠 Импорт LLM</a>{% endif %}
+        <a class="nav-direct {{ 'on' if page=='sql' }}" href="{{ url_for('sql_page') }}">SQL</a>
+        <a class="nav-direct {{ 'on' if page=='audit' }}" href="{{ url_for('audit_page') }}">Аудит</a>
+        <a class="nav-direct {{ 'on' if page=='actions' }}" href="{{ url_for('actions_page') }}">⚙️ Действия</a>
+        <a class="btn gray sm" href="{{ url_for('logout') }}">Выйти</a>
+      </span>
+    </div></header>
     {% endif %}
     <main>
       {% with msgs = get_flashed_messages(with_categories=true) %}

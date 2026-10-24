@@ -1,156 +1,178 @@
 <h2>{{ table }} · запись {{ pk }}</h2>
-    <p class='muted'><a href="{{ url_for('browse', table=table) }}">← к таблице</a></p>
-    <form method='post' class='card'>
-      <table style='background:transparent'>{% for f in fields %}
-      <tr>
-<td style='width:260px;border:0;padding:.3rem .6rem .3rem 0;white-space:normal'>
-  <b>{{ f.name }}</b>
-  <div class='muted'>{{ f.type }}{% if f.pk %} · PK{% endif %}{% if not f.nullable and not f.pk %} · обяз.%{% endif %}</div>
-</td>
-<td border='0' style='border:0;white-space:normal'>
-  {% if f.pk %}
-    <input type='text' value='{{ f.value }}' readonly style='background:#eee'>
-  {% elif f.kind == 'bool' %}
-    <select name='fld_{{ f.name }}' style='width:auto'>
-      {% if f.nullable %}<option value='' {{ 'selected' if f.value is none }}>NULL</option>{% endif %}
-      <option value='1' {{ 'selected' if f.value }}>true</option>
-      <option value='0' {{ 'selected' if (not f.value and f.value is not none) or (f.value is none and not f.nullable) }}>false</option>
-    </select>
-  {% elif f.kind in ('textarea',) %}
-    <textarea name='fld_{{ f.name }}'>{{ f.value if f.value is not none else '' }}</textarea>
-  {% else %}
-    <input type='text' name='fld_{{ f.name }}'
-           value='{{ f.value if f.value is not none else "" }}'
-           placeholder='{{ "пусто = NULL" if f.nullable else "обязательное поле" }}'>
-  {% endif %}
-</td>
-      </tr>{% endfor %}</table>
-      <br><button class='btn'>💾 Сохранить изменения</button>
-      <a class='btn gray' href='{{ url_for("browse", table=table) }}'>отмена</a>
+<p class='muted'><a href="{{ url_for('browse', table=table) }}" style='color:var(--accent);text-decoration:none'>← к таблице «{{ table }}»</a></p>
+
+{# ================= Действия: верхняя панель (главное — на виду) ========== #}
+{% if table == 'user_profiles' %}
+<div class='card'><h4>⚡ Действия</h4>
+  {% set ps = current_psych(uid) %}
+  <div style='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center'>
+    <form method='post' action='/psych/refresh/{{ uid }}' style='display:inline'
+          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.');">
+      <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
+      <button class='btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
+      >🧠 {{ 'Обновить психо профиль' if ps else 'Построить психо профиль' }}</button>
     </form>
-    {# ---------- Действия: всё внутри карточки (админка v11) ---------- #}
-    {% if table == 'user_profiles' %}
-    <div class='card'><h4>⚡ Действия</h4>
-      {% set ps = current_psych(uid) %}
-      <form method='post' action='/psych/refresh/{{ uid }}' style='display:inline'
-            onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.');">
-        <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
-        <button class='btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
-        >🧠 {{ 'Обновить психо профиль' if ps else 'Построить психо профиль' }}</button>
-      </form>
-      <a class='btn gray' style='text-decoration:none'
-         title='вставить ответ нейросети вручную с проверкой структуры JSON'
-         href="/psych/manual/{{ uid }}">📋 Вставить ответ модели</a>
-      {% if ps %}<a class='btn gray' style='text-decoration:none'
-         title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
-         href="{{ url_for('profile_view', pid=ps.id) }}">👁 Текущий профиль</a>{% endif %}
-      {# ---- ЛС-сбор: выгрузка истории диалога по кнопке (dm-loop) ---- #}
-      {% set dm_on = values.get('dm_fetch') %}
-      <form method='post' action='/dm/toggle/{{ uid }}' style='display:inline'
-            onsubmit="this.querySelector('button').disabled=true;">
-        <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
-        <input type='hidden' name='enabled' value='{{ 0 if dm_on else 1 }}'>
-        {% if dm_on %}
-        <button class='btn warn' title='история ЛС грузится циклом dm-loop; повторный клик — остановить'>💬 ЛС: стоп</button>
-        {% else %}
-        <button class='btn' title='включить выгрузку всей истории личных сообщений (первый проход может занять время)'>💬 Собрать ЛС</button>
-        {% endif %}
-      </form>
+    <a class='btn gray' style='text-decoration:none'
+       title='вставить ответ нейросети вручную с проверкой структуры JSON'
+       href="/psych/manual/{{ uid }}">📋 Вставить ответ модели</a>
+    {% if ps %}<a class='btn gray' style='text-decoration:none'
+       title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
+       href="{{ url_for('profile_view', pid=ps.id) }}">👁 Текущий профиль</a>{% endif %}
+    {# ---- ЛС-сбор: выгрузка истории диалога по кнопке (dm-loop) ---- #}
+    {% set dm_on = values.get('dm_fetch') %}
+    <form method='post' action='/dm/toggle/{{ uid }}' style='display:inline'
+          onsubmit="this.querySelector('button').disabled=true;">
+      <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
+      <input type='hidden' name='enabled' value='{{ 0 if dm_on else 1 }}'>
       {% if dm_on %}
-      {# ---- Живой прогресс ЛС-сбора (миграции v14/v15): виджет опрашивает
-             /dm/status/<uid> каждые 10 сек; «▶ Выполнить сейчас» ставит
-             pending_dm — dm-loop обработает вне очереди за ~15 сек #}
-      <p class='muted'>ЛС: включён · сообщений сохранено: <span id='dm-total'>{{ values.get('dm_messages_total') or 0 }}</span> ·
-        канал {{ values.get('dm_channel_id') or '—' }}{% if values.get('dm_channel_manual') %} (ручной){% endif %} ·
-        последняя синхронизация: <span id='dm-synced'>{{ values.get('dm_synced_at') or 'ещё не выполнялась' }}</span></p>
-      <form method='post' action='/dm/run_now/{{ uid }}' style='display:inline'
+      <button class='btn warn' title='история ЛС грузится циклом dm-loop; повторный клик — остановить'>💬 ЛС: стоп</button>
+      {% else %}
+      <button class='btn' title='включить выгрузку всей истории личных сообщений (первый проход может занять время)'>💬 Собрать ЛС</button>
+      {% endif %}
+    </form>
+    <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline;margin-left:auto'
+          onsubmit="return confirm('Удалить строку {{ table }}={{ pk }} без возврата?');">
+      <input type='hidden' name='pk' value='{{ pk }}'>
+      <button class='btn warn sm' title='удалить запись без возможности восстановления'>✕ Удалить</button></form>
+  </div>
+
+  {% if dm_on %}
+  {# ---- Живой прогресс ЛС-сбора: виджет опрашивает /dm/status/<uid> каждые 10 сек;
+         «▶ Выполнить сейчас» ставит pending_dm — dm-loop обработает вне очереди #}
+  <div style='margin-top:.8rem;padding:.7rem .9rem;background:#f6f8ff;border:1px solid var(--line);border-radius:10px'>
+    <div style='display:flex;gap:.6rem;flex-wrap:wrap;align-items:center'>
+      <span class='pill' id='dm-state'>⏳ статус…</span>
+      <span class='muted'>сохранено: <b id='dm-total'>{{ values.get('dm_messages_total') or 0 }}</b> сообщ.</span>
+      <span class='muted'>канал: <b>{{ values.get('dm_channel_id') or '—' }}</b>{% if values.get('dm_channel_manual') %} <i>(ручной)</i>{% endif %}</span>
+      <span class='muted'>синхронизация: <b id='dm-synced'>{{ values.get('dm_synced_at') or 'ещё не выполнялась' }}</b></span>
+      <form method='post' action='/dm/run_now/{{ uid }}' style='display:inline;margin-left:auto'
             onsubmit="this.querySelector('button').disabled=true;">
         <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
-        <button class='btn' id='dm-run-now' title='не ждать следующего тика dm-loop — выгрузить диалог прямо сейчас'>▶ Выполнить сейчас</button>
+        <button class='btn sm' id='dm-run-now' title='не ждать следующего тика dm-loop — выгрузить диалог прямо сейчас'>▶ Выполнить сейчас</button>
       </form>
-      <span id='dm-live' class='muted'></span>
-      <script>
-      (function () {
-        var uid = '{{ uid }}';
-        function tick() {
-          fetch('/dm/status/' + uid, {cache: 'no-store'})
-            .then(function (r) { return r.ok ? r.json() : null; })
-            .then(function (st) {
-              if (!st) return;
-              var live = document.getElementById('dm-live');
-              var btn = document.getElementById('dm-run-now');
-              var total = document.getElementById('dm-total');
-              var synced = document.getElementById('dm-synced');
-              if (total && st.dm_messages_total != null) total.textContent = st.dm_messages_total;
-              if (synced && st.dm_synced_at) synced.textContent = st.dm_synced_at;
-              if (st.dm_status === 'running' && !st.stale_running) {
-                if (live) live.innerHTML = '⏳ <b>выгрузка идёт…</b>';
-                if (btn) btn.disabled = true;
-              } else {
-                if (live) live.innerHTML = st.dm_status === 'ok'
-                  ? '✅ последний проход завершён успешно'
-                  : (st.dm_last_error ? '⚠ ' + st.dm_last_error : '');
-                if (btn) btn.disabled = false;
-              }
-            })
-            .catch(function () {});
-        }
-        setInterval(tick, 10000);
-        tick();
-      })();
-      </script>
-      {% if values.get('dm_last_error') %}
-      <p class='warn'>⚠ ЛС: {{ values.get('dm_last_error') }}
-        {# после серии сбоев dm-loop приостанавливает пользователя; повторное
-           нажатие «💬 Собрать ЛС» или «▶ Выполнить сейчас» сбросит счётчик и возобновит сбор #}</p>
-      {% endif %}
-      {# ---- Ручной DM-канал (v13): когда ЛС закрыты от не-друзей, но диалог
-             уже открыт — id канала виден в адресной строке Discord:
-             https://discord.com/channels/@me/<id>. Сбор НЕ создаёт каналs. #}
-      <form method='post' action='/dm/channel/{{ uid }}' style='display:inline-flex;gap:.4rem;align-items:center;margin-top:.4rem'>
-        <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
-        <label class='muted' for='dm_cid'>ID канала ЛС:</label>
-        <input id='dm_cid' type='text' name='channel_id' inputmode='numeric' pattern='\d*'
-               placeholder='например 1557390482835898419' style='width:260px'
-               value='{{ values.get('dm_channel_id') or '' }}'>
-        <button class='btn' title='зафиксировать существующий диалог: dm-loop будет читать историю только по этому каналу и не попытается создать новый'>🔗 Зафиксировать канал</button>
-        {% if values.get('dm_channel_manual') %}
-        <button class='btn gray' name='clear' value='1' title='снять ручную привязку — вернуть авто-режим (создание/поиск канала)'>✕ Снять</button>
-        {% endif %}
-      </form>
-      {% if not values.get('dm_channel_id') %}
-      <p class='muted'>Канал не найден автоматически (обычно ЛС закрыты от не-друзей). Открой диалог в Discord, скопируй id из ссылки <code>discord.com/channels/@me/&lt;id&gt;</code> и вставь выше.</p>
-      {% endif %}
-      {% endif %}
-      <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
-            onsubmit="return confirm('Удалить строку {{ table }}={{ pk }} без возврата?');">
-        <input type='hidden' name='pk' value='{{ pk }}'>
-        <button class='btn warn' style='float:right'>✕ Удалить запись</button></form>
     </div>
-    {% elif is_psych_profiles|default(false) %}
-    <div class='card'>
-      <a class='btn gray' style='text-decoration:none' href="{{ url_for('profile_view', pid=pk) }}">👁 Читаемый вид профиля</a>
-    </div>
-    {% else %}
-    <div class='card'>
-      <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
-            onsubmit="return confirm('Удалить строку {{ table }}={{ pk }} без возврата?');">
-        <input type='hidden' name='pk' value='{{ pk }}'>
-        <button class='btn warn'>✕ Удалить запись</button></form>
-    </div>
+    <span id='dm-live' class='muted'></span>
+    {% if values.get('dm_last_error') %}
+    <p style='color:var(--warn);font-size:.85rem;margin:.5rem 0 0'>⚠ ЛС: {{ values.get('dm_last_error') }}
+      {# после серии сбоев dm-loop приостанавливает пользователя; повторное
+         нажатие «💬 Собрать ЛС» или «▶ Выполнить сейчас» сбросит счётчик и возобновит сбор #}</p>
     {% endif %}
-    {% if related %}
-    <div class='card'><h4>Связанные данные пользователя {{ uid }}</h4>
-      {% if related[0].count is defined %}
-<p>{% for r in related %}<a href="{{ url_for('browse', table=r.table) }}?col=user_id&val={{ uid }}">{{ r.table }}: {{ r.count }}</a>{{ ' · ' if not loop.last }}{% endfor %}</p>
+    {# ---- Ручной DM-канал (v13): когда ЛС закрыты от не-друзей, но диалог
+           уже открыт — id канала виден в адресной строке Discord:
+           https://discord.com/channels/@me/<id>. Сбор НЕ создаёт каналы. #}
+    <form method='post' action='/dm/channel/{{ uid }}' class='formrow' style='margin-top:.6rem'>
+      <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
+      <div style='max-width:300px'><label for='dm_cid'>ID канала ЛС</label>
+      <input id='dm_cid' type='text' name='channel_id' inputmode='numeric' pattern='\d*'
+             placeholder='например 1557390482835898419'></div>
+      <div style='flex:0;min-width:auto;display:flex;gap:.4rem;align-items:end'>
+        <button class='btn sm' title='зафиксировать существующий диалог: dm-loop будет читать историю только по этому каналу и не попытается создать новый'>🔗 Зафиксировать канал</button>
+        {% if values.get('dm_channel_manual') %}
+        <button class='btn gray sm' name='clear' value='1' title='снять ручную привязку — вернуть авто-режим (поиск существующего канала)'>✕ Снять</button>
+        {% endif %}
+      </div>
+    </form>
+    {% if not values.get('dm_channel_id') %}
+    <p class='muted' style='margin:.4rem 0 0'>Канал не найден автоматически (обычно ЛС закрыты от не-друзей). Открой диалог в Discord, скопируй id из ссылки <code>discord.com/channels/@me/&lt;id&gt;</code> и вставь выше.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+  <script>
+  (function () {
+    var uid = '{{ uid }}';
+    function tick() {
+      fetch('/dm/status/' + uid, {cache: 'no-store'})
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (st) {
+          if (!st) return;
+          var live = document.getElementById('dm-live');
+          var btn = document.getElementById('dm-run-now');
+          var pill = document.getElementById('dm-state');
+          var total = document.getElementById('dm-total');
+          var synced = document.getElementById('dm-synced');
+          if (total && st.dm_messages_total != null) total.textContent = st.dm_messages_total;
+          if (synced && st.dm_synced_at) synced.textContent = st.dm_synced_at;
+          if (st.dm_status === 'running' && !st.stale_running) {
+            if (pill) { pill.textContent = '⏳ выгрузка идёт…'; pill.className = 'pill warn'; }
+            if (live) live.innerHTML = '';
+            if (btn) btn.disabled = true;
+          } else {
+            if (st.dm_status === 'ok') {
+              if (pill) { pill.textContent = '✅ синхронизировано'; pill.className = 'pill ok'; }
+              if (live) live.innerHTML = '';
+            } else {
+              if (pill) { pill.textContent = '⚠ ошибка'; pill.className = 'pill warn'; }
+              if (live) live.innerHTML = st.dm_last_error ? '' : '';
+            }
+            if (btn) btn.disabled = false;
+          }
+        })
+        .catch(function () {});
+    }
+    setInterval(tick, 10000);
+    tick();
+  })();
+  </script>
+</div>
+{% elif is_psych_profiles|default(false) %}
+<div class='card'>
+  <a class='btn' style='text-decoration:none' href="{{ url_for('profile_view', pid=pk) }}">👁 Читаемый вид профиля</a>
+</div>
+{% endif %}
+
+{# ================= Форма записи ========================================== #}
+<form method='post' class='card'>
+  <h4>Поля записи</h4>
+  <div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:.7rem 1rem'>
+    {% for f in fields %}
+    <div>
+      <label><b style='color:var(--ink)'>{{ f.name }}</b>
+        <span class='muted'>· {{ f.type }}{% if f.pk %} · PK{% endif %}{% if not f.nullable and not f.pk %} · обяз.{% endif %}</span></label>
+      {% if f.pk %}
+        <input type='text' value='{{ f.value }}' readonly style='background:#f1f2f6'>
+      {% elif f.kind == 'bool' %}
+        <select name='fld_{{ f.name }}'>
+          {% if f.nullable %}<option value='' {{ 'selected' if f.value is none }}>NULL</option>{% endif %}
+          <option value='1' {{ 'selected' if f.value }}>true</option>
+          <option value='0' {{ 'selected' if (not f.value and f.value is not none) or (f.value is none and not f.nullable) }}>false</option>
+        </select>
+      {% elif f.kind in ('textarea',) %}
+        <textarea name='fld_{{ f.name }}'>{{ f.value if f.value is not none else '' }}</textarea>
       {% else %}
+        <input type='text' name='fld_{{ f.name }}'
+               value='{{ f.value if f.value is not none else "" }}'
+               placeholder='{{ "пусто = NULL" if f.nullable else "обязательное поле" }}'>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <p style='margin-top:1rem'>
+    <button class='btn'>💾 Сохранить изменения</button>
+    <a class='btn gray' style='text-decoration:none' href='{{ url_for("browse", table=table) }}'>отмена</a>
+    {% if table != 'user_profiles' and not is_psych_profiles|default(false) %}
+    <span style='float:right'>
+      <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'
+            onsubmit="return confirm('Удалить строку {{ table }}={{ pk }} без возврата?');">
+        <input type='hidden' name='pk' value='{{ pk }}'>
+        <button class='btn warn sm'>✕ Удалить запись</button></form>
+    </span>
+    {% endif %}
+  </p>
+</form>
+
+{# ================= Связанные данные ===================================== #}
+{% if related %}
+<div class='card'><h4>Связанные данные пользователя {{ uid }}</h4>
+  {% if related[0].count is defined %}
+<p>{% for r in related %}<a class='pill' style='text-decoration:none;margin-right:.4rem' href="{{ url_for('browse', table=r.table) }}?col=user_id&val={{ uid }}">{{ r.table }}: {{ r.count }}</a>{% endfor %}</p>
+  {% else %}
 {% for block in related %}
-<h5><a href="{{ url_for('browse', table=block.table) }}?col=user_id&val={{ uid }}">{{ block.table }}</a> <span class='muted'>(до {{ block.rows|length }})</span></h5>
-<div style='overflow:auto'><table><tr>{% for c in block.cols %}<th>{{ c }}</th>{% endfor %}</tr>
+<h5><a href="{{ url_for('browse', table=block.table) }}?col=user_id&val={{ uid }}" style='color:var(--accent)'>{{ block.table }}</a> <span class='muted'>(до {{ block.rows|length }})</span></h5>
+<div class='tbl-wrap' style='margin-bottom:.8rem'><table><tr>{% for c in block.cols %}<th>{{ c }}</th>{% endfor %}</tr>
   {% for row2 in block.rows %}<tr>
     {% for v in row2 %}<td title='{{ v }}'>{% if loop.index0 == 0 %}<a href="{{ url_for('record', table=block.table, pk=block.pks[loop.index0]) }}">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
   </tr>{% endfor %}</table></div>
 {% endfor %}
-      {% endif %}
-    </div>
-    {% endif %}
+  {% endif %}
+</div>
+{% endif %}
