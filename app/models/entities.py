@@ -456,3 +456,141 @@ class ChannelState(Base):
     oldest_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     messages_total: Mapped[int] = mapped_column(Integer, default=0)
+
+
+# ---------------------------------------------------------------------------
+# Ревизии сообщений (миграция v10)
+# Каждый on_message_edit сохраняет ПРЕЖНИЙ текст до правки. Без этого история
+# редактирований теряется: update_message_edited перезаписывает content, и
+# «как человек меняет формулировки» (важнейший сигнал для психопрофилирования)
+# становится недоступен. edit_number — порядковый номер правки сообщения.
+# ---------------------------------------------------------------------------
+class MessageRevision(Base):
+    __tablename__ = "message_revisions"
+
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    author_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    edit_number: Mapped[int] = mapped_column(Integer, default=1)
+    prev_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_message_revisions_msg_edit", "message_id", "edit_number"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Событийная модель реакций (миграция v10)
+# reactions_json в messages — это снимок «на момент опроса»: видно только
+# текущее состояние (эмодзи/счётчик), но НЕ видно кто реагировал, когда и
+# когда снял реакцию. Для анализа динамики отношений (кто чью поддержку
+# выдаёт, взаимность реакций) нужна событийная лента REACTION_ADD/REMOVE.
+# ---------------------------------------------------------------------------
+class ReactionEvent(Base):
+    __tablename__ = "reaction_events"
+
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    msg_author_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    emoji: Mapped[str] = mapped_column(String(128))
+    action: Mapped[str] = mapped_column(String(8))  # add | remove
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id", "user_id", "emoji", name="uq_reaction_event_dedup"
+        ),
+        Index("ix_reaction_events_author_time", "msg_author_id", "occurred_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Presence-снапшоты (миграция v10)
+# Присутствие (online/idle/dnd/offline + кастомный статус) обновляется rarely
+# и в profile_snapshots попадает только при смене био/аватара. Отдельная
+# событийная таблица даёт историю смены статусов: режимы сна/работы,
+# «невидимка», частота смены кастомного статуса.
+# ---------------------------------------------------------------------------
+class PresenceSnapshot(Base):
+    __tablename__ = "presence_snapshots"
+
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True)  # online|idle|dnd|offline|invisible
+    status_text: Mapped[str | None] = mapped_column(String(256), nullable=True)  # custom status state
+    activity_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    activity_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_presence_user_time", "user_id", "observed_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Персистентные агрегаты взаимодействий (миграция v10)
+# Метрики диалогичности («кто кому отвечает», взаимность реакций) раньше
+# считались на лету при экспорте тяжёлыми запросами. Пары directed-агрегатов
+# (A→B) обновляются триггерами на PostgreSQL; SQLite-совместимость не нужна
+# (проект PG-only, см. заголовок migrations.py).
+# ---------------------------------------------------------------------------
+_TRG_REPLY_PAIR = """
+CREATE OR REPLACE FUNCTION trg_messages_reply_pair() RETURNS trigger AS $$
+BEGIN
+    IF NEW.reply_to_author_id IS NOT NULL AND NEW.author_id IS NOT NULL THEN
+        INSERT INTO interaction_aggregates
+            (source_user_id, target_user_id, replies_given, updated_at)
+        VALUES (NEW.author_id, NEW.reply_to_author_id, 1, now())
+        ON CONFLICT (source_user_id, target_user_id) DO UPDATE
+            SET replies_given = interaction_aggregates.replies_given + 1,
+                updated_at = now();
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+_TRG_REACTION_PAIR = """
+CREATE OR REPLACE FUNCTION trg_reaction_events_pair() RETURNS trigger AS $$
+BEGIN
+    IF NEW.action = 'add'
+       AND NEW.user_id IS NOT NULL AND NEW.msg_author_id IS NOT NULL
+       AND NEW.user_id <> NEW.msg_author_id THEN
+        INSERT INTO interaction_aggregates
+            (source_user_id, target_user_id, reactions_received, updated_at)
+        VALUES (NEW.msg_author_id, NEW.user_id, 1, now())
+        ON CONFLICT (source_user_id, target_user_id) DO UPDATE
+            SET reactions_received = interaction_aggregates.reactions_received + 1,
+                updated_at = now();
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+
+class InteractionAggregate(Base):
+    __tablename__ = "interaction_aggregates"
+
+    # BIGINT PK + bigserial на PostgreSQL (см. _pg_bigserial_pk в migrations.py)
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
+    source_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    target_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    replies_given: Mapped[int] = mapped_column(Integer, default=0)      # A ответил B
+    reactions_received: Mapped[int] = mapped_column(Integer, default=0) # B отреагировал на A
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("source_user_id", "target_user_id", name="uq_interaction_pair"),
+    )

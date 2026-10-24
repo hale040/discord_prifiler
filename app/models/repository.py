@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.entities import (
@@ -19,7 +19,10 @@ from app.models.entities import (
     ChannelState,
     GuildMemberProfile,
     Message,
+    MessageRevision,
+    PresenceSnapshot,
     ProfileSnapshot,
+    ReactionEvent,
     UserGame,
     UserRoleTag,
     UserProfile,
@@ -247,21 +250,134 @@ class Repository:
         психотипирования — при редактировании они пересчитываются заново.
         Если edited_at не пришёл из события (либа sometimes теряет поле),
         подставляем текущее время, чтобы факт правки всё равно сохранился.
+
+        Динамика правок: ПРЕЖНИЙ текст сохраняется в message_revisions —
+        без этого «как человек переформулирует мысли» недоступно анализу.
+        Дедуп: если содержимое не изменилось (либа шлёт MESSAGE_EDIT и на
+        смену embeds/реакций) — ревизия не пишется.
         """
         with self._sf() as s:
             msg = s.get(Message, message_id)
             if msg is None:
                 return
+            prev_content = msg.clean_content or ""
+            new_content = content or ""
+            if prev_content != new_content:
+                last_edit = s.scalar(
+                    select(func.max(MessageRevision.edit_number)).where(
+                        MessageRevision.message_id == message_id
+                    )
+                ) or 0
+                s.add(
+                    MessageRevision(
+                        message_id=message_id,
+                        author_id=msg.author_id,
+                        edit_number=last_edit + 1,
+                        prev_content=prev_content,
+                        new_content=new_content,
+                        edited_at=edited_at or datetime.now(timezone.utc),
+                    )
+                )
             msg.edited_at = edited_at or datetime.now(timezone.utc)
-            msg.content = content or ""
-            msg.clean_content = content or ""
-            msg.word_count = len((content or "").split())
-            msg.char_count = len(content or "")
-            msg.hashtag_count = len(HASHTAG_RE.findall(content or ""))
-            msg.mention_count = len(USER_MENTION_RE.findall(content or "")) + len(
-                ROLE_MENTION_RE.findall(content or "")
+            msg.content = new_content
+            msg.clean_content = new_content
+            msg.word_count = len(new_content.split())
+            msg.char_count = len(new_content)
+            msg.hashtag_count = len(HASHTAG_RE.findall(new_content))
+            msg.mention_count = len(USER_MENTION_RE.findall(new_content)) + len(
+                ROLE_MENTION_RE.findall(new_content)
             )
             s.commit()
+
+    # ------------------------------------------------------- reaction events
+    def record_reaction_event(
+        self,
+        message_id: int,
+        user_id: int | None,
+        emoji: str,
+        action: str,
+        *,
+        channel_id: int | None = None,
+        guild_id: int | None = None,
+        msg_author_id: int | None = None,
+    ) -> bool:
+        """Сохранить событие реакции (add/remove). Идемпотентно по паре
+        (message_id, user_id, emoji): повторный add после remove обновляет
+        строку (action/occurred_at), а не дублирует ленту. Возвращает True,
+        если событие записано/обновлено."""
+        now = datetime.now(timezone.utc)
+        with self._sf() as s:
+            row = s.scalars(
+                select(ReactionEvent).where(
+                    ReactionEvent.message_id == message_id,
+                    ReactionEvent.user_id == user_id,
+                    ReactionEvent.emoji == emoji,
+                )
+            ).first()
+            if row is not None:
+                if row.action == action:
+                    return False
+                row.action = action
+                row.occurred_at = now
+                s.commit()
+                return True
+            s.add(
+                ReactionEvent(
+                    message_id=message_id,
+                    user_id=user_id,
+                    emoji=emoji[:128],
+                    action=action,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
+                    msg_author_id=msg_author_id,
+                    occurred_at=now,
+                )
+            )
+            s.commit()
+            return True
+
+    # -------------------------------------------------------- presence log
+    def record_presence(self, snapshots: list[dict[str, Any]]) -> int:
+        """Пакетно записать presence-снапшоты. Дедуп против «шума»: строка
+        не пишется, если у пользователя уже есть последний снимок с теми же
+        status/status_text/activity_name. Возвращает число записанных строк."""
+        if not snapshots:
+            return 0
+        written = 0
+        with self._sf() as s:
+            for snap in snapshots:
+                uid = snap.get("user_id")
+                if uid is None:
+                    continue
+                last = s.scalars(
+                    select(PresenceSnapshot)
+                    .where(PresenceSnapshot.user_id == uid)
+                    .order_by(PresenceSnapshot.observed_at.desc())
+                    .limit(1)
+                ).first()
+                if last is not None and (
+                    last.status,
+                    last.status_text,
+                    last.activity_name,
+                ) == (
+                    snap.get("status"),
+                    snap.get("status_text"),
+                    snap.get("activity_name"),
+                ):
+                    continue
+                s.add(
+                    PresenceSnapshot(
+                        user_id=int(uid),
+                        status=snap.get("status"),
+                        status_text=(snap.get("status_text") or "")[:256] or None,
+                        activity_name=(snap.get("activity_name") or "")[:256] or None,
+                        activity_kind=snap.get("activity_kind"),
+                        observed_at=snap.get("observed_at") or utcnow(),
+                    )
+                )
+                written += 1
+            s.commit()
+        return written
 
     def mark_message_deleted(self, message_id: int) -> bool:
         """Пометить сообщение удалённым (данные сохраняем — это история)."""
@@ -402,6 +518,61 @@ class Repository:
             s.commit()
 
     # ------------------------------------------------------------- analytics
+    def data_quality(self) -> dict[str, float]:
+        """Индикатор полноты данных (Data completeness score).
+
+        Доли (0..1) по целевой выборке приоритетных пользователей:
+        - profile: заполнен about или global_name (статичная личность);
+        - revisions: есть хотя бы одна сохранённая ревизия правки;
+        - reactions: есть событийные реакции на их сообщения;
+        - presence: есть presence-снапшоты.
+        Пустая база => доли 0. Считается лёгкими EXISTS-запросами.
+        """
+        with self._sf() as s:
+            users = s.scalars(
+                select(UserProfile.user_id).where(UserProfile.priority == True)  # noqa: E712
+            ).all()
+            if not users:
+                return {"users": 0, "profile": 0.0, "revisions": 0.0,
+                        "reactions": 0.0, "presence": 0.0}
+            n = len(users)
+            uid_set = set(users)
+
+            def frac(rows: Iterable) -> float:
+                return round(len(set(rows) & uid_set) / n, 3)
+
+            prof = frac(
+                s.scalars(
+                    select(UserProfile.user_id).where(
+                        UserProfile.priority == True,  # noqa: E712
+                        (UserProfile.about.isnot(None)) | (UserProfile.global_name.isnot(None)),
+                    )
+                ).all()
+            )
+            rev = frac(
+                s.scalars(
+                    select(MessageRevision.author_id)
+                    .where(MessageRevision.author_id.in_(uid_set))
+                    .distinct()
+                ).all()
+            )
+            rxn = frac(
+                s.scalars(
+                    select(ReactionEvent.msg_author_id)
+                    .where(ReactionEvent.msg_author_id.in_(uid_set))
+                    .distinct()
+                ).all()
+            )
+            pres = frac(
+                s.scalars(
+                    select(PresenceSnapshot.user_id)
+                    .where(PresenceSnapshot.user_id.in_(uid_set))
+                    .distinct()
+                ).all()
+            )
+            return {"users": n, "profile": prof, "revisions": rev,
+                    "reactions": rxn, "presence": pres}
+
     def stats(self) -> dict[str, int]:
         from sqlalchemy import func
 
@@ -417,4 +588,8 @@ class Repository:
                 )
                 or 0,
                 "roles": s.scalar(select(func.count()).select_from(UserRoleTag)) or 0,
+                # --- v10: динамические сигналы --------------------------
+                "revisions": s.scalar(select(func.count()).select_from(MessageRevision)) or 0,
+                "reaction_events": s.scalar(select(func.count()).select_from(ReactionEvent)) or 0,
+                "presence_snapshots": s.scalar(select(func.count()).select_from(PresenceSnapshot)) or 0,
             }

@@ -72,7 +72,33 @@ class CollectorController:
         Клиент (UserbotClient) передаёт готовые объекты в ``payload["message"]``.
         """
         msg = payload.get("message")
+        # --- события без объекта сообщения (реакции/presence): v10 ---------
         if msg is None:
+            try:
+                if action in ("REACTION_ADD", "REACTION_REMOVE"):
+                    mid = payload.get("message_id")
+                    chid = payload.get("channel_id")
+                    if not mid:
+                        return
+                    # реакции пишутся по всем сообщениям ленты — это лента
+                    # взаимодействий; filter по каналу только если известен
+                    if chid and int(chid) != self.settings.channel_id:
+                        return
+                    await asyncio.to_thread(
+                        self.repo.record_reaction_event,
+                        int(mid),
+                        payload.get("user_id"),
+                        payload.get("emoji") or "",
+                        "add" if action == "REACTION_ADD" else "remove",
+                    )
+                elif action == "PRESENCE_UPDATE":
+                    uid = payload.get("user_id")
+                    if uid:
+                        await asyncio.to_thread(
+                            self.repo.record_presence, [dict(payload, user_id=int(uid))]
+                        )
+            except Exception as exc:  # noqa: BLE001
+                log.debug("live %s обработан с ошибкой: %s", action, exc)
             return
         try:
             if int(getattr(getattr(msg, "channel", None), "id", 0) or 0) != self.settings.channel_id:

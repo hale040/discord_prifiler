@@ -427,6 +427,63 @@ def _v09_postgres_schema(engine: Engine) -> None:
                         conn.execute(text(stmt))
 
 
+def _v10_dynamic_signals(engine: Engine) -> None:
+    """v10: динамические поведенческие сигналы (план системного анализа, P0).
+
+    - message_revisions: история правок сообщений (прежний текст до edits);
+    - reaction_events: событийная лента реакций (кто/чем/когда add|remove);
+    - presence_snapshots: смена статусов/присутствия во времени;
+    - interaction_aggregates + PG-триггеры: персистентные directed-метрики
+      диалогичности (replies_given A→B, reactions_received), обновляются
+      на лету вместо тяжёлых расчётов «на лету» при экспорте.
+    Идемпотентно: таблицы через модели, триггеры CREATE OR REPLACE.
+    Триггер на messages AFTER UPDATE срабатывает только когда
+    reply_to_author_id переходит из NULL в значение (link_reply_references
+    заполняет его асинхронно) — дублей не даёт."""
+    from app.models.entities import Base, _TRG_REACTION_PAIR, _TRG_REPLY_PAIR
+
+    created = []
+    for tname in (
+        "message_revisions",
+        "reaction_events",
+        "presence_snapshots",
+        "interaction_aggregates",
+    ):
+        if not _table_exists(engine, tname):
+            with engine.begin() as conn:
+                Base.metadata.tables[tname].create(bind=conn, checkfirst=True)
+            created.append(tname)
+    if created:
+        log.info("Миграция v10: созданы таблицы %s", ", ".join(created))
+
+    # Триггеры агрегатов взаимодействий (PostgreSQL; идемпотентно).
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(_TRG_REPLY_PAIR))
+            conn.execute(text(
+                "DROP TRIGGER IF EXISTS trg_messages_reply_pair ON messages"
+            ))
+            conn.execute(text(
+                "CREATE TRIGGER trg_messages_reply_pair AFTER UPDATE OF "
+                "reply_to_author_id ON messages FOR EACH ROW "
+                "WHEN (OLD.reply_to_author_id IS NULL "
+                "AND NEW.reply_to_author_id IS NOT NULL) "
+                "EXECUTE FUNCTION trg_messages_reply_pair()"
+            ))
+            conn.execute(text(_TRG_REACTION_PAIR))
+            conn.execute(text(
+                "DROP TRIGGER IF EXISTS trg_reaction_events_pair ON reaction_events"
+            ))
+            conn.execute(text(
+                "CREATE TRIGGER trg_reaction_events_pair AFTER INSERT ON "
+                "reaction_events FOR EACH ROW EXECUTE FUNCTION "
+                "trg_reaction_events_pair()"
+            ))
+        log.info("Миграция v10: триггеры interaction_aggregates применены.")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("v10: триггеры взаимодействия не применены: %s", exc)
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
@@ -437,6 +494,7 @@ MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("user_roles: first/last_seen + last_lost_at; attachments: kind", _v07_role_dynamics_and_attach_kind),
     ("psych_profiles/psych_signals/user_interests: психопрофиль от LLM (миграция v8)", _v08_psych_profiles),
     ("postgres: BIGINT+bigserial PK, TIMESTAMPTZ timestamps", _v09_postgres_schema),
+    ("v10: message_revisions, reaction_events, presence_snapshots, interaction_aggregates + триггеры", _v10_dynamic_signals),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

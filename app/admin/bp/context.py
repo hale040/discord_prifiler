@@ -83,6 +83,23 @@ VIEW_COLUMNS: dict[str, list[str]] = {
         "id", "user_id", "topic", "evidence_count", "evidence",
         "first_seen_at", "last_seen_at",
     ],
+    # --- динамические сигналы (миграция v10) --------------------------------
+    "message_revisions": [
+        "id", "message_id", "author_id", "edit_number", "edited_at",
+        "prev_content", "new_content", "recorded_at",
+    ],
+    "reaction_events": [
+        "id", "message_id", "user_id", "msg_author_id", "emoji",
+        "action", "occurred_at",
+    ],
+    "presence_snapshots": [
+        "id", "user_id", "status", "status_text", "activity_name",
+        "activity_kind", "observed_at",
+    ],
+    "interaction_aggregates": [
+        "id", "source_user_id", "target_user_id", "replies_given",
+        "reactions_received", "updated_at",
+    ],
 }
 
 # Ссылки «кто это?» — колонки, по которым строится ссылка на user_profiles.

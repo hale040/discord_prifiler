@@ -78,6 +78,67 @@ class UserbotClient(discord.Client):
         except Exception:  # noqa: BLE001
             log.exception("Ошибка live-обработки удаления %s", getattr(message, "id", "?"))
 
+    async def on_raw_reaction_add(self, payload: Any) -> None:
+        """REACTION_ADD без кэша сообщения (raw-событие надёжнее cached)."""
+        try:
+            await self._gateway_callback(
+                "REACTION_ADD",
+                {
+                    "message_id": getattr(payload, "message_id", None),
+                    "channel_id": getattr(payload, "channel_id", None),
+                    "guild_id": getattr(payload, "guild_id", None),
+                    "user_id": getattr(getattr(payload, "user", None), "id", None)
+                    or getattr(payload, "user_id", None),
+                    "emoji": str(getattr(payload, "emoji", "")),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка live-обработки реакции add")
+
+    async def on_raw_reaction_remove(self, payload: Any) -> None:
+        """REACTION_REMOVE — снятие реакции тоже сигнал (пересмотр оценки)."""
+        try:
+            await self._gateway_callback(
+                "REACTION_REMOVE",
+                {
+                    "message_id": getattr(payload, "message_id", None),
+                    "channel_id": getattr(payload, "channel_id", None),
+                    "guild_id": getattr(payload, "guild_id", None),
+                    "user_id": getattr(getattr(payload, "user", None), "id", None)
+                    or getattr(payload, "user_id", None),
+                    "emoji": str(getattr(payload, "emoji", "")),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка live-обработки реакции remove")
+
+    async def on_presence_update(self, before: Any, after: Any) -> None:
+        """PRESENCE_UPDATE: смена статуса/активности участника гильдии."""
+        try:
+            user = after or before
+            status = getattr(after, "status", None) or getattr(before, "status", None)
+            activities = getattr(after, "activities", None) or []
+            act_name = act_kind = status_text = None
+            for a in activities:
+                kind = str(getattr(getattr(a, "type", None), "name", getattr(a, "type", "")))
+                if "custom" in kind.lower():
+                    status_text = getattr(a, "state", None)
+                elif act_name is None:
+                    act_name = getattr(a, "name", None)
+                    act_kind = kind
+            await self._gateway_callback(
+                "PRESENCE_UPDATE",
+                {
+                    "user_id": getattr(user, "id", None),
+                    "status": getattr(status, "name", None) or (str(status) if status else None),
+                    "status_text": status_text,
+                    "activity_name": act_name,
+                    "activity_kind": act_kind,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка live-обработки presence")
+
     # ---------------------------------------------------------------- events
     async def on_ready(self) -> None:
         # on_ready вызывается при каждой переподключении gateway — иначе
