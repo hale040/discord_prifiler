@@ -131,6 +131,11 @@ class UserProfile(Base):
     # не повторялось каждые 5 минут вечно.
     dm_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     dm_fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Ручной DM-канал (миграция v13): id задан из админки, когда ЛС закрыты
+    # и create_dm/fetch_channel недоступны, но канал уже открыт в клиенте.
+    # dm-loop читает историю по этому id и НЕ перезаписывает его и не сбрасывает
+    # курсоры при «канал недоступен».
+    dm_channel_manual: Mapped[bool] = mapped_column(Boolean, default=False)
     premium_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Локаль/часовой пояс, если доступны

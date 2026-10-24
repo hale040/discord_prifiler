@@ -835,6 +835,63 @@ def create_app(database_url: str) -> Flask:
                if enabled else "💬 Сбор ЛС остановлен."), "ok")
         return redirect(url_for("record", table="user_profiles", pk=user_id))
 
+    @app.post("/dm/channel/<int:user_id>")
+    def dm_channel(user_id: int):
+        """Ручная привязка DM-канала (миграция v13).
+
+        Когда ЛС закрыты от не-друзей, create_dm возвращает 403 и канал не
+        находится. Но если диалог уже открыт в клиенте, id канала виден в
+        адресной строке Discord: https://discord.com/channels/@me/<id>.
+        Здесь мы фиксируем этот id; dm-loop читает историю только по нему
+        и НЕ пытается создать новый канал. Поле «clear=1» снимает привязку.
+        """
+        if "user_profiles" not in inspect(engine).get_table_names():
+            abort(404)
+        sa_tbl = Table("user_profiles", MetaData(), autoload_with=engine)
+        if "dm_channel_manual" not in sa_tbl.columns:
+            flash("Миграция v13 не применена (нет колонки dm_channel_manual) — "
+                  "обновите БД.", "error")
+            return redirect(url_for("record", table="user_profiles", pk=user_id))
+        clear = request.form.get("clear") == "1"
+        raw = (request.form.get("channel_id") or "").strip()
+        channel_id: int | None = None
+        if not clear:
+            if not raw.isdigit():
+                flash("ID канала должен быть числом (из ссылки "
+                      "discord.com/channels/@me/<id>).", "error")
+                return redirect(url_for("record", table="user_profiles", pk=user_id))
+            channel_id = int(raw)
+        with engine.begin() as conn:
+            n = conn.execute(
+                sa_update(sa_tbl).where(sa_tbl.columns.user_id == user_id)
+                .values(
+                    dm_channel_id=channel_id,
+                    dm_channel_manual=channel_id is not None,
+                    # сброс диагностики — dm-loop сразу попробует снова
+                    dm_last_error=None,
+                    dm_fail_count=0,
+                    # новый канал => старые курсоры невалидны
+                    **({} if channel_id is None else {
+                        "dm_last_message_id": None,
+                        "dm_first_message_id": None,
+                        "dm_messages_total": 0,
+                    }),
+                )
+            ).rowcount
+        if n == 0:
+            # профиля нет — создаём заглушку с привязкой и включённым сбором
+            with engine.begin() as conn:
+                conn.execute(sa_insert(sa_tbl).values(
+                    user_id=user_id, dm_fetch=True,
+                    dm_channel_id=channel_id,
+                    dm_channel_manual=channel_id is not None))
+        audit("dm_channel", target=f"user={user_id}",
+              result=str(channel_id) if channel_id else "cleared")
+        flash(("🔗 Канал ЛС зафиксирован: dm-loop будет читать историю только "
+               "по нему (создание нового канала не выполняется)."
+               if channel_id else "Привязка канала снята — авто-режим."), "ok")
+        return redirect(url_for("record", table="user_profiles", pk=user_id))
+
     @app.post("/browse/<table>/delete")
     def delete_row(table: str):
         table = safe_ident(table)

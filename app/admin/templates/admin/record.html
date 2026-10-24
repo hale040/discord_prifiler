@@ -58,12 +58,29 @@
       </form>
       {% if dm_on %}
       <p class='muted'>ЛС: включён · сообщений сохранено: {{ values.get('dm_messages_total') or 0 }} ·
-        канал {{ values.get('dm_channel_id') or '—' }} ·
+        канал {{ values.get('dm_channel_id') or '—' }}{% if values.get('dm_channel_manual') %} (ручной){% endif %} ·
         последняя синхронизация: {{ values.get('dm_synced_at') or 'ещё не выполнялась (ждём следующий тик dm-loop)' }}</p>
       {% if values.get('dm_last_error') %}
       <p class='warn'>⚠ ЛС: {{ values.get('dm_last_error') }}
         {# после серии сбоев dm-loop приостанавливает пользователя; повторное
            нажатие «💬 Собрать ЛС» сбросит счётчик и возобновит сбор #}</p>
+      {% endif %}
+      {# ---- Ручной DM-канал (v13): когда ЛС закрыты от не-друзей, но диалог
+             уже открыт — id канала виден в адресной строке Discord:
+             https://discord.com/channels/@me/<id>. Сбор НЕ создаёт каналs. #}
+      <form method='post' action='/dm/channel/{{ uid }}' style='display:inline-flex;gap:.4rem;align-items:center;margin-top:.4rem'>
+        <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
+        <label class='muted' for='dm_cid'>ID канала ЛС:</label>
+        <input id='dm_cid' type='text' name='channel_id' inputmode='numeric' pattern='\d*'
+               placeholder='например 1557390482835898419' style='width:260px'
+               value='{{ values.get('dm_channel_id') or '' }}'>
+        <button class='btn' title='зафиксировать существующий диалог: dm-loop будет читать историю только по этому каналу и не попытается создать новый'>🔗 Зафиксировать канал</button>
+        {% if values.get('dm_channel_manual') %}
+        <button class='btn gray' name='clear' value='1' title='снять ручную привязку — вернуть авто-режим (создание/поиск канала)'>✕ Снять</button>
+        {% endif %}
+      </form>
+      {% if not values.get('dm_channel_id') %}
+      <p class='muted'>Канал не найден автоматически (обычно ЛС закрыты от не-друзей). Открой диалог в Discord, скопируй id из ссылки <code>discord.com/channels/@me/&lt;id&gt;</code> и вставь выше.</p>
       {% endif %}
       {% endif %}
       <form method='post' action="{{ url_for('delete_row', table=table) }}" style='display:inline'

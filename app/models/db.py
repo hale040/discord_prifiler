@@ -114,16 +114,41 @@ def ensure_schema(engine) -> None:
                 still = [c for c in missing_dm
                          if c not in _columns(engine, "user_profiles")]
                 if still:
-                    # Страховка последнего рубежа: тот же DDL, что в шаге v11,
-                    # но точечно по недостающим колонкам. Иначе коллектор и
-                    # админка падают 500/UndefinedColumn на каждом запросе.
-                    from app.models.migrations import _v11_dm_collection
+                    # Страховка последнего рубежа: точечный идемпотентный DDL
+                    # по недостающим dm_* колонкам (шаги v11/v12/v13). Иначе
+                    # коллектор и админка падают 500/UndefinedColumn.
+                    from sqlalchemy import text as _text
+
+                    from app.models.migrations import (
+                        _v11_dm_collection,
+                        _v12_dm_diagnostics,
+                        _v13_dm_manual_channel,
+                    )
 
                     log.warning(
                         "ensure_schema: run_migrations не долил %s — прямой DDL.",
                         ", ".join(still),
                     )
-                    _v11_dm_collection(engine)
+                    for fix in (_v11_dm_collection, _v12_dm_diagnostics,
+                                _v13_dm_manual_channel):
+                        fix(engine)
+                    # Прямой ALTER на случай, если модуль миграций не обновлён.
+                    with engine.begin() as conn:
+                        for col in still:
+                            if col == "dm_channel_manual":
+                                conn.execute(_text(
+                                    "ALTER TABLE user_profiles ADD COLUMN IF "
+                                    "NOT EXISTS dm_channel_manual BOOLEAN "
+                                    "DEFAULT FALSE"))
+                            elif col in ("dm_last_error",):
+                                conn.execute(_text(
+                                    "ALTER TABLE user_profiles ADD COLUMN IF "
+                                    "NOT EXISTS dm_last_error TEXT"))
+                            elif col == "dm_fail_count":
+                                conn.execute(_text(
+                                    "ALTER TABLE user_profiles ADD COLUMN IF "
+                                    "NOT EXISTS dm_fail_count INTEGER "
+                                    "DEFAULT 0"))
     except Exception as exc:  # noqa: BLE001
         import logging
 

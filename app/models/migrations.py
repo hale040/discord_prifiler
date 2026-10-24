@@ -531,6 +531,25 @@ def _v12_dm_diagnostics(engine: Engine) -> None:
     log.info("Миграция v12: диагностика ЛС-сбора (dm_last_error, dm_fail_count) готова.")
 
 
+def _v13_dm_manual_channel(engine: Engine) -> None:
+    """v13: ручной выбор DM-канала.
+
+    dm_channel_id может быть задан вручную из админки (поле в карточке),
+    когда канал уже открыт в клиенте, но недоступен через create_dm /
+    fetch_channel (закрытые ЛС от не-друзей). Флаг dm_channel_manual=True
+    запрещает dm-loop перезаписывать id канала и сбрасывать курсоры при
+    «канал недоступен» — цикл читает историю по указанному id напрямую.
+    """
+    ddl = [
+        "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS "
+        "dm_channel_manual BOOLEAN DEFAULT FALSE",
+    ]
+    with engine.begin() as conn:
+        for stmt in ddl:
+            conn.execute(text(stmt))
+    log.info("Миграция v13: ручной DM-канал (dm_channel_manual) готов.")
+
+
 MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("baseline: связи ответов (reference_id/reply_to_author_id), deleted_at, курсоры", _v01_baseline),
     ("audit_log: журнал действий админки", _v02_audit_log),
@@ -544,6 +563,7 @@ MIGRATIONS: list[tuple[str, Callable[[Engine], None]]] = [
     ("v10: message_revisions, reaction_events, presence_snapshots, interaction_aggregates + триггеры", _v10_dynamic_signals),
     ("v11: ЛС-сбор — флаги/курсоры в user_profiles (dm_fetch, dm_channel_id, dm_last_message_id)", _v11_dm_collection),
     ("v12: диагностика ЛС-сбора — dm_last_error, dm_fail_count (пауза после серии сбоев)", _v12_dm_diagnostics),
+    ("v13: ручной DM-канал — dm_channel_manual (ЛС закрыты, но канал уже открыт)", _v13_dm_manual_channel),
     # Пример добавления новой миграции (следующий номер!):
     # ("messages: колонка pinned", lambda eng: eng.execute(...)),
 ]

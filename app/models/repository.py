@@ -229,6 +229,56 @@ class Repository:
             s.commit()
             return True
 
+    def set_dm_channel(self, user_id: int, channel_id: int | None) -> bool:
+        """Задать DM-канал вручную (миграция v13).
+
+        Используется, когда ЛС закрыты от не-друзей (create_dm -> 403), но
+        диалог уже открыт в клиенте и id канала виден в адресной строке
+        Discord (https://discord.com/channels/@me/<channel_id>).
+
+        channel_id=None — снять ручную привязку (вернуться к авто-режиму).
+        При установке нового id курсоры сбрасываются: старая привязка могла
+        вести к другому диалогу. Если канал тот же — курсоры сохраняются
+        (продолжаем выгрузку без повторов).
+        """
+        from sqlalchemy import update
+        with self._sf() as s:
+            prof = s.scalars(
+                select(UserProfile).where(UserProfile.user_id == user_id)
+            ).first()
+            if prof is None:
+                s.add(UserProfile(user_id=user_id, dm_fetch=True,
+                                  dm_channel_id=channel_id,
+                                  dm_channel_manual=channel_id is not None))
+                s.commit()
+                return True
+            vals: dict[str, Any] = {
+                "dm_channel_manual": channel_id is not None,
+            }
+            if channel_id is None:
+                vals["dm_channel_id"] = None
+            elif prof.dm_channel_id != channel_id:
+                # новый ручной канал — старые курсоры невалидны
+                vals.update({
+                    "dm_channel_id": channel_id,
+                    "dm_last_message_id": None,
+                    "dm_first_message_id": None,
+                    "dm_messages_total": 0,
+                    "dm_last_error": None,
+                    "dm_fail_count": 0,
+                })
+            else:
+                # тот же канал: просто снимаем диагностику, чтобы dm-loop
+                # сразу попробовал снова
+                vals.update({"dm_last_error": None, "dm_fail_count": 0})
+            s.execute(
+                update(UserProfile)
+                .where(UserProfile.user_id == user_id)
+                .values(**vals)
+            )
+            s.commit()
+            return True
+
     def dm_channel_ids(self) -> set[int]:
         """id каналов ЛС, для которых включён сбор — live-события из этих
         каналов обрабатываются даже когда основной цикл сбора выключен."""
