@@ -29,6 +29,7 @@ class CollectorController:
 
         # Model
         session_factory = init_db(settings)
+        log.info("Схема БД проверена/обновлена (Alembic head). Старт клиента…")
         self.repo = Repository(session_factory)
 
         # Service (Discord user-client)
