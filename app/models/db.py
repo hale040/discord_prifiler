@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.models.entities import Base
+from app.models.entities import Base, UserProfile
 
 log = logging.getLogger(__name__)
 
@@ -86,20 +86,38 @@ def ensure_schema(engine) -> None:
             run_migrations(engine)
         else:
             stamp_baseline(engine)  # fresh-БД: создать таблицы версий + v9-нормы
-        # Финальная страховка (физическая проверка, независимо от версии):
-        # если после всех шагов в схеме чего-то не хватает из LATEST —
-        # применяем недостающие миграции напрямую. Это исключает ситуацию,
-        # когда код модели ссылается на колонку, которой нет в живой БД
-        # (psycopg.errors.UndefinedColumn: column user_profiles.dm_fetch...).
-        if (
-            _table_exists(engine, "user_profiles")
-            and "dm_fetch" not in _columns(engine, "user_profiles")
-        ):
-            log.warning(
-                "ensure_schema: колонка dm_fetch отсутствует — принудительный "
-                "прогон run_migrations (доведёт схему до v%s).", LATEST_VERSION,
-            )
-            run_migrations(engine)
+        # ГАРАНТИЯ ФИЗИЧЕСКОЙ ЦЕЛОСТНОСТИ (независимо от таблицы версий):
+        # версия в schema_migrations может быть ложной (например, stamp_baseline
+        # выполнился частично, или строка версии осталась от запуска, который
+        # упал до ALTER'ов). Поэтому сверяем РЕАЛЬНУЮ схему с моделями и при
+        # расхождении доливаем недостающее напрямую идемпотентным DDL.
+        # Это исключает psycopg.errors.UndefinedColumn: user_profiles.dm_fetch.
+        if _table_exists(engine, "user_profiles"):
+            missing_dm = [
+                c.name for c in UserProfile.__table__.columns
+                if c.name.startswith("dm_")
+                and c.name not in _columns(engine, "user_profiles")
+            ]
+            if missing_dm:
+                log.warning(
+                    "ensure_schema: в живой БД отсутствуют колонки %s — "
+                    "принудительный прогон run_migrations (доведёт схему до v%s).",
+                    ", ".join(missing_dm), LATEST_VERSION,
+                )
+                run_migrations(engine)
+                still = [c for c in missing_dm
+                         if c not in _columns(engine, "user_profiles")]
+                if still:
+                    # Страховка последнего рубежа: тот же DDL, что в шаге v11,
+                    # но точечно по недостающим колонкам. Иначе коллектор и
+                    # админка падают 500/UndefinedColumn на каждом запросе.
+                    from app.models.migrations import _v11_dm_collection
+
+                    log.warning(
+                        "ensure_schema: run_migrations не долил %s — прямой DDL.",
+                        ", ".join(still),
+                    )
+                    _v11_dm_collection(engine)
     except Exception as exc:  # noqa: BLE001
         import logging
 
