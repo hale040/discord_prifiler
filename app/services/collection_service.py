@@ -549,68 +549,41 @@ class CollectionService:
     async def _sync_dm_for(self, user_id: int) -> int:
         """Выгрузить историю ЛС с пользователем. Возвращает число новых сообщений.
 
-        Канал находим по id в client.cached_channels, иначе создаём DM
-        (open_dm — стандартный путь user-токена). Идём от новых к старым
+        Канал ТОЛЬКО находится (get_channel/fetch_channel/GET /users/@me/
+        channels), никогда не создаётся. Идём от новых к старым
         страницами history(before=курсор); курсор dm_last_message_id — самый
         старый загруженный id, поэтому рестарт продолжает без дублей.
         Обратная перемотка останавливается на начале истории или когда
         дошли до уже загруженной границы.
         """
-        channel = None
         known_cid = None
         prof = await asyncio.to_thread(self.repo.get_user, user_id)
-        manual = bool(getattr(prof, "dm_channel_manual", False)) if prof else False
         if prof is not None and prof.dm_channel_id:
             known_cid = int(prof.dm_channel_id)
-            # Ручной канал (v13): сначала кэш клиента — при закрытых ЛС
-            # fetch_channel даёт 403/404, но канал открыт и лежит в кэше.
-            if manual:
-                channel = self.client.get_channel(known_cid)
-            if channel is None:
-                channel = await self.client.safe_fetch_channel(known_cid)
-            if channel is None:
-                if manual:
-                    # Не трогаем курсоры: id задан явно, канал мог быть просто
-                    # не в кэше после рестарта — попробуем на следующем тике.
-                    log.warning(
-                        "dm-loop %s: ручной канал %s недоступен "
-                        "(нет в кэше / нет доступа) — пропуск тика.",
-                        user_id, known_cid)
-                    return 0
-                # Сохранённый канал мёртв (диалог удалён/пересоздан) —
-                # сбрасываем курсоры и идём открывать новый DM.
-                log.info("dm-loop %s: канал %s недоступен — сброс курсоров.",
-                         user_id, known_cid)
-                await asyncio.to_thread(
-                    self.repo.update_dm_cursor, user_id, reset_cursor=True)
-                prof = await asyncio.to_thread(self.repo.get_user, user_id)
+
+        # Только получение, никакого создания (open_dm/create_dm не вызываем):
+        # get_channel -> fetch_channel(id) -> GET /users/@me/channels по
+        # получателям. Если ни один путь не нашёл канал — ждём следующего
+        # тика, курсоры не сбрасываем.
+        channel, source = await self.client.resolve_dm_channel(known_cid, user_id)
         if channel is None:
-            if manual:
-                # Курсоры чистые, канала в кэше нет — ждём, пока пользователь
-                # откроет диалог в клиенте; ничего не создаём сами.
-                log.info("dm-loop %s: ручной канал %s ещё не в кэше — ждём.",
-                         user_id, known_cid)
-                return 0
-            user = self.client.get_user(user_id) or await self.client.fetch_user(user_id)
-            try:
-                channel = await user.create_dm()
-            except discord.Forbidden:
-                # create_dm возвращает 403, когда собеседник закрыл ЛС от не-друзей
-                # или заблокировал нас. Пробуем найти существующий DM-канал
-                # в кэше — история может быть доступна даже без «открыть».
-                channel = self._find_cached_dm(user_id)
-                if channel is None:
-                    raise
-        if channel is None:
+            detail = f" (fetch_private_channels: {source})" if source else ""
+            log.warning(
+                "dm-loop %s: существующий ЛС-канал не найден%s — пропуск тика "
+                "(создание диалога не выполняется). Укажи ID канала в карточке "
+                "или открой диалог в клиенте Discord.",
+                user_id, detail)
             return 0
+        if known_cid and int(channel.id) != known_cid:
+            log.info("dm-loop %s: канал по получателям %s (ожидался %s).",
+                     user_id, int(channel.id), known_cid)
 
         before: int | None = None
         if known_cid == int(channel.id) and prof is not None and prof.dm_last_message_id:
             before = int(prof.dm_last_message_id)  # продолжаем от старого курсора
         elif (prof is not None and prof.dm_channel_id
-              and int(prof.dm_channel_id) != int(channel.id) and not manual):
+              and int(prof.dm_channel_id) != int(channel.id)):
             # канал сменился — старые курсоры невалидны, начинаем заново
-            # (для ручного канала это запрещено: id задан пользователем)
             await asyncio.to_thread(
                 self.repo.update_dm_cursor, user_id, reset_cursor=True)
             prof = await asyncio.to_thread(self.repo.get_user, user_id)

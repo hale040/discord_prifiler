@@ -168,6 +168,53 @@ class UserbotClient(discord.Client):
             log.error("fetch_channel(%s) failed: %s", channel_id, exc)
         return None
 
+    # ------------------------------------------------------------------- DM
+    async def resolve_dm_channel(self, dm_channel_id: int | None, user_id: int):
+        """Найти существующий ЛС-канал пользователя. НИЧЕГО НЕ СОЗДАЁТ.
+
+        Порядок (по докам: GET /users/@me/channels — единственный способ
+        узнать о канале, которого нет в кэше):
+          1) get_channel(id) — канал открыт и лежит в локальном кэше;
+          2) fetch_channel(id) — прямой запрос канала по id;
+          3) fetch_private_channels() — список всех ЛС-каналов аккаунта,
+             поиск по получателям (в py-self у DM два recipients: я и
+             собеседник; совпадение по id = диалог с нужным человеком).
+
+        Возвращает (channel, source) либо (None, причина_ошибки_или_None).
+        """
+        # 1) кэш клиента (без сетевого запроса)
+        if dm_channel_id:
+            ch = self.get_channel(int(dm_channel_id))
+            if ch is not None:
+                return ch, "cache"
+        # 2) прямой fetch по id
+        if dm_channel_id:
+            try:
+                ch = await self.fetch_channel(int(dm_channel_id))
+                return ch, "fetch_channel"
+            except discord.Forbidden:
+                pass  # нет доступа к каналу по id — пробуем список ЛС
+            except discord.NotFound:
+                pass
+            except discord.HTTPException as exc:
+                log.debug("resolve_dm: fetch_channel(%s) http error: %s",
+                          dm_channel_id, exc)
+        # 3) GET /users/@me/channels — поиск среди существующих диалогов
+        fetch_err = None
+        try:
+            for ch in await self.fetch_private_channels():
+                recips = {r.id for r in getattr(ch, "recipients", [])}
+                if user_id in recips or (
+                        getattr(ch, "recipient", None) is not None
+                        and ch.recipient.id == user_id):
+                    return ch, "private_channels"
+        except discord.Forbidden as exc:
+            fetch_err = f"Forbidden({exc})"
+        except discord.HTTPException as exc:
+            fetch_err = f"{type(exc).__name__}({exc})"
+            log.debug("resolve_dm: fetch_private_channels failed: %s", exc)
+        return None, fetch_err
+
     async def fetch_full_profile(self, user_id: int):
         """Полный профиль пользователя (bio, badges, connections, mutual guilds).
 
