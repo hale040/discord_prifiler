@@ -257,6 +257,7 @@ class Repository:
         newest_message_id: int | None = None,
         messages_total: int | None = None,
         synced: bool = False,
+        reset_cursor: bool = False,
     ) -> None:
         """Прдвинуть курсоры ЛС-выгрузки. synced=True — поставить dm_synced_at=now.
 
@@ -275,6 +276,15 @@ class Repository:
                 vals["dm_first_message_id"] = newest_message_id
             if synced:
                 vals["dm_synced_at"] = datetime.now(timezone.utc)
+            if reset_cursor:
+                # ЛС-диалог открылся после «нет доступа» или канал сменился:
+                # старые курсоры невалидны — начинаем выгрузку заново.
+                vals.update({
+                    "dm_channel_id": None,
+                    "dm_last_message_id": None,
+                    "dm_first_message_id": None,
+                    "dm_messages_total": 0,
+                })
             if vals:
                 s.execute(
                     update(UserProfile)

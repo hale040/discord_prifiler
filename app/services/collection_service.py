@@ -471,11 +471,32 @@ class CollectionService:
                 try:
                     await self._sync_dm_for(uid)
                 except discord.Forbidden:
-                    log.warning("dm-loop %s: нет доступа к ЛС (канала нет/заблокирован)", uid)
+                    # Причина в discord.py-self — там Forbidden поднимается и
+                    # на 403, и на «нет канала/закрытый ЛС» (code 20003/50001).
+                    log.warning(
+                        "dm-loop %s: нет доступа к ЛС. Возможные причины: "
+                        "(1) у пользователя закрыты ЛС от не-друзей / вы его "
+                        "заблокировали; (2) диалог удалён; (3) взаимных друзей "
+                        "нет. Если ЛС откроются — цикл подхватит сам.", uid)
                 except Exception:  # noqa: BLE001
                     log.exception("dm-loop: сбой выгрузки ЛС для %s", uid)
                 await human_delay(3.0, 6.0)  # пауза между пользователями
             await asyncio.sleep(getattr(self.s, "dm_poll_interval_sec", 300))
+
+    def _find_cached_dm(self, user_id: int):
+        """Найти существующий DM-канал с пользователем в кэше клиента.
+
+        Помогает, когда create_dm даёт 403 (закрытые ЛС), но канал уже есть
+        (например, был открыт раньше) — историю читать всё равно можно.
+        """
+        try:
+            for ch in getattr(self.client, "private_channels", []) or []:
+                if type(ch).__name__ == "DMChannel" and getattr(ch, "recipient", None) is not None \
+                        and ch.recipient.id == user_id:
+                    return ch
+        except Exception:  # noqa: BLE001
+            log.debug("dm-loop %s: поиск DM в кэше не удался", user_id)
+        return None
 
     async def _sync_dm_new(self, user_id: int, channel, after_id: int) -> int:
         """Инкрементальная докачка новых ЛС-сообщений (after=последний id).
@@ -521,15 +542,36 @@ class CollectionService:
         if prof is not None and prof.dm_channel_id:
             known_cid = int(prof.dm_channel_id)
             channel = await self.client.safe_fetch_channel(known_cid)
+            if channel is None:
+                # Сохранённый канал мёртв (диалог удалён/пересоздан) —
+                # сбрасываем курсоры и идём открывать новый DM.
+                log.info("dm-loop %s: канал %s недоступен — сброс курсоров.",
+                         user_id, known_cid)
+                await asyncio.to_thread(
+                    self.repo.update_dm_cursor, user_id, reset_cursor=True)
+                prof = await asyncio.to_thread(self.repo.get_user, user_id)
         if channel is None:
             user = self.client.get_user(user_id) or await self.client.fetch_user(user_id)
-            channel = await user.create_dm() if hasattr(user, "create_dm") else None
+            try:
+                channel = await user.create_dm()
+            except discord.Forbidden:
+                # create_dm возвращает 403, когда собеседник закрыл ЛС от не-друзей
+                # или заблокировал нас. Пробуем найти существующий DM-канал
+                # в кэше — история может быть доступна даже без «открыть».
+                channel = self._find_cached_dm(user_id)
+                if channel is None:
+                    raise
         if channel is None:
             return 0
 
         before: int | None = None
         if known_cid == int(channel.id) and prof is not None and prof.dm_last_message_id:
             before = int(prof.dm_last_message_id)  # продолжаем от старого курсора
+        elif prof is not None and prof.dm_channel_id and int(prof.dm_channel_id) != int(channel.id):
+            # канал сменился — старые курсоры невалидны, начинаем заново
+            await asyncio.to_thread(
+                self.repo.update_dm_cursor, user_id, reset_cursor=True)
+            prof = await asyncio.to_thread(self.repo.get_user, user_id)
 
         # Диалог уже выгружен до начала истории (есть курсор + newest id):
         # вместо дорогой полной перемотки — дешёвый инкремент новых сообщений.
