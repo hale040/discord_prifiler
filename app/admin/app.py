@@ -424,10 +424,20 @@ def create_app(database_url: str) -> Flask:
                 raise ValueError(f"ожидается корректный JSON, получено {raw[:60]!r}")
         if kind == "datetime":
             from datetime import datetime as _dt
-            s = raw.replace("T", " ").replace("Z", "")
+            # Принимает и naive ('2026-10-24 12:59'), и вывод PostgreSQL
+            # ('2023-10-03 15:52:28.201000+00:00'): T->пробел, Z->+00:00,
+            # fromisoformat (понимает смещения), запасные strptime-форматы.
+            s = raw.strip().replace("T", " ")
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            try:
+                return _dt.fromisoformat(s)
+            except ValueError:
+                pass
+            s2 = s.split("+")[0].strip()  # отбросить смещение как последний шанс
             for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
                 try:
-                    return _dt.strptime(s, fmt)
+                    return _dt.strptime(s2, fmt)
                 except ValueError:
                     continue
             raise ValueError(f"ожидается дата 'ГГГГ-ММ-ДД [ЧЧ:ММ[:СС]]', получено {raw!r}")
