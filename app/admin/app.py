@@ -372,12 +372,14 @@ def create_app(database_url: str) -> Flask:
                 q = q.where(pp.columns.is_current.is_(True))
             if "created_at" in cols:
                 q = q.order_by(pp.columns.created_at.desc())
-            out: dict[int, dict] = {}
+            out: dict[str, dict] = {}
             with engine.connect() as conn:
                 for r in conn.execute(q).all():
+                    # ключ — str(user_id): в шаблоне значения ячеек строки;
                     # первый на каждого пользователя = самый свежий (DESC)
-                    if r[0] not in out:
-                        out[r[0]] = {"id": r[1], "mbti_type": (r[2] if len(r) > 2 else None)}
+                    k = str(r[0])
+                    if k not in out:
+                        out[k] = {"id": r[1], "mbti_type": (r[2] if len(r) > 2 else None)}
             return out
         except Exception:
             return {}

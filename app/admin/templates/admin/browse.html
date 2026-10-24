@@ -41,10 +41,12 @@
 {% for cell in row.cells %}<td class='{{ 'json' if cell[1] }}' title='{{ cell[0] }}'>
   {% if loop.index0 == 0 %}<a href="{{ url_for('record', table=table, pk=row.pk) }}">{{ cell[0] }}</a>
   {% elif has_priority and cols[loop.index0] == 'priority' %}{# колонка priority не дублируется — показ через ★ #}
-  {% elif cols[loop.index0] == 'user_id' and psych_map.get(int(cell[0]) if cell[0].isdigit() else cell[0]) %}
-    {# user_profiles: user_id с бейджем психо-статуса прямо в ленте (без доп. колонки) #}
+  {% elif cols[loop.index0] == 'user_id' and psych_map.get(cell[0]) %}
+    {# user_profiles: user_id с бейджем психо-статуса прямо в ленте (без доп. колонки).
+       Ключи psych_map — строки; int() в Jinja2 недоступен и ломал рендер на
+       таблицах без колонки user_id (например, psych_profiles). #}
     <a href="/browse/user_profiles?col=user_id&val={{ cell[0] }}" title="профиль пользователя">{{ cell[0] }}</a>
-    {% set p = psych_map.get(int(cell[0]) if cell[0].isdigit() else cell[0]) %}
+    {% set p = psych_map.get(cell[0]) %}
     <a class='pill ok' style='text-decoration:none' title='актуальный психопрофиль #{{ p.id }}'
        href="{{ url_for('profile_view', pid=p.id) }}">🧠{{ ' ' + p.mbti_type if p.mbti_type }}</a>
   {% elif cols[loop.index0] == 'user_id' and uid_map.get(cell[0]) %}<a href="/browse/user_profiles?col=user_id&val={{ cell[0] }}" title="профиль пользователя">{{ cell[0] }}</a> <span class='muted'>@{{ uid_map.get(cell[0]) }}</span>
