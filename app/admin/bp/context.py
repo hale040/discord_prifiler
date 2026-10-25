@@ -48,7 +48,7 @@ VIEW_COLUMNS: dict[str, list[str]] = {
         "top_role", "mute", "deaf",
     ],
     "user_roles": [
-        "id", "user_id", "role_name", "guild_id", "position",
+        "id", "user_id", "role_id", "guild_id", "position",
     ],
     "attachments": [
         "id", "message_id", "filename", "content_type", "size",

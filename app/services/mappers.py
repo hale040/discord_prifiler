@@ -186,7 +186,6 @@ def guild_and_roles_from_member(member: discord.Member) -> tuple[dict[str, Any],
         {
             "role_id": r.id,
             "guild_id": guild.id,
-            "role_name": getattr(r, "name", "@everyone" if r.id == guild.id else ""),
             "position": getattr(r, "position", 0),
             "color": _safe(lambda: int(r.colour.value)) if getattr(r, "colour", None) else None,
             "is_mentionable": getattr(r, "mentionable", None),
@@ -196,6 +195,19 @@ def guild_and_roles_from_member(member: discord.Member) -> tuple[dict[str, Any],
         if hasattr(r, "id") and r.id != guild.id  # discord.Role в рантайме; duck-typed объекты в тестах; @everyone пропускаем
     ]
     return {k: v for k, v in gf.items() if v is not None}, roles_payload
+
+
+def role_def_from_role(r, guild_id: int) -> dict:
+    """Запись справочника roles из discord.Role (или duck-typed в тестах)."""
+    return {
+        "guild_id": guild_id,
+        "role_id": r.id,
+        "name": getattr(r, "name", ""),
+        "position": getattr(r, "position", 0),
+        "color": _safe(lambda: int(r.colour.value)) if getattr(r, "colour", None) else None,
+        "is_mentionable": getattr(r, "mentionable", None),
+        "permissions_raw": _safe(lambda: str(int(r.permissions.value))),
+    }
 
 
 # ---------------------------------------------------------------------------

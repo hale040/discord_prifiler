@@ -439,9 +439,13 @@ class CollectionService:
                 if isinstance(u, discord.Member):
                     try:
                         gf, roles = mappers.guild_and_roles_from_member(u)
+                        rdefs = [mappers.role_def_from_role(r, u.guild.id)
+                                 for r in (getattr(u, "roles", None) or [])
+                                 if hasattr(r, "id") and r.id != u.guild.id]
                         base = mappers.user_fields(u)
                         if gf or base:
-                            self.repo.upsert_user_profile(u.id, base, gf or None, roles or None)
+                            self.repo.upsert_user_profile(u.id, base, gf or None, roles or None,
+                                                          role_defs=rdefs or None)
                     except Exception:  # noqa: BLE001
                         log.debug("Не удалось сохранить server-данные из payload: %s", u.id)
         return True
@@ -839,12 +843,16 @@ class CollectionService:
 
         # 3) Серверный участник: nick/joined_at/роли/таймауты/права
         member = None
+        rdefs: list[dict] = []
         state = self.repo.get_state(self.s.channel_id)
         gid = state.guild_id
         if gid is not None:
             member = await self.client.fetch_member_safe(gid, user_id)
             if member is not None:
                 gf, rlist = mappers.guild_and_roles_from_member(member)
+                rdefs = [mappers.role_def_from_role(r, member.guild.id)
+                         for r in (getattr(member, "roles", None) or [])
+                         if hasattr(r, "id") and r.id != member.guild.id]
                 if gf:
                     guild_fields = gf
                 roles = rlist or None
@@ -901,7 +909,8 @@ class CollectionService:
         #    сохраняем всё, что удалось получить.
         if fields or guild_fields:
             self.repo.upsert_user_profile(user_id, fields or {}, guild_fields, roles,
-                                          snapshot=snapshot)
+                                          snapshot=snapshot,
+                                          role_defs=rdefs or None)
             # самоочистка legacy-мусора: старые версии маппера писали кастомный
             # статус в user_games (kind='ActivityType.custom_status', name=user_id)
             purged = self.repo.purge_custom_status_games(user_id)

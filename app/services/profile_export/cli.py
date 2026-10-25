@@ -15,7 +15,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from .env import _env_int, parse_ts
-from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_guild_profiles, fetch_messages, fetch_presence_snapshots, fetch_profile_history, fetch_psych_profiles, fetch_reaction_events, fetch_roles, fetch_users, open_db
+from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_guild_profiles, fetch_messages, fetch_presence_snapshots, fetch_profile_history, fetch_psych_profiles, fetch_reaction_events, fetch_role_defs, fetch_roles, fetch_users, open_db
 from .dialog import CONTEXT_WINDOW_SEC, build_dialog, rebuild_links
 from .transcript import DEFAULT_PROMPT_MAX_KB
 from .dossier import build_dossier, render_prompt_md
@@ -134,6 +134,7 @@ def main():
     users = fetch_users(conn)
     guild_map = fetch_guild_profiles(conn)
     role_map = fetch_roles(conn)
+    role_names = fetch_role_defs(conn)
     msg_map = fetch_messages(conn)
     att_map = fetch_attachments(conn)
     games_map = fetch_games(conn)
@@ -245,7 +246,7 @@ def main():
                 msgs, att_map, all_user_ids, args, generated_at,
                 dialog_msgs=dialog_msgs, dialog_mode=dialog_mode, names=names,
                 games=games_map.get(uid), history=history_map.get(uid),
-                psych=psych_map.get(uid),
+                psych=psych_map.get(uid), role_names=role_names,
                 behavior=build_behavior_block(
                     msgs, uid,
                     given_events=events_map.get(uid),

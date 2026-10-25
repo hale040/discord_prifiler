@@ -96,6 +96,19 @@ def fetch_guild_profiles(conn) -> dict[int, list[dict]]:
     return out
 
 
+def fetch_role_defs(conn) -> dict[tuple[int, int], str]:
+    """(guild_id, role_id) -> name из справочника roles (миграция a00000000004)."""
+    out: dict[tuple[int, int], str] = {}
+    try:
+        if not conn.has_table("roles"):
+            return out
+        for r in conn.execute("SELECT guild_id, role_id, name FROM roles"):
+            out[(int(r["guild_id"]), int(r["role_id"]))] = r["name"] or ""
+    except Exception:  # noqa: BLE001 — старый дамп без справочника: пусто
+        pass
+    return out
+
+
 def fetch_roles(conn) -> dict[int, list[dict]]:
     out: dict[int, list[dict]] = {}
     for r in conn.execute("SELECT * FROM user_roles ORDER BY user_id, position DESC"):
@@ -305,9 +318,18 @@ def fetch_profile_history(conn) -> dict[int, dict]:
     try:
         role_cols = conn.columns("user_roles")
         if "first_seen" in role_cols and "last_lost_at" in role_cols:
+            # имя роли берём из справочника roles (JOIN), а не из связи:
+            # переименование роли в Discord больше не требует правок данных.
+            has_name_col = "role_name" in role_cols
+            name_expr = ("COALESCE(r.name, ur.role_name)" if has_name_col
+                         else "COALESCE(r.name, '')")
             rh = conn.execute(
-                "SELECT user_id, role_name, first_seen, last_seen, last_lost_at"
-                " FROM user_roles WHERE last_lost_at IS NOT NULL OR first_seen IS NOT NULL"
+                f"SELECT ur.user_id, {name_expr} AS role_name,"
+                " ur.first_seen, ur.last_seen, ur.last_lost_at"
+                " FROM user_roles ur"
+                " LEFT JOIN roles r ON r.guild_id = ur.guild_id"
+                " AND r.role_id = ur.role_id"
+                " WHERE ur.last_lost_at IS NOT NULL OR ur.first_seen IS NOT NULL"
             )
             for r in rh:
                 e = out.setdefault(int(r["user_id"]), {"snaps": [], "roles_hist": []})

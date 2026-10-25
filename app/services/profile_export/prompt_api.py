@@ -9,7 +9,7 @@ import argparse
 from collections import Counter
 from datetime import datetime, timezone
 from .env import _env_int
-from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_presence_snapshots, fetch_reaction_events, fetch_messages, fetch_profile_history, fetch_psych_profiles, fetch_users, open_db
+from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_presence_snapshots, fetch_reaction_events, fetch_messages, fetch_profile_history, fetch_psych_profiles, fetch_role_defs, fetch_users, open_db
 from .dialog import CONTEXT_WINDOW_SEC, build_dialog, rebuild_links
 from .transcript import DEFAULT_PROMPT_MAX_KB
 from .dossier import _date_only, build_dossier, render_prompt_md
@@ -50,6 +50,7 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
         psych_map = fetch_psych_profiles(conn)
         events_map = fetch_reaction_events(conn)
         presence_map = fetch_presence_snapshots(conn)
+        role_names = fetch_role_defs(conn)
         all_user_ids = set(uid_set)
 
         # диалог по самому активному каналу (как в main())
@@ -78,7 +79,7 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
             [], [], msgs_all, att_map, all_user_ids, ns, generated_at,
             dialog_msgs=dialog_msgs, dialog_mode=dialog_mode, names=names,
             games=games_map.get(user_id), history=history_map.get(user_id),
-            psych=psych_map.get(user_id),
+            psych=psych_map.get(user_id), role_names=role_names,
             behavior=build_behavior_block(
                 msgs_all, user_id,
                 given_events=events_map.get(user_id),

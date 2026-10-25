@@ -251,7 +251,8 @@ class UserRoleTag(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.user_id"), index=True)
     role_id: Mapped[int] = mapped_column(BigInteger, index=True)
     guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    role_name: Mapped[str] = mapped_column(String(256), default="")
+    # Название роли — НЕ здесь: оно живёт в справочнике roles (одно на роль),
+    # иначе переименование роли в Discord пришлось бы чинить в каждой строке.
     position: Mapped[int] = mapped_column(Integer, default=0)
     color: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_mentionable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -262,6 +263,30 @@ class UserRoleTag(Base):
     last_lost_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[UserProfile] = relationship(back_populates="roles")
+
+
+class RoleDefinition(Base):
+    """Справочник ролей сервера: одна строка на (guild_id, role_id).
+
+    Единственный источник названия/цвета/позиции роли. user_roles — только
+    связь пользователь×роль с динамикой. Обновляется тем же потоком, что и
+    связи (см. repository.sync_role_defs), поэтому переименование роли в
+    Discord подхватывается само.
+    """
+
+    __tablename__ = "roles"
+    __table_args__ = (UniqueConstraint("guild_id", "role_id", name="uq_role_guild"),)
+
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    role_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    color: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_mentionable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    permissions_raw: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # ---------------------------------------------------------------------------

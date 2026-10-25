@@ -72,7 +72,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   games: list[str] | None = None,
                   history: dict | None = None,
                   psych: dict | None = None,
-                  behavior: dict | None = None) -> dict:
+                  behavior: dict | None = None,
+                  role_names: dict | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
     max_bytes = _kb_to_bytes(getattr(args, "prompt_max_kb", None))
@@ -175,7 +176,9 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             } for g in guild_profiles
         ], args.redact_pii),
         "roles_tags": [
-            {"role_id": str(r["role_id"]), "name": r["role_name"],
+            {"role_id": str(r["role_id"]),
+             "name": (role_names or {}).get((int(r["guild_id"]), int(r["role_id"])),
+                                            r.get("role_name", "")),
              "position": r["position"], "guild_id": str(r["guild_id"])}
             for r in roles
         ],

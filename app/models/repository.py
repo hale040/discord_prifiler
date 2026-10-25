@@ -15,6 +15,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.entities import (
+    RoleDefinition,
     Attachment,
     ChannelState,
     GuildMemberProfile,
@@ -47,6 +48,7 @@ class Repository:
         fields: dict[str, Any],
         guild_fields: dict[str, Any] | None = None,
         roles: Iterable[dict[str, Any]] | None = None,
+        role_defs: Iterable[dict[str, Any]] | None = None,
         snapshot: dict[str, Any] | None = None,
     ) -> None:
         """Создать/обновить глобальный профиль + серверный профиль + теги-роли.
@@ -83,6 +85,28 @@ class Repository:
                         continue
                     if hasattr(gp, k) and v is not None:
                         setattr(gp, k, v)
+
+            # Справочник ролей: name/color/position — один раз на роль.
+            # Переименование роли в Discord обновляет ОДНУ строку roles, а не
+            # все связи user_roles (см. миграцию a00000000004).
+            for rd in role_defs or []:
+                rid_, gid_ = rd.get("role_id"), rd.get("guild_id")
+                if rid_ is None or gid_ is None:
+                    continue
+                cur = s.scalars(select(RoleDefinition).where(
+                    RoleDefinition.guild_id == gid_,
+                    RoleDefinition.role_id == rid_)).first()
+                if cur is None:
+                    cur = RoleDefinition(guild_id=gid_, role_id=rid_,
+                                         first_seen=now, last_seen=now)
+                    s.add(cur)
+                else:
+                    cur.last_seen = now
+                for k in ("name", "position", "color", "is_mentionable",
+                          "permissions_raw"):
+                    v = rd.get(k)
+                    if v is not None and hasattr(cur, k):
+                        setattr(cur, k, v)
 
             if roles is not None:
                 existing = {

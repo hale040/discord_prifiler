@@ -58,7 +58,7 @@ def create_db_engine(url: str):
 #   a00000000002 — уточнение типов dm-колонок.
 ALEMBIC_INI = os.path.join(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))), "alembic.ini")
-ALEMBIC_HEAD = "a00000000002"
+ALEMBIC_HEAD = "a00000000004"
 
 
 def _alembic_config():
@@ -266,6 +266,17 @@ def ensure_schema(engine) -> None:
                     ", ".join(missing_dm),
                 )
                 _apply_dm_ddl(engine, missing_dm)
+
+        # 5. Сверка нормализации ролей (ревизия a00000000004): справочник roles
+        #    мог не создаться при ложном стемпе — доливаем идемпотентно.
+        if _table_exists(engine, "user_roles") and not _table_exists(engine, "roles"):
+            log.warning("ensure_schema: таблица-справочник roles отсутствует — "
+                        "принудительный прогон ревизии a00000000004.")
+            from alembic import command
+
+            cfg = _alembic_config()
+            command.stamp(cfg, revision="a00000000003")  # точка перед ревизией ролей
+            command.upgrade(cfg, "a00000000004")
     except Exception as exc:  # noqa: BLE001
         log.error(
             "Миграции схемы не прошли (%s). Проверьте DATABASE_URL и "
