@@ -180,6 +180,8 @@ def guild_and_roles_from_member(member: discord.Member) -> tuple[dict[str, Any],
         "permissions_raw": _safe(lambda: str(int(member.guild_permissions.value))),
     }
     roles = _safe(lambda: list(member.roles)) or []
+    # @everyone (id == guild.id) — не настоящая роль: она есть у всех и всегда,
+    # в профилировании только раздувает user_roles. Не сохраняем.
     roles_payload = [
         {
             "role_id": r.id,
@@ -191,7 +193,7 @@ def guild_and_roles_from_member(member: discord.Member) -> tuple[dict[str, Any],
             "permissions_raw": _safe(lambda: str(int(r.permissions.value))),
         }
         for r in roles
-        if hasattr(r, "id")  # discord.Role в рантайме; duck-typed объекты в тестах
+        if hasattr(r, "id") and r.id != guild.id  # discord.Role в рантайме; duck-typed объекты в тестах; @everyone пропускаем
     ]
     return {k: v for k, v in gf.items() if v is not None}, roles_payload
 
