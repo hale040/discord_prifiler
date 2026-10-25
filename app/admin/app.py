@@ -716,6 +716,9 @@ def create_app(database_url: str) -> Flask:
                 NARROW[c] = "64px"
         widths = [{"name": c, "w": NARROW.get(c),
                    "wide": (c in WIDE and c not in NARROW)} for c in cols]
+        # карта «резиновых» колонок для td.clamp (подрезка в 2 строки): шаблон
+        # не должен пересчитывать WIDE/NARROW — передаём готовый dict
+        w_wide = {w["name"]: w["wide"] for w in widths}
 
         return render(
             "browse", page="browse", table=table, cols=cols, rows=rows,
@@ -724,7 +727,7 @@ def create_app(database_url: str) -> Flask:
             hidden_count=len(all_cols) - len(cols),
             prio=prio, has_priority="priority" in all_cols, pk_col=pk,
             cur=cur, is_psych_profiles=(table == "psych_profiles"),
-            uid_map=uid_map, psych_map=psych_map, widths=widths,
+            uid_map=uid_map, psych_map=psych_map, widths=widths, w_wide=w_wide,
         )
 
     # --- карточка записи: просмотр + редактирование -------------------------

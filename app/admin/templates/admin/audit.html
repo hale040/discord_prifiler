@@ -1,7 +1,9 @@
 <h2>Журнал аудита</h2>
-    <table><tr><th>id</th><th>когда</th><th>action</th><th>target</th><th>details</th><th>result</th></tr>
-    {% for r in rows %}<tr><td>{{ r.id }}</td><td>{{ r.created_at }}</td><td>{{ r.action }}</td>
-    <td>{{ r.target }}</td><td class='json'>{{ r.details }}</td><td>{{ r.result }}</td></tr>{% endfor %}</table>
+<div class='tbl-wrap'><table><colgroup><col style='width:70px'><col style='width:150px'>
+<col style='width:130px'><col style='width:180px'><col><col style='width:90px'></colgroup>
+<tr><th>id</th><th>когда</th><th>action</th><th>target</th><th>details</th><th>result</th></tr>
+    {% for r in rows %}<tr><td>{{ r.id }}</td><td class='nowrap'>{{ r.created_at }}</td><td>{{ r.action }}</td>
+    <td{% if r.target %} title='{{ r.target }}'{% endif %}>{{ r.target }}</td><td class='json'{% if r.details %} title='{{ r.details }}'{% endif %}>{{ r.details }}</td><td>{{ r.result }}</td></tr>{% endfor %}</table></div>
     <p class='pager'>{% if cur_page>1 %}<a class='btn gray' href='?page={{ cur_page-1 }}'>←</a>{% endif %}
     стр. {{ cur_page }} / {{ pages }}
     {% if cur_page<pages %}<a class='btn gray' href='?page={{ cur_page+1 }}'>→</a>{% endif %}</p>

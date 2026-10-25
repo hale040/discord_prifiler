@@ -26,7 +26,6 @@
        title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
        href="{{ url_for('profile_view', pid=ps.id) }}">👁 Текущий профиль</a>{% endif %}
     {# ---- ЛС-сбор: выгрузка истории диалога по кнопке (dm-loop) ---- #}
-    {% set dm_on = values.get('dm_fetch') %}
     <form method='post' action='/dm/toggle/{{ uid }}' style='display:inline'
           onsubmit="this.querySelector('button').disabled=true;">
       <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
@@ -175,7 +174,7 @@
 <h5><a href="{{ url_for('browse', table=block.table) }}?col=user_id&val={{ uid }}" style='color:var(--accent)'>{{ block.table }}</a> <span class='muted'>(до {{ block.rows|length }})</span></h5>
 <div class='tbl-wrap' style='margin-bottom:.8rem'><table><tr>{% for c in block.cols %}<th>{{ c }}</th>{% endfor %}</tr>
   {% for row2 in block.rows %}<tr>
-    {% for v in row2 %}<td title='{{ v }}'>{% if loop.index0 == 0 %}<a href="{{ url_for('record', table=block.table, pk=block.pks[loop.index0]) }}">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
+    {% for v in row2 %}<td title='{% if v != '—' %}{{ v }}{% endif %}'>{% if loop.index0 == 0 %}<a href="{{ url_for('record', table=block.table, pk=block.pks[loop.index0]) }}">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
   </tr>{% endfor %}</table></div>
 {% endfor %}
   {% endif %}

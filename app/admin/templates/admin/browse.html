@@ -29,16 +29,18 @@
 <div class='tbl-wrap'><table><colgroup>
   {% if has_priority %}<col style='width:40px'>{% endif %}
   {% for w in widths %}<col{% if w.w %} style='width:{{ w.w }}'{% endif %}{% if w.wide %} class='wide'{% endif %}>{% endfor %}
-  <col style='width:86px'></colgroup><tr>
+  <col style='width:86px'></colgroup>
+<thead><tr>
   {% if has_priority %}<th title='приоритетный пользователь'>★</th>{% endif %}
-  {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr>
+  {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr></thead>
+<tbody>
   {% for row in rows %}<tr>
 {% if has_priority %}<td style='text-align:center;white-space:nowrap'>
   <a class='btn gray sm' style='padding:.05rem .35rem' title='переключить priority'
      href='/browse/{{ table|e }}?star={{ row.pk }}&page={{ cur_page }}'
      {%- if q %}&q={{ q|urlencode }}{% endif -%}
      {%- if prio %}&prio=1{% endif %}}>{{ '★' if row.cells[cols.index('priority')][0] not in ('None','—','0','False','false') else '☆' }}</a></td>{% endif %}
-{% for cell in row.cells %}<td class='{{ 'json' if cell[1] }}' title='{{ cell[0] }}'>
+{% for cell in row.cells %}<td class='{{ 'json' if cell[1] else ('clamp' if w_wide.get(cols[loop.index0])) }}'{% if cell[0] not in ('—','') %} title='{{ cell[0] }}'{% endif %}>
   {% if loop.index0 == 0 %}<a href="{{ url_for('record', table=table, pk=row.pk) }}">{{ cell[0] }}</a>
   {% elif has_priority and cols[loop.index0] == 'priority' %}{# колонка priority не дублируется — показ через ★ #}
   {% elif cols[loop.index0] == 'user_id' and psych_map.get(cell[0]) %}
@@ -63,7 +65,7 @@
   {% if is_psych_profiles %}<a class='btn gray sm' title='читаемый вид результата LLM'
      href="{{ url_for('profile_view', pid=row.pk) }}">👁</a>{% endif %}
   <a class='btn sm' href="{{ url_for('record', table=table, pk=row.pk) }}">открыть ▸</a></td>
-  </tr>{% endfor %}</table></div>
+  </tr>{% endfor %}</tbody></table></div>
 
 <p class='pager'>
   {% if cur_page > 1 %}<a class='btn gray sm' href='{{ href(cur_page-1) }}'>← назад</a>{% endif %}

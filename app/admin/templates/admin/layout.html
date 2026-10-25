@@ -15,8 +15,10 @@
            background:var(--bg);color:var(--ink);font-size:15px;line-height:1.45}
 
       /* --- шапка: бренд + группы навигации + утилиты --- */
+      /* sticky отключён: в связке с table-layout:fixed и обрезкой ячеек он
+         «наезжал» на таблицы при прокрутке; плюс ломался из-за overflow у body */
       .topbar{background:var(--panel);border-bottom:1px solid var(--line);
-              position:sticky;top:0;z-index:10}
+              position:static;z-index:10}
       .topbar-in{max-width:1280px;margin:0 auto;padding:.55rem 1rem;
                 display:flex;align-items:center;gap:.9rem;flex-wrap:wrap}
       .brand{display:flex;align-items:center;gap:.45rem;font-weight:700;
@@ -56,20 +58,26 @@
       /* --- таблицы: фиксированная раскладка, никаких горизонтальных скроллов окна --- */
       .tbl-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--line);
                 background:var(--panel);box-shadow:var(--shadow)}
-      table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:.85rem;background:transparent}
+      table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;
+            font-size:.85rem;background:transparent}
       th,td{border-bottom:1px solid var(--line);padding:.5rem .65rem;vertical-align:top;
-            overflow:hidden;word-break:break-word;overflow-wrap:anywhere;text-align:left}
+            overflow:hidden;word-break:normal;overflow-wrap:anywhere;text-align:left}
       tr:last-child td{border-bottom:0}
-      tbody tr:hover,tr:hover{background:#fafbff}
-      th{background:#f2f4fa;color:var(--muted);font-weight:600;font-size:.78rem;
-         text-transform:uppercase;letter-spacing:.02em;position:sticky;top:0}
+      tbody tr:hover{background:#fafbff}
+      thead th{background:#f2f4fa;color:var(--muted);font-weight:600;font-size:.78rem;
+         text-transform:uppercase;letter-spacing:.02em}
       td.nowrap{white-space:nowrap}
       td a{color:var(--accent);text-decoration:none}
       td a:hover{text-decoration:underline}
       /* Ширины колонок задаёт <colgroup> из browse (серверный список widths):
-         id/статусы узкие, текстовые колонки забирают остаток. */
-      /* JSON/текстовые ячейки: моноширинно и с подрезкой в 3 строки — длинный
-         raw-JSON не растягивает высоту строки; полный текст виден по title. */
+         id/статусы узкие, текстовые колонки забирают остаток. Колонка с class
+         'wide' — единственная «резиновая»: фиксирует ширину через min-width,
+         остальное пространство делится между узкими col автоматически. */
+      col.wide{min-width:180px}
+      /* Подрезка ячеек: 2 строки для текста, 3 для JSON — длинный raw-JSON или
+         about не растягивают высоту строки; полный текст виден по title. */
+      td.clamp{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+               line-height:1.35}
       td.json{white-space:pre-wrap;word-break:break-all;
               font-family:ui-monospace,monospace;font-size:.78rem;
               display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;
