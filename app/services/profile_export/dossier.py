@@ -71,16 +71,18 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   names: dict[int, str] | None = None,
                   games: list[str] | None = None,
                   history: dict | None = None,
-                  psych: dict | None = None) -> dict:
+                  psych: dict | None = None,
+                  behavior: dict | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
     max_bytes = _kb_to_bytes(getattr(args, "prompt_max_kb", None))
+    window_days = getattr(args, "window_days", None)
     tr_src = None
     if dialog_msgs is not None and not args.no_context:
         transcript, truncated = make_transcript(
             dialog_msgs, args.max_lines, args.redact_pii,
             target_uid=user["user_id"], names=names or {},
-            max_bytes=max_bytes,
+            max_bytes=max_bytes, window_days=window_days,
         )
         tr_src = dict(src=dialog_msgs, max_lines=args.max_lines,
                       redact=args.redact_pii, target=user["user_id"],
@@ -91,7 +93,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             transcript = ensure_nonempty_transcript("", msgs, args.redact_pii)
     else:
         transcript, truncated = make_transcript(
-            msgs, args.max_lines, args.redact_pii, max_bytes=max_bytes)
+            msgs, args.max_lines, args.redact_pii, max_bytes=max_bytes,
+            window_days=window_days)
         tr_src = dict(src=msgs, max_lines=args.max_lines,
                       redact=args.redact_pii, target=None, names=None)
         # лимит не должен обнулять ленту: если транскрипт пуст при
@@ -177,6 +180,10 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
             for r in roles
         ],
         "statistics": stats,
+        # производные поведенческие метрики (behavior.py): сессии, инициативность,
+        # ответные задержки, взаимность, ЛС-vs-публично, правки/реакции/presence.
+        # Пусто для старых вызовов без аргумента — промпт деградирует мягко.
+        "behavior": behavior or {},
         "dialog_context": {
             "mode": dialog_mode or ("off" if args.no_context else "none"),
             "linked_messages": len(dialog_msgs) if dialog_msgs is not None else 0,
@@ -354,6 +361,16 @@ def compact_dossier(d: dict) -> dict:
         if stats_c.get(dk):
             stats_c[dk] = _date_only(stats_c[dk])
 
+    # поведенческий блок -> компактный bh (пустые подсекции вырезаем)
+    bh_in = d.get("behavior") or {}
+    bhc: dict = {}
+    for key in ("segments", "sessions", "initiative_latency", "tone_overall",
+                "reactions", "presence"):
+        sub = bh_in.get(key)
+        if sub and any(v not in (None, [], {}, 0, False) for v in
+                       (sub.values() if isinstance(sub, dict) else [sub])):
+            bhc[key] = sub
+
     # активный психопрофиль от нейросети -> компактный блок psych
     psy_in = d.get("psych_profile") or {}
     pc2 = {k: psy_in[k] for k in ("model", "mbti", "enneagram", "conf", "msgs", "period")
@@ -372,6 +389,7 @@ def compact_dossier(d: dict) -> dict:
             **({"guilds": gp} if gp else {}),
             **({"roles": roles} if roles else {}),
             "stats": stats_c, "dlg": dcc, "media": mc,
+            **({"bh": bhc} if bhc else {}),
             **({"hist": hc} if hc else {}),
             **({"psych": pc2} if pc2 else {})}
 
@@ -405,7 +423,13 @@ def _render_prompt_text(dossier: dict) -> str:
         "bio — о себе, badges — значки, conns — привязки, nitro — тип премиума,",
         "guilds — серверы (joined вступление, timeout_until бан-тайм-аут,",
         "top_role высшая роль), roles — роли, stats — метрики,",
-        "dlg — режим контекста диалога, media — вложения,",
+        "dlg — режим контекста диалога, media — вложения, bh — поведенческие метрики:",
+        "segments (dm/guild: question_rate, edit_rate, avg_words — социальные маски),",
+        "sessions (сессии общения с разрывом >30 мин), initiative_latency (доля",
+        "инициативы, медианные задержки ответов и асимметрия по собеседникам,",
+        "reciprocity_ratio — взаимность), reactions (received_per_message —",
+        "топливо самооценки, top_given_emojis), presence (status_mix, night_share,",
+        "custom_status_top);",
         "hist — история профиля: snaps снимки (at дата, bio/status/conns),",
         "roles_hist динамика ролей; psych — активный психопрофиль от LLM:",
         "model mbti enneagram conf big5 int интересы(t тема,n подтверждения)",

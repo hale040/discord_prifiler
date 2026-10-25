@@ -15,10 +15,11 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from .env import _env_int, parse_ts
-from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_guild_profiles, fetch_messages, fetch_profile_history, fetch_psych_profiles, fetch_roles, fetch_users, open_db
+from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_guild_profiles, fetch_messages, fetch_presence_snapshots, fetch_profile_history, fetch_psych_profiles, fetch_reaction_events, fetch_roles, fetch_users, open_db
 from .dialog import CONTEXT_WINDOW_SEC, build_dialog, rebuild_links
 from .transcript import DEFAULT_PROMPT_MAX_KB
 from .dossier import build_dossier, render_prompt_md
+from .behavior import build_behavior_block
 
 
 def slug(name: str) -> str:
@@ -75,6 +76,12 @@ def parse_args():
                    metavar="SEC", dest="context_window",
                    help=f"окно временной связности диалога в секундах "
                         f"(по умолчанию из .env EXPORT_CONTEXT_WINDOW={env_ctx_window})")
+    env_window_days = _env_int("EXPORT_WINDOW_DAYS", 0)
+    p.add_argument("--window-days", type=int, default=env_window_days,
+                   metavar="N", dest="window_days",
+                   help="скользящее окно транскрипта: только последние N дней от "
+                        "самого свежего сообщения (0/пусто = вся история). "
+                        "По умолчанию из .env EXPORT_WINDOW_DAYS")
     p.add_argument("--since", default="", metavar="YYYY-MM-DD[THH:MM]",
                    help="включать в транскрипт только сообщения с этой даты/времени (UTC)")
     p.add_argument("--until", default="", metavar="YYYY-MM-DD[THH:MM]",
@@ -132,6 +139,8 @@ def main():
     games_map = fetch_games(conn)
     history_map = fetch_profile_history(conn)
     psych_map = fetch_psych_profiles(conn)
+    events_map = fetch_reaction_events(conn)
+    presence_map = fetch_presence_snapshots(conn)
     all_user_ids = set(u["user_id"] for u in users)
 
     # связи ответов + полная лента канала для сборки диалогов с собеседниками
@@ -237,6 +246,10 @@ def main():
                 dialog_msgs=dialog_msgs, dialog_mode=dialog_mode, names=names,
                 games=games_map.get(uid), history=history_map.get(uid),
                 psych=psych_map.get(uid),
+                behavior=build_behavior_block(
+                    msgs, uid,
+                    given_events=events_map.get(uid),
+                    presence_snaps=presence_map.get(uid)),
             )
             fname = f"{uid}_{slug(u['username'])}"
             jl.write(json.dumps(_dossier_for_json(dossier),

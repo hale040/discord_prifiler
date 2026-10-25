@@ -9,19 +9,23 @@ import argparse
 from collections import Counter
 from datetime import datetime, timezone
 from .env import _env_int
-from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_messages, fetch_profile_history, fetch_psych_profiles, fetch_users, open_db
+from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_presence_snapshots, fetch_reaction_events, fetch_messages, fetch_profile_history, fetch_psych_profiles, fetch_users, open_db
 from .dialog import CONTEXT_WINDOW_SEC, build_dialog, rebuild_links
 from .transcript import DEFAULT_PROMPT_MAX_KB
 from .dossier import _date_only, build_dossier, render_prompt_md
+from .behavior import build_behavior_block
 
 
 def build_prompt_for_user(db_url: str, user_id: int, *,
                           prompt_max_kb: int | None = None,
-                          context_window: int | None = None) -> dict:
+                          context_window: int | None = None,
+                          window_days: int | None = None) -> dict:
     """Собрать «дело» и готовый промпт одного пользователя из PostgreSQL.
 
     prompt_max_kb — максимальный вес итогового промпта (по умолчанию из
     .env EXPORT_PROMPT_MAX_KB); транскрипт усекается по ВЕСУ.
+    window_days — скользящее окно ленты (по умолчанию из .env
+    EXPORT_WINDOW_DAYS; 0/пусто = вся история).
     Возвращает dict: username, display_name, messages_total, period_from,
     period_to, prompt (markdown-промпт с системной инструкцией и схемой JSON).
     Исключения — ValueError (нет данных/пользователя), RuntimeError (БД).
@@ -44,6 +48,8 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
         games_map = fetch_games(conn)
         history_map = fetch_profile_history(conn)
         psych_map = fetch_psych_profiles(conn)
+        events_map = fetch_reaction_events(conn)
+        presence_map = fetch_presence_snapshots(conn)
         all_user_ids = set(uid_set)
 
         # диалог по самому активному каналу (как в main())
@@ -61,6 +67,8 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
                            else _env_int("EXPORT_PROMPT_MAX_KB",
                                          DEFAULT_PROMPT_MAX_KB)),
             redact_pii=False, no_context=False,
+            window_days=(window_days if window_days is not None
+                         else _env_int("EXPORT_WINDOW_DAYS", 0) or None),
             context_window=(context_window if context_window is not None
                             else _env_int("EXPORT_CONTEXT_WINDOW", CONTEXT_WINDOW_SEC)),
         )
@@ -71,8 +79,14 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
             dialog_msgs=dialog_msgs, dialog_mode=dialog_mode, names=names,
             games=games_map.get(user_id), history=history_map.get(user_id),
             psych=psych_map.get(user_id),
+            behavior=build_behavior_block(
+                msgs_all, user_id,
+                given_events=events_map.get(user_id),
+                presence_snaps=presence_map.get(user_id)),
         )
         st = dossier["statistics"]
+        bh = dossier.get("behavior") or {}
+        eff_window = ns.window_days  # None = вся история (окно не резало ленту)
         return {
             "user_id": user_id,
             "username": dossier["identity"].get("username") or str(user_id),
@@ -84,6 +98,12 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
             "period_from": _date_only(st.get("first_message_at")),
             "period_to": _date_only(st.get("last_message_at")),
             "prompt": render_prompt_md(dossier),
+            # версионирование методики: что реально попало в промпт —
+            # был ли блок «Поведение» и каким окном резалась лента
+            "behavior_present": bool(bh.get("sessions")
+                                     or bh.get("initiative_latency")
+                                     or bh.get("segments")),
+            "window_days": eff_window,
         }
     except SQLAlchemyError as e:
         raise RuntimeError(f"Ошибка чтения БД: {e}") from e

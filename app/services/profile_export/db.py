@@ -210,6 +210,37 @@ def fetch_all_messages_flat(conn) -> list[dict]:
     return rows
 
 
+def fetch_reaction_events(conn) -> dict[int, list[dict]]:
+    """События реакций (таблица reaction_events, v10). author_id -> список.
+
+    Пусто, если таблицы ещё нет (старые БД до миграции) — graceful degrade.
+    """
+    out: dict[int, list[dict]] = {}
+    try:
+        rows = conn.execute(
+            "SELECT msg_author_id, user_id, emoji, action, occurred_at "
+            "FROM reaction_events ORDER BY occurred_at ASC")
+    except Exception:
+        return out
+    for r in rows:
+        out.setdefault(r["msg_author_id"], []).append(r)
+    return out
+
+
+def fetch_presence_snapshots(conn) -> dict[int, list[dict]]:
+    """Снимки присутствия (presence_snapshots, v10): user_id -> список."""
+    out: dict[int, list[dict]] = {}
+    try:
+        rows = conn.execute(
+            "SELECT user_id, status, status_text, activity_name, observed_at "
+            "FROM presence_snapshots ORDER BY observed_at ASC")
+    except Exception:
+        return out
+    for r in rows:
+        out.setdefault(r["user_id"], []).append(r)
+    return out
+
+
 def build_names(conn, users: list[dict]) -> dict[int, str]:
     """user_id -> отображаемое имя (global_name/username, серверный ник в приоритете)."""
     names = {u["user_id"]: (u["global_name"] or u["username"] or f"id{u['user_id']}")

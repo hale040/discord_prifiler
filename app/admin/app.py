@@ -1389,12 +1389,18 @@ def create_app(database_url: str) -> Flask:
 
             from app.services.analysis_importer import import_analysis
 
+            # версионирование методики: хэш промпта + вес дела — чтобы на
+            # вопрос «данные изменились или метод?» отвечал факт, а не память
             pid = import_analysis(
                 engine, user_id, answer,
                 model=model_used, prompt_hash=ph,
                 source_lines=info["messages_total"],
                 period_from=info["period_from"], period_to=info["period_to"],
                 messages_analyzed=info["messages_total"],
+                methodology={"prompt_sha256": ph,
+                             "prompt_bytes": len(info["prompt"].encode("utf-8")),
+                             "behavior_block": bool(info.get("behavior_present")),
+                             "window_days": info.get("window_days")},
             )
             audit("psych_refresh", target=f"user={user_id}",
                   details=f"profile_id={pid} model={model_used} "

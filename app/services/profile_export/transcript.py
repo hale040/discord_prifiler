@@ -105,6 +105,7 @@ def make_transcript(
     target_uid: int | None = None,
     names: dict[int, str] | None = None,
     max_bytes: int | None = None,
+    window_days: int | None = None,
 ) -> tuple[str, bool]:
     """Компактная диалоговая лента (экономия токенов — приоритет).
 
@@ -118,7 +119,21 @@ def make_transcript(
     строки (срез от нового к старому), старые отбрасываются; строки текста
     не обрезаются посимвольно. max_bytes <= 0 / None — лимит по количеству
     строк (max_lines; устаревший режим), 0/-1 и там и там = полная лента.
+    window_days — скользящее временное окно: старше N дней от последнего
+    сообщения не попадает в ленту (сегментация «сейчас vs история»).
     """
+    if window_days and window_days > 0 and msgs:
+        try:
+            from datetime import timedelta
+            last_ts = parse_ts(msgs[-1].get("timestamp"))
+            if last_ts is not None:
+                cutoff = last_ts - timedelta(days=window_days)
+                kept = [m for m in msgs
+                        if (parse_ts(m.get("timestamp")) or cutoff) >= cutoff]
+                if kept:                      # окно не должно обнулять ленту
+                    msgs = kept
+        except Exception:                     # любые сюрпризы формата времени
+            pass                              # — не роняем экспорт, полное окно
     if target_uid is None or names is None:
         return _make_transcript_plain(msgs, max_lines, redact_pii,
                                       max_bytes=max_bytes)
