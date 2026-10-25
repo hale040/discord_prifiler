@@ -243,6 +243,83 @@ def main():
                 " GROUP BY 1 HAVING count(*)>1) x") if column_exists(cur, "psych_profiles", "is_current") else "?"
             emit(f"users_with_multiple_current={multi}")
 
+        # --- 7b. качество психо-профилей (результаты LLM) ---
+        if table_exists(cur, "psych_profiles"):
+            section("\n## PSYCH_QUALITY")
+            need = ("big_five_openness", "mbti_type", "confidence_overall",
+                    "methodology_snapshot", "messages_analyzed", "source_lines")
+            have = {c for c in need if column_exists(cur, "psych_profiles", c)}
+            no_mbti = scalar(cur, "SELECT count(*) FROM psych_profiles WHERE is_current IS true"
+                                  " AND (mbti_type IS NULL OR mbti_type='')") if "mbti_type" in have else "?"
+            emit(f"current_without_mbti={no_mbti}")
+            no_b5 = scalar(cur, "SELECT count(*) FROM psych_profiles WHERE is_current IS true"
+                                " AND big_five_openness IS NULL") if "big_five_openness" in have else "?"
+            emit(f"current_without_bigfive={no_b5}")
+            if "methodology_snapshot" in have:
+                no_meth = scalar(cur, "SELECT count(*) FROM psych_profiles WHERE is_current IS true"
+                                      " AND methodology_snapshot IS NULL")
+                emit(f"current_without_methodology={no_meth}")  # >0 => профили до фикса P0 или битый путь записи
+            if "messages_analyzed" in have:
+                thin = scalar(cur, "SELECT count(*) FROM psych_profiles WHERE is_current IS true"
+                                      " AND messages_analyzed < 50")
+                emit(f"thin_profiles_lt50_msgs={thin}")  # низкая доказательная база
+            sig_per_profile = scalar(cur,
+                "SELECT coalesce(max(c),0) FROM (SELECT profile_id, count(*) c FROM psych_signals"
+                " GROUP BY 1) x") if table_exists(cur, "psych_signals") else "?"
+            emit(f"max_signals_per_profile={sig_per_profile}")
+
+        # --- 7c. presence и игры (диагностика пустой user_games) ---
+        if table_exists(cur, "user_games"):
+            section("\n## PRESENCE_GAMES")
+            ug = scalar(cur, "SELECT count(*) FROM user_games")
+            emit(f"user_games_total={ug}")
+            kind_null = scalar(cur, "SELECT count(*) FROM user_games WHERE kind IS NULL")
+            emit(f"kind_null={kind_null}")  # >0 => legacy-строки не нормализованы (fix_legacy_game_kinds не отработал)
+            kind_custom = scalar(cur, "SELECT count(*) FROM user_games WHERE lower(kind) LIKE '%custom%'")
+            emit(f"kind_custom_leak={kind_custom}")  # >0 => кастомный статус снова пишется как игра
+            distinct_players = scalar(cur, "SELECT count(DISTINCT user_id) FROM user_games")
+            emit(f"users_with_games={distinct_players}")
+            topg = rows(cur, "SELECT name, count(*) c FROM user_games GROUP BY 1 ORDER BY c DESC LIMIT 5")
+            emit("top_games=" + ",".join(f"{n}:{c}" for n, c in topg) if topg else "top_games=-")
+            if table_exists(cur, "presence_snapshots"):
+                ps = scalar(cur, "SELECT count(*) FROM presence_snapshots")
+                emit(f"presence_snapshots={ps}")
+                pu = scalar(cur, "SELECT count(DISTINCT user_id) FROM presence_snapshots")
+                emit(f"presence_distinct_users={pu}")
+                # сколько юзеров с presence вообще не имеют ни одной игры — норма при офлайн-статусах
+                if ug is not None and str(ug) != "ERR":
+                    psu = scalar(cur, "SELECT count(DISTINCT user_id) FROM presence_snapshots"
+                                      " WHERE user_id NOT IN (SELECT user_id FROM user_games)")
+                    emit(f"presence_users_without_games={psu}")
+            # когда был последний снимок (в реальной схеме колонка observed_at)
+            ps_time_col = next((c for c in ("observed_at", "captured_at", "snapshot_at", "created_at")
+                                if table_exists(cur, "presence_snapshots")
+                                and column_exists(cur, "presence_snapshots", c)), None)
+            if ps_time_col:
+                last_ps = scalar(cur, f"SELECT max({ps_time_col}) FROM presence_snapshots")
+                emit(f"presence_last_capture={last_ps} (col={ps_time_col})")
+                # свежесть сбора: если последний снимок старше ~2 ч — коллектор presence не крутится
+                age_min = scalar(cur,
+                    f"SELECT extract(epoch from (now() - max({ps_time_col})))/60"
+                    " FROM presence_snapshots")
+                try:
+                    if age_min != "ERR" and float(age_min) > 120:
+                        emit(f"WARN presence_stale_min={int(float(age_min))} (>120: presence-сбор завис)")
+                except (TypeError, ValueError):
+                    pass
+
+        # --- 7d. DM-курсоры: зависшие задачи pending_dm ---
+        if table_exists(cur, "user_profiles") and column_exists(cur, "user_profiles", "pending_dm"):
+            section("\n## DM_PENDING")
+            pend = scalar(cur, "SELECT count(*) FROM user_profiles WHERE pending_dm IS true")
+            emit(f"pending_dm_true={pend}")  # >0 надолго => dm-loop не крутится (коллектор упал/не выбивает флаг)
+            if pend not in ("ERR", 0) and column_exists(cur, "user_profiles", "dm_synced_at"):
+                stuckp = rows(cur,
+                    "SELECT user_id, dm_status, dm_fail_count, left(coalesce(dm_last_error,''),60)"
+                    " FROM user_profiles WHERE pending_dm IS true LIMIT 10")
+                for u, st, fc, er in stuckp:
+                    emit(f"pending user={u} status={st} fails={fc} err={er}")
+
         # --- 8. схема/миграции ---
         section("\n## SCHEMA")
         sm = "alembic_version" if table_exists(cur, "alembic_version") else None
