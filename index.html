@@ -10,9 +10,18 @@
   <meta property="og:title" content="СтальПром — металлопрокат со склада в Москве от 42 000 ₽/тонна">
   <meta property="og:description" content="1200+ позиций в наличии: арматура, балка, швеллер, лист, труба. Резка в размер, доставка от 1 дня. Скидки от 5 тонн.">
   <meta property="og:url" content="https://hale040.github.io/work_site/">
-  <meta property="og:image" content="assets/img/hero-steel.jpg">
+    <meta property="og:image" content="https://hale040.github.io/work_site/assets/img/hero-steel.jpg">
+  <meta property="og:image:width" content="1920">
+  <meta property="og:image:height" content="1080">
+  <meta property="og:image:alt" content="Металлопрокат на складе СтальПром — трубы и арматура">
+  <meta property="og:site_name" content="СтальПром">
+  <meta property="og:locale" content="ru_RU">
   <meta name="theme-color" content="#ff7a1a">
-  <link rel="preload" as="image" href="assets/img/hero-steel.jpg">
+  <link rel="canonical" href="https://hale040.github.io/work_site/">
+  <link rel="preload" as="image" href="assets/img/hero-steel.jpg" fetchpriority="high">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=PT+Sans:wght@400;700&display=swap&subset=cyrillic" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script type="application/ld+json">
   {
@@ -44,12 +53,13 @@
         <span class="logo__text">Сталь<b>Пром</b><small>металлопрокат с 2008 года</small></span>
       </a>
 
-      <nav class="nav" id="nav">
+      <nav class="nav" id="nav" aria-label="Основная навигация">
         <a href="#catalog" class="nav__link">Каталог</a>
         <a href="#advantages" class="nav__link">Преимущества</a>
         <a href="#pricing" class="nav__link">Прайс-лист</a>
-        <a href="#docs" class="nav__link">Документы</a>
         <a href="#calculator" class="nav__link">Калькулятор</a>
+        <a href="#services-delivery" class="nav__link">Доставка и услуги</a>
+        <a href="#docs" class="nav__link">Документы</a>
         <a href="#about" class="nav__link">О компании</a>
         <a href="#contacts" class="nav__link">Контакты</a>
       </nav>
@@ -60,7 +70,7 @@
           <small>Пн–Сб 8:00–20:00</small>
         </a>
         <button class="btn btn--accent" id="callBtn">Заказать звонок</button>
-        <button class="burger" id="burger" aria-label="Меню">
+        <button class="burger" id="burger" aria-label="Открыть меню" aria-expanded="false" aria-controls="nav">
           <span></span><span></span><span></span>
         </button>
       </div>
@@ -110,7 +120,10 @@
 
         <div class="catalog__grid">
           <article class="card reveal">
-            <div class="card__media"><img src="assets/img/rebar.jpg" alt="Арматура" loading="lazy"></div>
+            <a class="card__media" href="#pricing" tabindex="-1" aria-hidden="true">
+              <img src="assets/img/rebar.jpg" alt="Арматура А500С — рифлёные стержни ⌀6–40 мм на складе" loading="lazy" width="600" height="400">
+              <span class="card__badge">Хит продаж</span>
+            </a>
             <h3 class="card__title">Арматура</h3>
             <p class="card__desc">А500С, А240, ⌀6–40 мм. Для фундаментов и ЖБИ.</p>
             <div class="card__price">от 42 000 ₽/т</div>
@@ -118,7 +131,9 @@
           </article>
 
           <article class="card reveal">
-            <div class="card__media"><img src="assets/img/beam.jpg" alt="Балка двутавровая" loading="lazy"></div>
+            <a class="card__media" href="#pricing" tabindex="-1" aria-hidden="true">
+              <img src="assets/img/beam.jpg" alt="Балка двутавровая — торцы профилей Б/Ш серии 10–45" loading="lazy" width="600" height="400">
+            </a>
             <h3 class="card__title">Балка двутавровая</h3>
             <p class="card__desc">10–45Ш1, сталь 09Г2С / Ст3сп5.</p>
             <div class="card__price">от 58 000 ₽/т</div>
@@ -126,7 +141,9 @@
           </article>
 
           <article class="card reveal">
-            <div class="card__media"><img src="assets/img/channel.jpg" alt="Швеллер" loading="lazy"></div>
+            <a class="card__media" href="#pricing" tabindex="-1" aria-hidden="true">
+              <img src="assets/img/channel.jpg" alt="Швеллер гнутый и горячекатаный — П-образные профили в штабеле" loading="lazy" width="600" height="400">
+            </a>
             <h3 class="card__title">Швеллер</h3>
             <p class="card__desc">У, П, Л серии 5–40, горячекатаный и гнутый.</p>
             <div class="card__price">от 54 000 ₽/т</div>
@@ -134,7 +151,9 @@
           </article>
 
           <article class="card reveal">
-            <div class="card__media"><img src="assets/img/angle.jpg" alt="Уголок" loading="lazy"></div>
+            <a class="card__media" href="#pricing" tabindex="-1" aria-hidden="true">
+              <img src="assets/img/angle.jpg" alt="Уголок стальной равнополочный — Г-образное сечение" loading="lazy" width="600" height="400">
+            </a>
             <h3 class="card__title">Уголок</h3>
             <p class="card__desc">Равнополочный 25×25–200×200, неравнополочный.</p>
             <div class="card__price">от 48 000 ₽/т</div>
@@ -142,7 +161,9 @@
           </article>
 
           <article class="card reveal">
-            <div class="card__media"><img src="assets/img/sheet.jpg" alt="Листовой прокат" loading="lazy"></div>
+            <a class="card__media" href="#pricing" tabindex="-1" aria-hidden="true">
+              <img src="assets/img/sheet.jpg" alt="Листовой прокат — штабель горячекатаных листов" loading="lazy" width="600" height="400">
+            </a>
             <h3 class="card__title">Листовой прокат</h3>
             <p class="card__desc">Горячекатаный 1–160 мм, холоднокатаный, рифлёный.</p>
             <div class="card__price">от 51 000 ₽/т</div>
@@ -150,15 +171,19 @@
           </article>
 
           <article class="card reveal">
-            <div class="card__media"><img src="assets/img/pipe.jpg" alt="Труба" loading="lazy"></div>
+            <a class="card__media" href="#pricing" tabindex="-1" aria-hidden="true">
+              <img src="assets/img/pipe.jpg" alt="Труба стальная круглая и профильная — рез трубы в связке" loading="lazy" width="600" height="400">
+            </a>
             <h3 class="card__title">Труба</h3>
-            <p class="card__desc">Профильная, круглая ВГП, электросварная, Б/shv.</p>
+            <p class="card__desc">Профильная, круглая ВГП, электросварная, бесшовная.</p>
             <div class="card__price">от 56 000 ₽/т</div>
             <a href="#pricing" class="card__link">Прайс →</a>
           </article>
 
           <article class="card reveal">
-            <div class="card__media"><img src="assets/img/round.jpg" alt="Круг, квадрат, полоса" loading="lazy"></div>
+            <a class="card__media" href="#pricing" tabindex="-1" aria-hidden="true">
+              <img src="assets/img/round.jpg" alt="Круг горячекатаный, квадрат и полоса — торцы прутков" loading="lazy" width="600" height="400">
+            </a>
             <h3 class="card__title">Круг, квадрат, полоса</h3>
             <p class="card__desc">Круг ⌀5–240 мм, полоса 20×4–100×10.</p>
             <div class="card__price">от 49 000 ₽/т</div>
@@ -166,7 +191,10 @@
           </article>
 
           <article class="card reveal">
-            <div class="card__media"><img src="assets/img/inox.jpg" alt="Нержавеющий прокат" loading="lazy"></div>
+            <a class="card__media" href="#pricing" tabindex="-1" aria-hidden="true">
+              <img src="assets/img/inox.jpg" alt="Нержавеющий прокат AISI 304 — полированный лист" loading="lazy" width="600" height="400">
+              <span class="card__badge card__badge--inox">AISI 304/316</span>
+            </a>
             <h3 class="card__title">Нержавеющий прокат</h3>
             <p class="card__desc">AISI 304, 316, 430 — лист, круг, труба.</p>
             <div class="card__price">от 145 000 ₽/т</div>
@@ -227,17 +255,40 @@
 
         <div class="price__table-wrap reveal">
           <table class="price__table" id="priceTable">
+            <caption class="visually-hidden">Прайс-лист на металлопрокат: наименование, размер, цена за тонну, наличие на складе</caption>
             <thead>
               <tr>
-                <th>Наименование</th>
-                <th>Размер / марка</th>
-                <th>Ед. изм.</th>
-                <th>Цена, ₽</th>
-                <th>Наличие</th>
-                <th></th>
+                <th scope="col">Наименование</th>
+                <th scope="col">Размер / марка</th>
+                <th scope="col">Ед. изм.</th>
+                <th scope="col">Цена, ₽</th>
+                <th scope="col">Наличие</th>
+                <th scope="col"><span class="visually-hidden">Действие</span></th>
               </tr>
             </thead>
-            <tbody><!-- заполняется из JS --></tbody>
+            <tbody>
+              <tr><td>Арматура А500С</td><td>⌀12 мм</td><td>т</td><td class="num">42 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="0">Заказать</button></td></tr>
+              <tr><td>Арматура А500С</td><td>⌀14 мм</td><td>т</td><td class="num">42 500 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="1">Заказать</button></td></tr>
+              <tr><td>Арматура А500С</td><td>⌀16 мм</td><td>т</td><td class="num">43 000 ₽</td><td class="stock--low">Мало</td><td><button class="btn--order" data-idx="2">Заказать</button></td></tr>
+              <tr><td>Арматура А240 (гладкая)</td><td>⌀8 мм</td><td>т</td><td class="num">44 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="3">Заказать</button></td></tr>
+              <tr><td>Балка двутавровая</td><td>20Б1 / С255</td><td>т</td><td class="num">58 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="4">Заказать</button></td></tr>
+              <tr><td>Балка двутавровая</td><td>30Ш1 / Ст3сп5</td><td>т</td><td class="num">60 500 ₽</td><td class="stock--no">Под заказ</td><td><button class="btn--order" data-idx="5">Заказать</button></td></tr>
+              <tr><td>Швеллер</td><td>12П / Ст3</td><td>т</td><td class="num">54 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="6">Заказать</button></td></tr>
+              <tr><td>Швеллер</td><td>16У / 09Г2С</td><td>т</td><td class="num">57 500 ₽</td><td class="stock--low">Мало</td><td><button class="btn--order" data-idx="7">Заказать</button></td></tr>
+              <tr><td>Уголок равнополочный</td><td>50×50×5 / Ст3</td><td>т</td><td class="num">48 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="8">Заказать</button></td></tr>
+              <tr><td>Уголок равнополочный</td><td>75×75×6 / 09Г2С</td><td>т</td><td class="num">51 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="9">Заказать</button></td></tr>
+              <tr><td>Лист горячекатаный</td><td>10×1500×6000 / Ст3</td><td>т</td><td class="num">51 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="10">Заказать</button></td></tr>
+              <tr><td>Лист горячекатаный</td><td>20×1500×6000 / 09Г2С</td><td>т</td><td class="num">55 500 ₽</td><td class="stock--low">Мало</td><td><button class="btn--order" data-idx="11">Заказать</button></td></tr>
+              <tr><td>Лист холоднокатаный</td><td>1.0×1250×2500 / 08пс</td><td>т</td><td class="num">62 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="12">Заказать</button></td></tr>
+              <tr><td>Лист рифлёный</td><td>4×1250×2500 / ФРЧ</td><td>т</td><td class="num">64 000 ₽</td><td class="stock--no">Под заказ</td><td><button class="btn--order" data-idx="13">Заказать</button></td></tr>
+              <tr><td>Труба профильная</td><td>60×60×3 / Ст3</td><td>т</td><td class="num">56 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="14">Заказать</button></td></tr>
+              <tr><td>Труба профильная</td><td>100×100×4 / 09Г2С</td><td>т</td><td class="num">59 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="15">Заказать</button></td></tr>
+              <tr><td>Труба электросварная</td><td>⌀108×4 / Ст3</td><td>т</td><td class="num">57 000 ₽</td><td class="stock--low">Мало</td><td><button class="btn--order" data-idx="16">Заказать</button></td></tr>
+              <tr><td>Круг горячекатаный</td><td>⌀30 мм / Ст3</td><td>т</td><td class="num">49 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="17">Заказать</button></td></tr>
+              <tr><td>Полоса</td><td>40×4 мм / Ст3</td><td>т</td><td class="num">50 000 ₽</td><td class="stock--yes">В наличии</td><td><button class="btn--order" data-idx="18">Заказать</button></td></tr>
+              <tr><td>Лист нержавеющий</td><td>3×1000×2000 / AISI 304</td><td>т</td><td class="num">145 000 ₽</td><td class="stock--low">Мало</td><td><button class="btn--order" data-idx="19">Заказать</button></td></tr>
+              <tr><td>Круг нержавеющий</td><td>⌀20 мм / AISI 316</td><td>т</td><td class="num">190 000 ₽</td><td class="stock--no">Под заказ</td><td><button class="btn--order" data-idx="20">Заказать</button></td></tr>
+            </tbody>
           </table>
         </div>
         <p class="price__note reveal">* Точную цену с учётом объёма и резки уточняйте у менеджера: <a href="tel:+74951234567">+7 (495) 123-45-67</a></p>
@@ -276,20 +327,71 @@
         <p class="section__subtitle reveal">Средняя оценка 4.9 из 5 по 214 отзывам · рейтинг на Яндекс.Картах и в 2ГИС</p>
         <div class="rev__grid">
           <article class="rev reveal">
-            <div class="rev__stars">★★★★★</div>
+            <div class="rev__stars" role="img" aria-label="Оценка 5 из 5">★★★★★</div>
             <p>«Брали 32 тонны арматуры А500С на фундамент — отгрузили в день оплаты, привезли на объект к 8 утра. Сертификаты приложили, геометрия идеальная.»</p>
             <footer><b>Сергей Т.</b><span>прораб, СК «Монолит»</span></footer>
           </article>
           <article class="rev reveal">
-            <div class="rev__stars">★★★★★</div>
+            <div class="rev__stars" role="img" aria-label="Оценка 5 из 5">★★★★★</div>
             <p>«Работаем со СтальПром третий год по договору с отсрочкой. Цена честная, без „сюрпризов“ при выставлении счёта. Резка в размер экономит нам неделю на объекте.»</p>
             <footer><b>Ирина В.</b><span>снабженец, ГК «Основа»</span></footer>
           </article>
           <article class="rev reveal">
-            <div class="rev__stars">★★★★★</div>
+            <div class="rev__stars" role="img" aria-label="Оценка 5 из 5">★★★★★</div>
             <p>«Заказывал лист рифлёный для цеха — позиции не было на складе, привезли под заказ за 4 дня, как и обещали менеджер. Рекомендую.»</p>
             <footer><b>Андрей К.</b><span>владелец производства</span></footer>
           </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SERVICES & DELIVERY ===== -->
+    <section class="section section--alt" id="services-delivery">
+      <div class="container">
+        <h2 class="section__title reveal">Услуги и доставка</h2>
+        <p class="section__subtitle reveal">Полный сервис на складе: от раскроя до выгрузки на объекте</p>
+        <div class="serv__grid reveal">
+          <div class="serv">
+            <h3>✂️ Резка в размер</h3>
+            <p>Гильотина до 16 мм, ленточнопильные станки по арматуре, балке и трубе. Точность ±1&nbsp;мм, минимум от 100&nbsp;мм. 1&nbsp;500&nbsp;₽/т, от 5 т — бесплатно.</p>
+          </div>
+          <div class="serv">
+            <h3>⤵ Гибка и сверловка</h3>
+            <p>Гибка листа и полосы на прессе, изготовление закладных деталей, отверстия по чертежу заказчика.</p>
+          </div>
+          <div class="serv">
+            <h3>🚛 Доставка своим транспортом</h3>
+            <p>Собственный автопарк: «Газели» до 5 т, длинномеры до 12&nbsp;м, манипуляторы с краном-балкой. По Москве от 8&nbsp;000&nbsp;₽, за МКАД +30&nbsp;₽/км. Разгрузка манипулятором — от 4&nbsp;000&nbsp;₽/рейс.</p>
+          </div>
+          <div class="serv">
+            <h3>🇷🇺 Отправка в регионы</h3>
+            <p>ТК «ПЭК», «Деловые линии», «Энергия», ЖД-вагоны. Доставка до терминала — бесплатно, страхование груза по запросу.</p>
+          </div>
+          <div class="serv">
+            <h3>🏬 Ответхранение</h3>
+            <p>Размещение вашего металла на крытой площадке, учёт и отгрузка по заявке. От 1&nbsp;200&nbsp;₽/т в месяц.</p>
+          </div>
+          <div class="serv">
+            <h3>💳 Оплата для юрлиц</h3>
+            <p>Безнал с НДС 20%, счёт действителен 3 рабочих дня, УПД и закрывающие документы в ЭДО (Диадок, СБИС). Отсрочка до 30 дней для постоянных клиентов.</p>
+          </div>
+        </div>
+
+        <div class="zones reveal">
+          <h3 class="zones__title">Зоны и стоимость доставки</h3>
+          <table class="zones__table">
+            <thead>
+              <tr><th scope="col">Зона</th><th scope="col">Срок</th><th scope="col">Стоимость</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Москва в пределах МКАД</td><td>в день заказа (до 12:00)</td><td>от 8 000 ₽</td></tr>
+              <tr><td>Москва за МКАД / МО до 30 км</td><td>в день заказа</td><td>8 000 ₽ + 30 ₽/км</td></tr>
+              <tr><td>МО 30–100 км</td><td>следующий день</td><td>по тарифу, от 12 000 ₽</td></tr>
+              <tr><td>Регионы России</td><td>2–7 дней (ТК)</td><td>тариф ТК, до терминала — 0 ₽</td></tr>
+              <tr><td>Самовывоз, Каширское ш. 3к2</td><td>08:00–19:00, Пн–Сб</td><td>бесплатно, погрузка краном — 0 ₽</td></tr>
+            </tbody>
+          </table>
+          <p class="zones__note">При заказе от 15 тонн по Москве — <b>доставка бесплатно</b>. Длинномер свыше 12 м — по согласованию и спецтранспорту.</p>
         </div>
       </div>
     </section>
@@ -372,7 +474,7 @@
           </ul>
         </div>
         <figure class="about__media reveal">
-          <img src="assets/img/about-warehouse.jpg" alt="Склад металлопроката «СтальПром»" loading="lazy">
+          <img src="assets/img/about-warehouse.jpg" alt="Собственный склад металлопроката «СтальПром» 15 000 м²: стеллажи с профилем, связки труб и козловой кран" loading="lazy" width="900" height="700">
           <figcaption>Собственный склад 15 000 м², Москва</figcaption>
         </figure>
         <div class="about__quote reveal">
@@ -420,9 +522,14 @@
       <div class="footer__links">
         <a href="#catalog">Каталог</a>
         <a href="#pricing">Прайс</a>
+        <a href="#services-delivery">Доставка</a>
+        <a href="#docs">Документы</a>
         <a href="#contacts">Контакты</a>
       </div>
       <div class="footer__test">Тестовая страница — данные вымышлены</div>
+    </div>
+    <div class="container footer__seo">
+      <p><b>Металлопрокат оптом и в розницу со склада в Москве</b> — арматура А500С от 42&nbsp;000&nbsp;₽/т, балка двутавровая, швеллер, уголок стальной, лист горячекатаный и холоднокатаный, рифлёный, труба профильная и круглая, круг, квадрат, полоса, нержавеющий прокат AISI&nbsp;304/316. Резка в размер, гибка, доставка по Москве и области от 1 дня, отправка транспортными компаниями по всей России. Работаем с юрлицами по договору с НДС, отсрочка платежа. Собственный склад 15&nbsp;000&nbsp;м², более 1&nbsp;200 позиций в наличии, отгрузка в день заказа.</p>
     </div>
   </footer>
 

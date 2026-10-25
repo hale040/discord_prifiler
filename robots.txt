@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://hale040.github.io/work_site/sitemap.xml

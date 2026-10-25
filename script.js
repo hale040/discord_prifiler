@@ -31,14 +31,30 @@ const fmt = n => n.toLocaleString("ru-RU") + " ₽";
 
 /* =========================================================
    Рендер таблицы прайса + поиск + фильтры + кнопки «Заказать»
+   (таблица уже отрисована в HTML — JS берёт строки из DOM,
+    поэтому прайс виден и индексируется поисковиками без JS)
    ========================================================= */
-const priceTbody = document.querySelector("#priceTable tbody");
+const priceTable = document.getElementById("priceTable");
+const priceTbody = priceTable.querySelector("tbody");
 const priceSearch = document.getElementById("priceSearch");
 const priceCategory = document.getElementById("priceCategory");
 const priceStock = document.getElementById("priceStock");
 
+// модель данных — из статичных строк таблицы
+const PRICE_ROWS = [...priceTbody.querySelectorAll("tr")].map(tr => {
+  const td = tr.children;
+  return {
+    tr,
+    name: td[0].textContent.trim(),
+    size: td[1].textContent.trim(),
+    unit: td[2].textContent.trim(),
+    priceText: td[3].textContent.trim(),
+    stock: td[4].textContent.trim(),
+  };
+});
+
 // категории для фильтра — уникальные наименования из прайса
-[...new Set(PRICE_DATA.map(i => i.name))].forEach(name => {
+[...new Set(PRICE_ROWS.map(i => i.name))].forEach(name => {
   const opt = document.createElement("option");
   opt.value = name;
   opt.textContent = name;
@@ -48,35 +64,31 @@ const catAll = document.createElement("option");
 catAll.value = ""; catAll.textContent = "Все категории";
 priceCategory.prepend(catAll);
 
-function stockClass(stock) {
-  if (stock === "В наличии") return "stock--yes";
-  if (stock === "Мало") return "stock--low";
-  return "stock--no";
-}
-
-function getFilteredPrice() {
+function getFiltered() {
   const q = priceSearch.value.trim().toLowerCase();
   const cat = priceCategory.value;
   const st = priceStock.value;
-  return PRICE_DATA.filter(item =>
+  return PRICE_ROWS.filter(item =>
     (!q || (item.name + " " + item.size).toLowerCase().includes(q)) &&
     (!cat || item.name === cat) &&
     (!st || item.stock === st)
   );
 }
 
+let emptyRow = null;
 function renderPrice() {
-  const rows = getFilteredPrice();
-  priceTbody.innerHTML = rows.map((item, idx) => `
-    <tr>
-      <td>${item.name}</td>
-      <td>${item.size}</td>
-      <td>${item.unit}</td>
-      <td class="num">${fmt(item.price)}</td>
-      <td class="${stockClass(item.stock)}">${item.stock}</td>
-      <td><button class="btn--order" data-idx="${PRICE_DATA.indexOf(item)}">Заказать</button></td>
-    </tr>`).join("") ||
-    `<tr><td colspan="6" style="text-align:center;padding:1.5rem;">Ничего не найдено — позвоните нам, привезём под заказ: <a href="tel:+74951234567" style="color:#e5670c;font-weight:700;">+7 (495) 123-45-67</a></td></tr>`;
+  const visible = new Set(getFiltered());
+  PRICE_ROWS.forEach(r => r.tr.classList.toggle("is-hidden", !visible.has(r)));
+  const count = visible.size;
+  if (!count) {
+    if (!emptyRow) {
+      emptyRow = document.createElement("tr");
+      emptyRow.innerHTML = '<td colspan="6" style="text-align:center;padding:1.5rem;">Ничего не найдено — позвоните нам, привезём под заказ: <a href="tel:+74951234567" style="color:#e5670c;font-weight:700;">+7 (495) 123-45-67</a></td>';
+    }
+    priceTbody.appendChild(emptyRow);
+  } else if (emptyRow && emptyRow.parentNode) {
+    emptyRow.remove();
+  }
 }
 renderPrice();
 priceSearch.addEventListener("input", renderPrice);
@@ -87,9 +99,10 @@ priceStock.addEventListener("change", renderPrice);
 priceTbody.addEventListener("click", e => {
   const btn = e.target.closest(".btn--order");
   if (!btn) return;
-  const item = PRICE_DATA[+btn.dataset.idx];
+  const rowIdx = [...btn.closest("tbody").children].indexOf(btn.closest("tr"));
+  const item = PRICE_ROWS[rowIdx];
   openModal(
-    `Заявка: <b>${item.name}</b>, ${item.size} — ${fmt(item.price)}/т (${item.stock.toLowerCase()}).<br>Оставьте телефон — менеджер подтвердит цену и наличие за 15 минут.`,
+    `Заявка на <b>${item.name}</b>, ${item.size} — ${item.priceText}/т (${item.stock.toLowerCase()}).<br>Оставьте телефон — менеджер подтвердит цену и наличие за 15 минут.`,
     "Заявка на «" + item.name + "»"
   );
 });
@@ -365,11 +378,13 @@ const nav = document.getElementById("nav");
 burger.addEventListener("click", () => {
   nav.classList.toggle("open");
   burger.classList.toggle("open");
+  burger.setAttribute("aria-expanded", String(nav.classList.contains("open")));
 });
 nav.querySelectorAll(".nav__link").forEach(link =>
   link.addEventListener("click", () => {
     nav.classList.remove("open");
     burger.classList.remove("open");
+    burger.setAttribute("aria-expanded", "false");
   })
 );
 
