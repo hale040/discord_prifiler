@@ -275,7 +275,8 @@ def main():
             emit(f"user_games_total={ug}")
             kind_null = scalar(cur, "SELECT count(*) FROM user_games WHERE kind IS NULL")
             emit(f"kind_null={kind_null}")  # >0 => legacy-строки не нормализованы (fix_legacy_game_kinds не отработал)
-            kind_custom = scalar(cur, "SELECT count(*) FROM user_games WHERE lower(kind) LIKE '%custom%'")
+            # psycopg3: литеральные % в SQL без параметров нужно экранировать как %%
+            kind_custom = scalar(cur, "SELECT count(*) FROM user_games WHERE lower(kind) LIKE '%%custom%%'")
             emit(f"kind_custom_leak={kind_custom}")  # >0 => кастомный статус снова пишется как игра
             distinct_players = scalar(cur, "SELECT count(DISTINCT user_id) FROM user_games")
             emit(f"users_with_games={distinct_players}")
