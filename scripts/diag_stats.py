@@ -142,13 +142,24 @@ def main():
                 "SELECT CASE WHEN guild_id IS NULL THEN 'dm' ELSE 'guild' END s,"
                 " count(*), min(timestamp), max(timestamp) FROM messages GROUP BY 1"):
                 emit(f"src={src} n={cnt} from={lo} to={hi}")
+            # колонки берём по факту схемы: id (PK, BIGSERIAL), discord_id — если есть;
+            # edited_at в baseline-схеме (не edited_timestamp)
+            msg_id_col = ("message_id" if column_exists(cur, "messages", "message_id")
+                          else "discord_id" if column_exists(cur, "messages", "discord_id")
+                          else "id")
             dupes = scalar(cur,
-                "SELECT count(*) FROM (SELECT message_id FROM messages GROUP BY 1 HAVING count(*)>1) x")
-            emit(f"duplicate_message_ids={dupes}")
+                f"SELECT count(*) FROM (SELECT {msg_id_col} FROM messages GROUP BY 1 HAVING count(*)>1) x")
+            emit(f"duplicate_message_ids={dupes} (col={msg_id_col})")
             empty = scalar(cur, "SELECT count(*) FROM messages WHERE clean_content IS NULL OR length(trim(clean_content))=0")
             emit(f"empty_content={empty}")
-            edited = scalar(cur, "SELECT count(*) FROM messages WHERE edited_timestamp IS NOT NULL")
-            emit(f"edited_msgs={edited}")
+            edited_col = ("edited_timestamp" if column_exists(cur, "messages", "edited_timestamp")
+                          else "edited_at" if column_exists(cur, "messages", "edited_at")
+                          else None)
+            if edited_col:
+                edited = scalar(cur, f"SELECT count(*) FROM messages WHERE {edited_col} IS NOT NULL")
+                emit(f"edited_msgs={edited}")
+            else:
+                emit("edited_msgs=N/A (нет колонки edited_at/edited_timestamp)")
             per_user = scalar(cur,
                 "SELECT count(DISTINCT author_id) FROM messages")
             emit(f"distinct_authors={per_user}")
@@ -187,11 +198,19 @@ def main():
             emit(f"ever_synced={synced}")
             dm_msgs = scalar(cur, "SELECT count(*) FROM messages WHERE guild_id IS NULL") if table_exists(cur, "messages") else "?"
             emit(f"dm_messages_total={dm_msgs}")
-            stuck = rows(cur,
-                "SELECT user_id, dm_status, dm_error_count, dm_last_error FROM user_profiles"
-                " WHERE dm_error_count > 0 ORDER BY dm_error_count DESC LIMIT 5")
-            for u, st, ec, er in stuck:
-                emit(f"stuck user={u} status={st} errors={ec} last_err={(er or '')[:80]}")
+            # dm_error_count в реальной схеме отсутствует — есть dm_fail_count (миграция v12);
+            # колонку выбираем по факту наличия, чтобы не ловить UndefinedColumn
+            err_col = ("dm_error_count" if column_exists(cur, "user_profiles", "dm_error_count")
+                       else "dm_fail_count" if column_exists(cur, "user_profiles", "dm_fail_count")
+                       else None)
+            if err_col and column_exists(cur, "user_profiles", "dm_last_error"):
+                stuck = rows(cur,
+                    f"SELECT user_id, dm_status, {err_col}, dm_last_error FROM user_profiles"
+                    f" WHERE {err_col} > 0 ORDER BY {err_col} DESC LIMIT 5")
+                for u, st, ec, er in stuck:
+                    emit(f"stuck user={u} status={st} errors={ec} last_err={(er or '')[:80]}")
+            else:
+                emit("stuck_users=N/A (нет колонки dm_error_count/dm_fail_count)")
 
         # --- 5. динамические сигналы v10 ---
         section("\n## SIGNALS_V10")
@@ -233,7 +252,9 @@ def main():
         # физические проверки против моделей
         checks = []
         if table_exists(cur, "user_profiles"):
-            for c in ("dm_fetch", "dm_channel_id", "dm_status", "dm_error_count"):
+            for c in ("dm_fetch", "dm_channel_id", "dm_status",
+                      "dm_fail_count" if not column_exists(cur, "user_profiles", "dm_error_count")
+                      else "dm_error_count"):
                 if not column_exists(cur, "user_profiles", c):
                     checks.append(f"MISSING user_profiles.{c}")
         for ch in checks:
