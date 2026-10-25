@@ -5,6 +5,16 @@
 {% if table == 'user_profiles' %}
 <div class='card'><h4>⚡ Действия</h4>
   {% set ps = current_psych(uid) %}
+  {# ---- Итоговое резюме: сразу под действиями, чтобы не искать его в 👁 ---- #}
+  {% if ps and ps.summary %}
+  <div style='margin:.7rem 0;padding:.7rem .9rem;background:#f6f8ff;border:1px solid var(--line);border-radius:10px'>
+    <h4 style='margin:0 0 .4rem'>Итоговое резюме</h4>
+    <p style='margin:0;white-space:pre-wrap'>{{ ps.summary }}{% if ps.summary|length >= 140 %}…{% endif %}
+      <a href="{{ url_for('profile_view', pid=ps.id) }}" title='полный профиль #{{ ps.id }}'>полностью →</a></p>
+  </div>
+  {% elif ps %}
+  <p class='muted' style='margin:.5rem 0 0'>Резюме отсутствует — профиль создан до добавления блока «summary». Нажмите «🧠 Обновить психо профиль» для пересчёта.</p>
+  {% endif %}
   {# ---- ЛС-виджет: статусы/числа вычисляются один раз, не в шаблонных тернарах ---- #}
   {% set dm_on = values.get('dm_fetch') %}
   {% set dm_st = values.get('dm_status') or '' %}
@@ -216,7 +226,7 @@
 <h5><a href="{{ url_for('browse', table=block.table) }}?col=user_id&val={{ uid }}" style='color:var(--accent)'>{{ block.table }}</a> <span class='muted'>(до {{ block.rows|length }})</span></h5>
 <div class='tbl-wrap' style='margin-bottom:.8rem'><table><thead><tr>{% for c in block.cols %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>
   {% for row2 in block.rows %}<tr>
-    {% for v in row2 %}<td title='{% if v != '—' %}{{ v }}{% endif %}'>{% if loop.index0 == 0 %}<a href="{{ url_for('record', table=block.table, pk=block.pks[loop.index0]) }}">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
+    {% for v in row2 %}<td title='{% if v != '—' %}{{ v|e }}{% endif %}'>{% if loop.index0 == 0 %}<a href="{{ url_for('record', table=block.table, pk=block.pks[loop.index0]) }}">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
   </tr>{% endfor %}</tbody></table></div>
 {% endfor %}
   {% endif %}

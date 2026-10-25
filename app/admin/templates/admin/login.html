@@ -1,4 +1,9 @@
-<div class='card' style='max-width:420px;margin:4rem auto'>"
-"<h3>Вход в админку</h3><form method='post'>"
-"<input type='password' name='pw' placeholder='ADMIN_PASSWORD' autofocus>"
-"<br><br><button class='btn'>Войти</button></form></div>
+<div class='card' style='max-width:420px;margin:4rem auto'>
+  <h3>Вход в админку</h3>
+  {% if error %}<div class='flash err'>{{ error }}</div>{% endif %}
+  <form method='post'>
+    <label for='pw'>Пароль (ADMIN_PASSWORD)</label>
+    <input id='pw' type='password' name='pw' autocomplete='current-password' autofocus required>
+    <p style='margin-top:.8rem'><button class='btn'>Войти</button></p>
+  </form>
+</div>

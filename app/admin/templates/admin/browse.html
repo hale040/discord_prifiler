@@ -35,12 +35,12 @@
   {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr></thead>
 <tbody>
   {% for row in rows %}<tr>
-{% if has_priority %}<td style='text-align:center;white-space:nowrap'>
+{% if has_priority and 'priority' in cols %}<td style='text-align:center;white-space:nowrap'>
   <a class='btn gray sm' style='padding:.05rem .35rem' title='переключить priority'
      href='/browse/{{ table|e }}?star={{ row.pk }}&page={{ cur_page }}'
      {%- if q %}&q={{ q|urlencode }}{% endif -%}
      {%- if prio %}&prio=1{% endif %}}>{{ '★' if row.cells[cols.index('priority')][0] not in ('None','—','0','False','false') else '☆' }}</a></td>{% endif %}
-{% for cell in row.cells %}<td class='{{ 'json' if cell[1] else ('clamp' if w_wide.get(cols[loop.index0])) }}'{% if cell[0] not in ('—','') %} title='{{ cell[0] }}'{% endif %}>
+{% for cell in row.cells %}<td class='{{ 'json' if cell[1] else ('clamp' if w_wide.get(cols[loop.index0])) }}'{% if cell[0] not in ('—','') %} title='{{ cell[0]|e }}'{% endif %}>
   {% if loop.index0 == 0 %}<a href="{{ url_for('record', table=table, pk=row.pk) }}">{{ cell[0] }}</a>
   {% elif has_priority and cols[loop.index0] == 'priority' %}{# колонка priority не дублируется — показ через ★ #}
   {% elif cols[loop.index0] == 'user_id' and psych_map.get(cell[0]) %}

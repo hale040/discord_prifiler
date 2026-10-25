@@ -344,15 +344,28 @@ def create_app(database_url: str) -> Flask:
             return None
         try:
             pp = Table("psych_profiles", MetaData(), autoload_with=engine)
+            sel_cols = [pp.columns.id, pp.columns.model, pp.columns.created_at]
+            # summary берём из result_json (JSONB), если колонка есть — чтобы
+            # в ленте профилей показывать фрагмент «Итогового резюме» без N+1.
+            has_rj = "result_json" in pp.columns
+            if has_rj:
+                sel_cols.append(pp.columns.result_json)
             with engine.connect() as conn:
                 r = conn.execute(
-                    sa_select(pp.columns.id, pp.columns.model, pp.columns.created_at)
+                    sa_select(*sel_cols)
                     .where(pp.columns.user_id == int(user_id),
                            pp.columns.is_current.is_(True))
                     .order_by(pp.columns.created_at.desc())
                     .limit(1)
                 ).first()
-            return {"id": r[0], "model": r[1], "created_at": r[2]} if r else None
+            if not r:
+                return None
+            out = {"id": r[0], "model": r[1], "created_at": r[2]}
+            summary = ""
+            if has_rj and isinstance(r[3], dict):
+                summary = str(r[3].get("summary") or "")
+            out["summary"] = summary
+            return out
         except Exception:
             return None
 
@@ -372,6 +385,10 @@ def create_app(database_url: str) -> Flask:
             sel_cols = [pp.columns.user_id, pp.columns.id]
             if "mbti_type" in cols:
                 sel_cols.append(pp.columns.mbti_type)
+            # summary для карточки пользователя: берём фрагмент из result_json
+            has_rj = "result_json" in cols
+            if has_rj:
+                sel_cols.append(pp.columns.result_json)
             q = sa_select(*sel_cols).where(pp.columns.user_id.in_(ids))
             if "is_current" in cols:
                 q = q.where(pp.columns.is_current.is_(True))
@@ -384,7 +401,10 @@ def create_app(database_url: str) -> Flask:
                     # первый на каждого пользователя = самый свежий (DESC)
                     k = str(r[0])
                     if k not in out:
-                        out[k] = {"id": r[1], "mbti_type": (r[2] if len(r) > 2 else None)}
+                        entry = {"id": r[1], "mbti_type": (r[2] if len(r) > 2 else None)}
+                        if has_rj and isinstance(r[-1], dict):
+                            entry["summary"] = str(r[-1].get("summary") or "")[:140]
+                        out[k] = entry
             return out
         except Exception:
             return {}
