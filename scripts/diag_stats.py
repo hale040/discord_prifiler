@@ -27,6 +27,14 @@ if not db:
 if not db:
     sys.exit("DATABASE_URL не найден (env или .env)")
 
+# Нормализация URL: в .env лежит SQLAlchemy-строка postgresql+psycopg://...,
+# а psycopg требует чистый драйверный postgresql://... (иначе ProgrammingError
+# "missing = after ..."). Режем всё между '://' и первым ':'.
+if "://" in db:
+    scheme, rest = db.split("://", 1)
+    if "+" in scheme:          # postgresql+psycopg -> postgresql
+        db = scheme.split("+", 1)[0] + "://" + rest
+
 try:
     import psycopg
 except ImportError:
