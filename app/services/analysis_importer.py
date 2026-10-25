@@ -19,6 +19,7 @@ import unicodedata
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, bindparam, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
 
 MAX_SIGNALS = 10          # не забиваем базу: evidence не больше N на профиль
@@ -194,8 +195,14 @@ def import_analysis(
     period_from: datetime | str | None = None,
     period_to: datetime | str | None = None,
     messages_analyzed: int | None = None,
+    methodology: dict | None = None,
 ) -> int:
-    """Сохранить ответ LLM как новую версию профиля. Возвращает profile_id."""
+    """Сохранить ответ LLM как новую версию профиля. Возвращает profile_id.
+
+    methodology — снимок методики анализа (prompt_sha256, prompt_bytes,
+    behavior_block, window_days): фиксируется в methodology_snapshot, чтобы
+    на вопрос «изменились данные или метод?» отвечал факт, а не память.
+    """
     if isinstance(answer, str):
         answer = parse_llm_answer(answer)
     bf = answer.get("big_five") or {}
@@ -231,14 +238,16 @@ def import_analysis(
                     messages_analyzed, big_five_openness, big_five_conscientiousness,
                     big_five_extraversion, big_five_agreeableness, big_five_neuroticism,
                     mbti_type, mbti_confidence, enneagram_type, enneagram_confidence,
-                    confidence_overall, severity_max, result_json, is_current, created_at)
+                    confidence_overall, severity_max, result_json,
+                    methodology_snapshot, is_current, created_at)
                    VALUES (:user_id,:model,:ph,:sl,:pf,:pt,:ma,:bo,:bc,:be,:ba,:bn,
-                           :mt,:mc,:et,:ec,:co,:sm,:rj,TRUE,:ca)
+                           :mt,:mc,:et,:ec,:co,:sm,:rj,:ms,TRUE,:ca)
                     RETURNING id"""
             )
             # rj — dict для нативной колонки JSONB: без явного типа
             # DBAPI-драйвер не умеет адаптировать dict ("can't adapt type 'dict'")
-            .bindparams(bindparam("rj", type_=JSON(none_as_null=True)))
+            .bindparams(bindparam("rj", type_=JSON(none_as_null=True)),
+                        bindparam("ms", type_=JSONB(none_as_null=True)))
         )
         res = conn.execute(insert_sql, {
                 "user_id": user_id, "model": model, "ph": prompt_hash, "sl": source_lines,
@@ -253,6 +262,8 @@ def import_analysis(
                 # дисклеймер в хранилище не нужен — вырезаем из JSON
                 # result_json — нативный JSONB: psycopg принимает dict как есть
                 "rj": {k: v for k, v in answer.items() if k != "disclaimer"},
+                # снимок методики (или NULL — импорт вслепую, например manual-paste)
+                "ms": dict(methodology) if methodology else None,
                 "ca": _utcnow(),
             },
         )

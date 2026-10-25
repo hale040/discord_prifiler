@@ -567,26 +567,23 @@ class Repository:
         guild_id: int | None = None,
         msg_author_id: int | None = None,
     ) -> bool:
-        """Сохранить событие реакции (add/remove). Идемпотентно по паре
-        (message_id, user_id, emoji): повторный add после remove обновляет
-        строку (action/occurred_at), а не дублирует ленту. Возвращает True,
-        если событие записано/обновлено."""
+        """Сохранить событие реакции (add/remove). Идемпотентно по тройке
+        (message_id, user_id, emoji, action): повторное одинаковое событие
+        игнорируется, add после remove — новая строка истории (миграция
+        a00000000005 расширила UNIQUE-ключ полем action). Возвращает True,
+        если событие записано."""
         now = datetime.now(timezone.utc)
         with self._sf() as s:
-            row = s.scalars(
-                select(ReactionEvent).where(
+            exists = s.scalars(
+                select(ReactionEvent.id).where(
                     ReactionEvent.message_id == message_id,
                     ReactionEvent.user_id == user_id,
                     ReactionEvent.emoji == emoji,
-                )
+                    ReactionEvent.action == action,
+                ).limit(1)
             ).first()
-            if row is not None:
-                if row.action == action:
-                    return False
-                row.action = action
-                row.occurred_at = now
-                s.commit()
-                return True
+            if exists is not None:
+                return False
             s.add(
                 ReactionEvent(
                     message_id=message_id,

@@ -8,6 +8,9 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from datetime import datetime, timezone
+
+from sqlalchemy.exc import SQLAlchemyError
+
 from .env import _env_int
 from .db import build_names, fetch_all_messages_flat, fetch_attachments, fetch_games, fetch_presence_snapshots, fetch_reaction_events, fetch_messages, fetch_profile_history, fetch_psych_profiles, fetch_role_defs, fetch_users, open_db
 from .dialog import CONTEXT_WINDOW_SEC, build_dialog, rebuild_links

@@ -443,6 +443,8 @@ class PsychProfile(Base):
     confidence_overall: Mapped[float | None] = mapped_column(Float, nullable=True)
     severity_max: Mapped[str | None] = mapped_column(String(8))  # high|med|low
     result_json: Mapped[str | None] = mapped_column(JSONB)        # полный ответ LLM
+    # снимок методики анализа: prompt_sha256/prompt_bytes/behavior_block/window_days
+    methodology_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

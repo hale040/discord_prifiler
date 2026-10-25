@@ -69,12 +69,18 @@ def extract_json(text: str) -> str:
 _extract_json = extract_json
 
 
-def chat(prompt: str, *, temperature: float = 0.3, max_tokens: int = 4096,
+def chat(prompt: str, *, temperature: float = 0.3, max_tokens: int | None = None,
          timeout: float = 300.0, retries: int = 3) -> tuple[str, str]:
     """Один запрос chat/completions. Возвращает (ответ_текст, модель).
 
     Ретраи с экспоненциальным backoff на 429/5xx и сетевых сбоях.
+    Лимит генерации настраивается через LLM_MAX_TOKENS (по умолчанию 4096).
     """
+    if max_tokens is None:
+        try:
+            max_tokens = int(os.getenv("LLM_MAX_TOKENS") or 4096)
+        except ValueError:
+            max_tokens = 4096
     cfg = get_settings()
     if not cfg["api_key"]:
         raise LlmError(
@@ -112,6 +118,13 @@ def chat(prompt: str, *, temperature: float = 0.3, max_tokens: int = 4096,
                     text = str(msg["reasoning"])
                 if not text.strip():
                     raise LlmError(f"Пустой ответ модели {data.get('model', cfg['model'])}.")
+                # P1-fix: явный сигнал обрезки ответа по лимиту токенов —
+                # иначе битый JSON молча уходит в parse_llm_answer
+                if choice.get("finish_reason") == "length":
+                    raise LlmError(
+                        f"Ответ модели обрезан по max_tokens={max_tokens} "
+                        "(finish_reason=length): профиль не сохранён, "
+                        "уменьшите размер дела или увелижьте LLM_MAX_TOKENS.")
                 return text, str(data.get("model") or cfg["model"])
         except (httpx.TimeoutException, httpx.TransportError) as e:
             last_err = e

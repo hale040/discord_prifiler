@@ -1157,10 +1157,26 @@ def create_app(database_url: str) -> Flask:
                 flash(f"Операция «{kind}» запрещена в редакторе.", "error")
                 audit("sql_denied", details=sql, result=f"blocked:{kind}")
             elif kind == "INSERT":
-                with engine.begin() as conn:
-                    conn.execute(text(sql))
-                audit("sql_insert", details=sql, result="ok")
-                flash("INSERT выполнен.", "ok")
+                # INSERT выполняется только после подтверждения (как UPDATE/DELETE):
+                # защита от случайной вставки дубликатов/мусора.
+                token = request.form.get("confirm_token")
+                stored = session.get("pending_sql")
+                if token and stored and secrets.compare_digest(str(token), str(stored[1])) \
+                        and stored[0] == sql:
+                    with engine.begin() as conn:
+                        cur = conn.execute(text(sql))
+                        n = cur.rowcount
+                    session.pop("pending_sql", None)
+                    audit("sql_insert", details=sql, result=f"rows={n}")
+                    flash(f"INSERT выполнен, добавлено строк: {n}.", "ok")
+                else:
+                    n_rows, err = _insert_preview(sql)
+                    if err:
+                        preview = {"sql": sql, "n": -1, "token": "", "error": err}
+                    else:
+                        tok = secrets.token_hex(16)
+                        session["pending_sql"] = (sql, tok)
+                        preview = {"sql": sql, "n": int(n_rows or 0), "token": tok, "error": None}
             elif kind in WRITE_KINDS:
                 token = request.form.get("confirm_token")
                 stored = session.get("pending_sql")
@@ -1208,6 +1224,47 @@ def create_app(database_url: str) -> Flask:
         m = re.match(r"(?is)^UPDATE\s+(\S+)\s+SET\s+.+?(\s+WHERE\s+.*)?$", sql)
         where = m.group(2) or ""
         return f"* FROM {m.group(1)}{where}"
+
+    def _insert_preview(sql: str) -> tuple[int | None, str]:
+        """Оценка последствий INSERT до подтверждения: (число вставляемых рядов, ошибка)."""
+        m = re.match(
+            r"(?is)^INSERT\s+(?:OVERWRITE\s+)?INTO\s+\S+\s*(.*)$", sql.strip())
+        if not m:
+            return None, "Не удалось разобрать INSERT для предпросмотра."
+        body = m.group(1).strip()
+        # отбрасываем список колонок перед VALUES/SELECT
+        mm = re.match(r"(?is)^\((?:[^()]|\([^()]*\))*\)\s*", body)
+        rest = body[mm.end():] if mm else body
+        # VALUES (...), (...) — считаем число кортежей верхнего уровня
+        vm = re.search(r"(?is)\bVALUES\b(.*)$", rest)
+        pre = re.split(r"(?is)\bVALUES\b", rest)[0].strip()
+        try:
+            with engine.connect() as conn:
+                if vm and not pre:  # чистый VALUES-форм
+                    txt = vm.group(1)
+                    depth, tuples, i = 0, 0, 0
+                    while i < len(txt):
+                        c = txt[i]
+                        if c == "'":  # пропуск строковых литералов
+                            i += 1
+                            while i < len(txt) and txt[i] != "'":
+                                i += 2 if txt[i] == "\\" else 1
+                        elif c == "(":
+                            depth += 1
+                            if depth == 1:
+                                tuples += 1
+                        elif c == ")":
+                            depth -= 1
+                        i += 1
+                    return max(tuples, 1), ""
+                # INSERT ... SELECT — считаем через обёртку над SELECT-частью
+                sm = re.search(r"(?is)\bSELECT\b(.*)$", rest)
+                if not sm:
+                    return None, "Не распознана форма INSERT (VALUES/SELECT)."
+                n = conn.execute(text(f"SELECT COUNT(*) FROM (SELECT{sm.group(1)}) AS _t")).scalar()
+                return int(n or 0), ""
+        except Exception as e:  # показать синтаксическую ошибку до подтверждения
+            return None, str(e)
 
     # --- аудит-страница --------------------------------------------------------------
     @app.route("/audit")
