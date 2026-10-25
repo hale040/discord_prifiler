@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.entities import (
@@ -164,21 +164,33 @@ class Repository:
             return s.scalars(select(UserProfile).where(UserProfile.user_id == user_id)).first()
 
     # ------------------------------------------------------------------ games
-    def purge_custom_status_games(self, user_id: int | None = None) -> int:
-        """Удаляет из user_games записи-«мусор» от старых версий маппера:
-        кастомный статус (kind содержит 'custom' / 'ActivityType') — это не
-        игра, теперь он пишется только в profile_snapshots.status_text.
-
-        custom-запись одна на пользователя (name == user_id), поэтому
-        удаление безопасно и не трогает реальные игры. Возвращает число
-        удалённых строк."""
-        from sqlalchemy import or_
-        q = delete(UserGame).where(
-            or_(
-                UserGame.kind.is_(None),
-                UserGame.kind.ilike("%custom%"),
-                UserGame.kind.ilike("%activitytype%"),
+    def fix_legacy_game_kinds(self, user_id: int | None = None) -> int:
+        """Лечит legacy-записи user_games вместо их удаления (миграция v16):
+        старые версии маппера писали kind='ActivityType.custom_status' и т.п.,
+        а более поздний purge удалял все строки с kind IS NULL — вместе с
+        реальными играми, у которых тип активности не распознал protocol
+        (например, type=6 «Competing»). Теперь:
+          * kind со префиксом 'activitytype.' нормализуем к lower;
+          * NULL/пустой kind восстанавливаем как 'playing' (самый частый
+            случай: Discord отдаёт activity без enum-значения);
+        Возвращает число исправленных строк."""
+        from sqlalchemy import case, or_
+        default_kind = case(
+            (UserGame.name.ilike("streaming%"), "streaming"),
+            (UserGame.name.ilike("listening%"), "listening"),
+            (UserGame.name.ilike("watching%"), "watching"),
+            else_="playing",
+        )
+        q = (
+            update(UserGame)
+            .where(
+                or_(
+                    UserGame.kind.is_(None),
+                    UserGame.kind == "",
+                    UserGame.kind.ilike("activitytype.%"),
+                )
             )
+            .values(kind=default_kind)
         )
         if user_id is not None:
             q = q.where(UserGame.user_id == user_id)

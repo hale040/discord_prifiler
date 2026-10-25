@@ -376,15 +376,18 @@ def extract_user_ids(msg: discord.Message) -> set[int]:
 # ---------------------------------------------------------------------------
 _ACTIVITY_KINDS = {
     0: "playing", 1: "streaming", 2: "listening", 3: "watching", 4: "custom",
-    5: "competing",
+    5: "dnd", 6: "competing",
 }
 
 
-def activity_kind_str(a: Any) -> str:
+def activity_kind_str(a: Any) -> str | None:
     """Нормализует тип активности в человекочитаемую строку.
 
     discord.py-self отдаёт enum ActivityType, у которого str() возвращает
     'ActivityType.custom_status', а int() — числовой код protocol'а.
+    Неизвестные/не распознанные типы (в т.ч. type=6 competing без enum,
+    отсутствующий type) возвращаем как 'playing' — раньше отсюда уходил
+    None, и purge удалял такие строки вместе с реальными играми.
     """
     t = getattr(a, "type", None)
     num = _safe(lambda: int(t))
@@ -393,7 +396,14 @@ def activity_kind_str(a: Any) -> str:
     raw = str(_safe(lambda: str(t)) or "").lower()
     if "custom" in raw:
         return "custom"
-    return raw.replace("activitytype.", "")[:32] or None  # type: ignore[return-value]
+    cleaned = raw.replace("activitytype.", "")[:32]
+    if cleaned and cleaned != "none":
+        return cleaned
+    name_hint = str(_safe(lambda: str(getattr(a, "name", "")) or "").lower())
+    for hint in ("streaming", "listening", "watching", "competing"):
+        if hint in name_hint:
+            return hint
+    return "playing"
 
 
 def games_from_activities(obj: Any) -> list[dict[str, Any]]:

@@ -48,8 +48,10 @@ def upgrade() -> None:
 
     # 2. дедуп событий реакций: ключ (message_id, user_id, emoji, action)
     if insp.has_table("reaction_events"):
-        op.drop_constraint(
-            "uq_reaction_event_dedup", "reaction_events", type_="unique")
+        cons = {c["name"] for c in insp.get_unique_constraints("reaction_events")}
+        if "uq_reaction_event_dedup" in cons:
+            op.drop_constraint(
+                "uq_reaction_event_dedup", "reaction_events", type_="unique")
         # чистим повторы под новый ключ (оставляем самое раннее событие)
         op.execute(
             """DELETE FROM reaction_events a
@@ -70,8 +72,10 @@ def downgrade() -> None:
     insp = sa.inspect(conn.engine)
 
     if insp.has_table("reaction_events"):
-        op.drop_constraint(
-            "uq_reaction_event_dedup", "reaction_events", type_="unique")
+        cons = {c["name"] for c in insp.get_unique_constraints("reaction_events")}
+        if "uq_reaction_event_dedup" in cons:
+            op.drop_constraint(
+                "uq_reaction_event_dedup", "reaction_events", type_="unique")
         op.execute(
             """DELETE FROM reaction_events a
                USING reaction_events b

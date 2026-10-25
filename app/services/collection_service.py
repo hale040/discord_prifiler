@@ -911,12 +911,15 @@ class CollectionService:
             self.repo.upsert_user_profile(user_id, fields or {}, guild_fields, roles,
                                           snapshot=snapshot,
                                           role_defs=rdefs or None)
-            # самоочистка legacy-мусора: старые версии маппера писали кастомный
-            # статус в user_games (kind='ActivityType.custom_status', name=user_id)
-            purged = self.repo.purge_custom_status_games(user_id)
-            if purged:
-                log.info("GAMES user %s: убрано %s legacy-записей кастомного статуса",
-                         user_id, purged)
+            # самолечение legacy-записей: старые версии маппера писали в
+            # user_games kind='ActivityType.*' вместо lower('custom_status').
+            # ВАЖНО: раньше здесь был purge с удалением kind IS NULL — он
+            # стирал реальные игры (Discord не всегда отдаёт распознанный
+            # enum типа активности). Теперь только нормализация kind.
+            fixed = await asyncio.to_thread(self.repo.fix_legacy_game_kinds, user_id)
+            if fixed:
+                log.info("GAMES user %s: исправлено %s legacy-записей kind",
+                         user_id, fixed)
             if games:
                 added = self.repo.replace_user_games(user_id, games)
                 if added:
