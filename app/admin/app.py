@@ -898,6 +898,10 @@ def create_app(database_url: str) -> Flask:
         return render("record", page="browse", table=table, pk=pk,
                       fields=form_fields, related=related,
                       values=values, uid=uid_val,
+                      # превью покрытия данными для кнопки 🧠 (Data Quality Gate)
+                      gate=(json.dumps(_psych_gate_pre(uid_val),
+                                       ensure_ascii=False)
+                            if table == "user_profiles" and uid_val else None),
                       # человекочитаемый заголовок карточки вместо «user_profiles · запись 12»
                       rec_title=_rec_title(table, row),
                       is_psych_profiles=(table == "psych_profiles"))
@@ -1270,6 +1274,75 @@ def create_app(database_url: str) -> Flask:
                       messages=form.get("messages"), answer=form.get("answer"))
 
     # --- автообновление психопрофиля через LLM API ----------------------------
+    # Data Quality Gate: минимальные пороги данных для генерации профиля.
+    # Ниже — не генерируем вовсе; между gate и warn — предупреждаем, но пускаем.
+    PSYCH_GATE_MIN_MSGS = int(os.getenv("PSYCH_GATE_MIN_MSGS", "30"))
+    PSYCH_GATE_MIN_DAYS = float(os.getenv("PSYCH_GATE_MIN_DAYS", "4"))
+    PSYCH_WARN_MIN_MSGS = int(os.getenv("PSYCH_WARN_MIN_MSGS", "50"))
+    PSYCH_WARN_MIN_DAYS = float(os.getenv("PSYCH_WARN_MIN_DAYS", "14"))
+
+    def _msg_coverage(user_id) -> dict:
+        """Дешёвая сводка покрытия данными (для превью в карточке)."""
+        out = {"msgs": 0, "days": None, "dm": 0}
+        if "messages" not in tables():
+            return out
+        try:
+            mt = Table("messages", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                r = conn.execute(sa_select(
+                    func.count(),
+                    func.coalesce(
+                        func.extract("epoch",
+                                     func.max(mt.columns.timestamp)
+                                     - func.min(mt.columns.timestamp)), 0),
+                ).where(mt.columns.user_id == user_id)).one()
+                out["msgs"] = int(r[0] or 0)
+                out["days"] = round(float(r[1] or 0) / 86400, 2) or None
+                if "dm_fetch" in [c["name"] for c in inspect(engine).get_columns("user_profiles")]:
+                    upt = Table("user_profiles", MetaData(), autoload_with=engine)
+                    out["dm"] = int(conn.execute(sa_select(upt.columns.dm_messages_total).where(
+                        upt.columns.user_id == user_id)).scalar() or 0)
+        except Exception:  # noqa: BLE001 — превью не должно ронять страницу
+            pass
+        return out
+
+    def _psych_gate(msgs: int, days, dm: int) -> dict:
+        """Вердикт гейта по числам покрытия. days может быть None/0 (1 сообщение)."""
+        reasons = []
+        if msgs < PSYCH_GATE_MIN_MSGS:
+            reasons.append(f"сообщений {msgs} < минимума {PSYCH_GATE_MIN_MSGS}")
+        if days is None or days < PSYCH_GATE_MIN_DAYS:
+            reasons.append(f"окно наблюдения "
+                           f"{days if days is not None else 0:.1f} дн. "
+                           f"< минимума {PSYCH_GATE_MIN_DAYS:g} дн.")
+        blocked = bool(reasons)
+        warnings = []
+        if not blocked:
+            if msgs < PSYCH_WARN_MIN_MSGS:
+                warnings.append(f"мало сообщений ({msgs} < {PSYCH_WARN_MIN_MSGS}) "
+                                f"— вывод будет низкой надёжности")
+            if days is not None and days < PSYCH_WARN_MIN_DAYS:
+                warnings.append(f"короткое окно наблюдения ({days:.1f} < "
+                                f"{PSYCH_WARN_MIN_DAYS:g} дн.) — выводы могут "
+                                f"не отражать устойчивые черты")
+            if dm == 0:
+                warnings.append("нет ЛС-контекста — видна только «публичная маска»")
+        return {"blocked": blocked, "reasons": reasons, "warnings": warnings,
+                "gate_msgs": PSYCH_GATE_MIN_MSGS, "gate_days": PSYCH_GATE_MIN_DAYS,
+                "warn_msgs": PSYCH_WARN_MIN_MSGS, "warn_days": PSYCH_WARN_MIN_DAYS,
+                "msgs": msgs, "days": days, "dm": dm}
+
+    @app.route("/psych/gate/<int:user_id>")
+    def psych_gate(user_id: int):
+        """JSON-превью покрытия данными для кнопки 🧠 (без сборки промпта)."""
+        cov = _msg_coverage(user_id)
+        return jsonify(_psych_gate(cov["msgs"], cov["days"], cov["dm"]))
+
+    def _psych_gate_pre(user_id) -> dict:
+        """Вердикт гейта по дешёвой сводке (для превью в карточке)."""
+        cov = _msg_coverage(user_id)
+        return _psych_gate(cov["msgs"], cov["days"], cov["dm"])
+
     @app.route("/psych/refresh/<int:user_id>", methods=["POST"])
     def psych_refresh(user_id: int):
         """Кнопка «Обновить психо профиль»: БД -> промпт -> бесплатный LLM API -> запись.
@@ -1296,6 +1369,22 @@ def create_app(database_url: str) -> Flask:
 
             info = build_prompt_for_user(
                 app.config["DATABASE_URL"], user_id)
+
+            # Data Quality Gate: блокируем генерацию на тощих данных ДО запроса
+            # к LLM (сообщения/дни — из собранного дела, точные числа).
+            gate = _psych_gate(info.get("messages_total") or 0,
+                               info.get("span_days"),
+                               info.get("dm_messages_total") or 0)
+            if gate["blocked"]:
+                audit("psych_refresh", target=f"user={user_id}",
+                      result="blocked_by_gate")
+                flash("Данных недостаточно для психо профиля: "
+                      + "; ".join(gate["reasons"])
+                      + f". Пороги: ≥{gate['gate_msgs']} сообщений и окно "
+                        f"≥{gate['gate_days']:g} дн. Продолжайте сбор — "
+                        f"циклы подтянут историю.", "error")
+                return redirect(url_for("browse", table="user_profiles",
+                                        col="user_id", val=str(user_id)))
             answer, model_used, ph = llm_client.analyze_prompt(info["prompt"])
 
             from app.services.analysis_importer import import_analysis
@@ -1314,6 +1403,10 @@ def create_app(database_url: str) -> Flask:
             flash(f"Психо профиль обновлён: запись #{pid} "
                   f"(модель {model_used}, сообщений {info['messages_total']}).",
                   "ok")
+            # предупреждения гейта (между gate и warn-порогами) — после успеха
+            if gate.get("warnings"):
+                for w in gate["warnings"]:
+                    flash(f"⚠ Низкая надёжность профиля: {w}", "warn")
             return redirect(url_for("profile_view", pid=pid))
         except Exception as e:  # noqa: BLE001
             audit("psych_refresh", target=f"user={user_id}", result=f"error: {e}")

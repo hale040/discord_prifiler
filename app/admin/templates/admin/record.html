@@ -13,12 +13,54 @@
                    'ok': '✅ синхронизировано', 'error': '⚠ ошибка'}.get(dm_st, '⏳ ожидание первого прохода') %}
   {% set dm_cls = 'pill ok' if dm_st == 'ok' else ('pill warn' if dm_st in ('error', 'running', 'pending') else 'pill') %}
   <div style='display:flex;gap:.5rem;flex-wrap:wrap;align-items:center'>
-    <form method='post' action='/psych/refresh/{{ uid }}' style='display:inline'
-          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return confirm('Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.');">
+    <form method='post' action='/psych/refresh/{{ uid }}' style='display:inline' id='psych-form'
+          onsubmit="if(!psychConfirm())return false;this.querySelector('button').disabled=true;this.querySelector('button').textContent='⏳ анализ…';return true;">
       <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>
-      <button class='btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
+      <button class='btn' id='psych-btn' title='собрать дело из БД -> LLM API -> новая версия психопрофиля'
       >🧠 {{ 'Обновить психо профиль' if ps else 'Построить психо профиль' }}</button>
+      <span class='pill' id='gate-pill' style='display:none;margin-left:.4rem'></span>
     </form>
+    {% if gate %}
+    {# Data Quality Gate: превью покрытия данными. Пороги блокировки: >=30 сообщ. и окно >=4 дн.;
+       предупреждения: <50 сообщ., окно <14 дн., нет ЛС. Точная проверка — на сервере при POST. #}
+    <script>
+    (function(){
+      var g = {{ gate | safe }};
+      var pill = document.getElementById('gate-pill');
+      var btn  = document.getElementById('psych-btn');
+      function label(){
+        return (g.msgs||0) + ' сообщ. · ' + (g.days==null ? '0' : g.days.toFixed(1)) + ' дн.'
+             + ' · ЛС ' + (g.dm||0);
+      }
+      if (g.blocked){
+        pill.style.display='inline-block'; pill.className='pill warn';
+        pill.textContent='⛔ мало данных: ' + label();
+        btn.title='Генерация заблокирована: ' + g.reasons.join('; ');
+      } else if (g.warnings.length){
+        pill.style.display='inline-block'; pill.className='pill warn';
+        pill.textContent='⚠ ' + label();
+        btn.title='Низкая надёжность: ' + g.warnings.join('; ');
+      } else {
+        pill.style.display='inline-block'; pill.className='pill ok';
+        pill.textContent='✓ ' + label();
+      }
+      window.psychConfirm = function(){
+        var base='Собрать дело пользователя, отправить его в бесплатный LLM API (OpenRouter) и сохранить новый психопрофиль? Старая версия станет архивной. Это может занять до нескольких минут.';
+        if (g.blocked){
+          alert('Данных недостаточно для психо профиля:\n— ' + g.reasons.join('\n— ')
+                + '\n\nМинимальные пороги: ≥' + g.gate_msgs + ' сообщений и окно наблюдения ≥'
+                + g.gate_days + ' дн. Продолжайте сбор — цикл подтянет историю.');
+          return false;
+        }
+        if (g.warnings.length){
+          return confirm(base + '\n\n⚠ Низкая надёжность результата:\n— '
+                         + g.warnings.join('\n— ') + '\n\nВсё равно продолжить?');
+        }
+        return confirm(base);
+      };
+    })();
+    </script>
+    {% endif %}
     <a class='btn gray' style='text-decoration:none'
        title='вставить ответ нейросети вручную с проверкой структуры JSON'
        href="/psych/manual/{{ uid }}">📋 Вставить ответ модели</a>
