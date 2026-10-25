@@ -1478,7 +1478,8 @@ def create_app(database_url: str) -> Flask:
                                     col="user_id", val=str(user_id)))
 
     # --- ручная вставка ответа модели ---------------------------------------- #
-    PSCH_SAMPLE = ('{"big_five":{"openness":0,"conscientiousness":0,'
+    PSCH_SAMPLE = ('{"summary":"",'
+        '"big_five":{"openness":0,"conscientiousness":0,'
         '"extraversion":0,"agreeableness":0,"neuroticism":0},'
         '"mbti":{"type":"","alt":[],"confidence":0.0,"reasoning":""},'
         '"enneagram":{"type":"","alt":[],"confidence":0.0,"reasoning":""},'

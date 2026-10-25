@@ -15,6 +15,10 @@
       сообщений: {{ p.messages_analyzed if p.messages_analyzed is not none else '?' }} ·
       версия: {{ 'актуальная' if p.is_current else 'архивная' }} · создано {{ p.created_at }}
     </div>
+    <div class='card'><h4>Итоговое резюме</h4>
+      {% if res.get('summary') %}<p style='white-space:pre-wrap'>{{ res.summary }}</p>
+      {% else %}<p class='muted'>резюме отсутствует — профиль создан до добавления
+ блока «summary». Нажмите «🧠 Обновить психо профиль» для пересчёта.</p>{% endif %}</div>
     <div class='card'><h4>Big Five</h4>
       <table><thead><tr><th>открытость</th><th>добросовестность</th><th>экстраверсия</th><th>доброжелательность</th><th>нейротизм</th></tr></thead><tbody>
       <tr><td>{{ bf.openness }}</td><td>{{ bf.conscientiousness }}</td><td>{{ bf.extraversion }}</td>

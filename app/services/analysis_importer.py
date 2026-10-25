@@ -172,6 +172,15 @@ def validate_answer(data: dict) -> tuple[list[str], list[str]]:
             warns.append(f"evidence: {len(ev)} элементов — в базу попадут "
                          f"только первые {MAX_SIGNALS} (дедуп по цитате)")
 
+    # --- summary (итоговое резюме портрета) --------------------------------------
+    s = data.get("summary")
+    if s is None:
+        warns.append("summary: отсутствует — модель не вернула итоговое резюме "
+                     "(профиль импортируется, но карточка будет без портрета; "
+                     "пересоберите профиль кнопкой «🧠 Обновить психо профиль»)")
+    elif not isinstance(s, str) or not s.strip():
+        errs.append("summary: ожидается непустая строка с текстом резюме")
+
     # --- confidence_overall ---------------------------------------------------------
     _num(data, "confidence_overall", "confidence_overall", required=False)
 

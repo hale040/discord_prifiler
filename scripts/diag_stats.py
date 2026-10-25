@@ -259,6 +259,10 @@ def main():
                 no_meth = scalar(cur, "SELECT count(*) FROM psych_profiles WHERE is_current IS true"
                                       " AND methodology_snapshot IS NULL")
                 emit(f"current_without_methodology={no_meth}")  # >0 => профили до фикса P0 или битый путь записи
+            # summary (итоговое резюме) лежит в result_json — считаем по JSONB-ключу
+            no_sum = scalar(cur, "SELECT count(*) FROM psych_profiles WHERE is_current IS true"
+                                 " AND (result_json->>'summary' IS NULL OR result_json->>'summary'='')")
+            emit(f"current_without_summary={no_sum}")  # >0 => профили до добавления блока summary; пересчитать кнопкой
             if "messages_analyzed" in have:
                 thin = scalar(cur, "SELECT count(*) FROM psych_profiles WHERE is_current IS true"
                                       " AND messages_analyzed < 50")
