@@ -48,15 +48,18 @@ def emit(s=""):
     print(s)
 
 def q(cur, sql, params=None):
+    """Выполняет запрос; при ошибке откатывает подтранзакцию (SAVEPOINT),
+    чтобы последующие запросы не падали с 'current transaction is aborted'."""
     try:
-        cur.execute(sql, params or ())
-        return cur.fetchall()
+        with cur.transaction():   # psycopg3: implicit savepoint per block
+            cur.execute(sql, params or ())
+            return cur.fetchall()
     except Exception as e:
         return [("ERR", str(e)[:120])]
 
 def table_exists(cur, name):
-    return bool(q(cur, "SELECT 1 FROM information_schema.tables WHERE table_name=%s", (name,))
-                ) and q(cur, "SELECT 1 FROM information_schema.tables WHERE table_name=%s", (name,))[0][0] == 1
+    r = q(cur, "SELECT 1 FROM information_schema.tables WHERE table_name=%s", (name,))
+    return len(r) == 1 and r[0][0] == 1
 
 def main():
     with psycopg.connect(db) as conn, conn.cursor() as cur:
@@ -94,7 +97,7 @@ def main():
             gaps = q(cur,
                 "SELECT count(*) FROM ("
                 " SELECT author_id, ts_lag FROM ("
-                "  SELECT author_id, timestamp - lag(timestamp) OVER (PARTITION BY author_id ORDER BY timestamp) ts_lag"
+                "  SELECT author_id, \"timestamp\" - lag(\"timestamp\") OVER (PARTITION BY author_id ORDER BY \"timestamp\") ts_lag"
                 "  FROM messages) x WHERE ts_lag > interval '30 days') y")[0][0]
             emit(f"gaps_gt_30d_per_author={gaps}")
 

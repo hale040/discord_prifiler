@@ -120,7 +120,10 @@ def _stamp_legacy_base(engine) -> None:
     ver, has_data = _legacy_migration_state(engine)
     if ver == 0 and not has_data:
         return  # чистый лист — пусть upgrade() создаст всё с нуля
-    target = ALEMBIC_HEAD if ver >= 15 else "a00000000001"
+    # Стемпим ровно на применённый уровень (не выше!): база с schema_version<10
+    # физически не содержит таблиц v10, и «щедрый» стемп скрывал это до первого
+    # обращения. Дальше штатный alembic upgrade доведёт недостающие ревизии.
+    target = ALEMBIC_HEAD if ver >= 15 else ("a00000000002" if ver >= 10 else "a00000000001")
     command.stamp(_alembic_config(), revision=target)
     # Физическая сверка после стемпа: «живая» база может быть неполной
     # (например, упавший прогон миграций оставил schema_version=15 без
@@ -139,6 +142,21 @@ def _stamp_legacy_base(engine) -> None:
                 target, ", ".join(missing),
             )
             _apply_dm_ddl(engine, missing)
+    # Физическая сверка таблиц динамических сигналов v10: база могла получить
+    # schema_version>=10 без самих таблиц (упавший прогон). Стемп «на веру»
+    # запрещён — доливаем идемпотентным DDL из исторической функции v10.
+    if _table_exists(engine, "user_profiles"):
+        from app.models.migrations import _v10_dynamic_signals
+
+        want = {"message_revisions", "reaction_events",
+                "presence_snapshots", "interaction_aggregates"}
+        absent = sorted(want - {t for t in want if _table_exists(engine, t)})
+        if absent:
+            log.warning(
+                "Alembic: отсутствуют таблицы v10 (%s) — доливаю идемпотентным DDL.",
+                ", ".join(absent),
+            )
+            _v10_dynamic_signals(engine)
     log.info(
         "Alembic: живая база (self-made v%s, данные=%s) стемплена в %s; "
         "исторические шаги v1..v15 повторно не применяются.",
