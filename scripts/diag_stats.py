@@ -79,11 +79,21 @@ def q(cur, sql, params=None):
     """Выполняет запрос; при ошибке откатывает подтранзакцию (SAVEPOINT),
     регистрирует ошибку в ERRORS и возвращает None вместо «тихого» результата."""
     try:
-        with cur.transaction():   # psycopg3: implicit savepoint per block
-            cur.execute(sql, params or ())
-            return cur.fetchall()
+        # НЕ используем `cur.transaction()` — это API только psycopg3-курсора.
+        # На psycopg2/SQLAlchemy-обёртке каждый запрос падал с
+        # AttributeError 'Cursor' object has no attribute 'transaction'.
+        cur.execute(sql, params if params is not None else ())
+        return cur.fetchall()
     except Exception as e:
         _record_error(CURRENT_SECTION[0], e, sql, params)
+        # Сбрасываем aborted-транзакцию (есть у обоих драйверов), иначе все
+        # последующие запросы упадут лавиной «current transaction is aborted».
+        try:
+            cn = getattr(cur, "connection", None)
+            if cn is not None and hasattr(cn, "rollback"):
+                cn.rollback()
+        except Exception:
+            pass
         return None
 
 def rows(cur, sql, params=None, default=None):
@@ -109,7 +119,11 @@ def main():
     except Exception as e:
         _record_error("connect", e)
         sys.exit(1)
-    with conn_ctx as conn, conn.cursor() as cur:
+    # НЕ оборачиваем коннект в `with`: контекст-протокол Connection есть
+    # только у psycopg3; на других драйверах — TypeError. Закрываем явно.
+    conn = conn_ctx
+    try:
+        cur = conn.cursor()
         ver = scalar(cur, "SHOW server_version", default="?")
         emit(f"# DIAG discord_prifiler {datetime.now(timezone.utc).isoformat(timespec='seconds')} pg={ver}")
 
@@ -228,26 +242,31 @@ def main():
             emit("physical_columns=OK")
 
     # --- 9. ошибки выполнения (главное нововведение) ---
-    if ERRORS:
-        emit(f"\n## ERRORS count={len(ERRORS)}")
-        for i, e in enumerate(ERRORS, 1):
-            emit(f"[{i}] section={e['section']} {e['type']}: {e['msg']}")
-            if e["sql"]:
-                emit(f"     sql={e['sql']}")
-            if e["params"] and e["params"] != "None":
-                emit(f"     params={e['params']}")
-    else:
-        emit("\n## ERRORS count=0")
+        if ERRORS:
+            emit(f"\n## ERRORS count={len(ERRORS)}")
+            for i, e in enumerate(ERRORS, 1):
+                emit(f"[{i}] section={e['section']} {e['type']}: {e['msg']}")
+                if e["sql"]:
+                    emit(f"     sql={e['sql']}")
+                if e["params"] and e["params"] != "None":
+                    emit(f"     params={e['params']}")
+        else:
+            emit("\n## ERRORS count=0")
 
-    emit(f"\n# END lines={len(out_lines)} errors={len(ERRORS)}")
+        emit(f"\n# END lines={len(out_lines)} errors={len(ERRORS)}")
 
-    # Ошибки — также на stderr, и ненулевой exit code, чтобы `diag.sh && ...`
-    # или CI не приняли частично проваленный прогон за успешный.
-    if ERRORS:
-        print(f"\ndiag_stats.py: во время выполнения возникло ошибок: {len(ERRORS)}", file=sys.stderr)
-        for i, e in enumerate(ERRORS, 1):
-            print(f"  [{i}] {e['section']}: {e['type']}: {e['msg']}", file=sys.stderr)
-        sys.exit(1)
+        # Ошибки — также на stderr, и ненулевой exit code, чтобы `diag.sh && ...`
+        # или CI не приняли частично проваленный прогон за успешный.
+        if ERRORS:
+            print(f"\ndiag_stats.py: во время выполнения возникло ошибок: {len(ERRORS)}", file=sys.stderr)
+            for i, e in enumerate(ERRORS, 1):
+                print(f"  [{i}] {e['section']}: {e['type']}: {e['msg']}", file=sys.stderr)
+            sys.exit(1)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def column_exists(cur, table, col):
     r = q(cur,
