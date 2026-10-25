@@ -15,10 +15,10 @@
            background:var(--bg);color:var(--ink);font-size:15px;line-height:1.45}
 
       /* --- шапка: бренд + группы навигации + утилиты --- */
-      /* sticky отключён: в связке с table-layout:fixed и обрезкой ячеек он
-         «наезжал» на таблицы при прокрутке; плюс ломался из-за overflow у body */
+      /* sticky безопасен: z-index только у topbar, ng-menu рендерится внутри
+        header'а — слои не конфликтуют (в v18 без sticky меню перекрывало шапку) */
       .topbar{background:var(--panel);border-bottom:1px solid var(--line);
-              position:static;z-index:10}
+              position:sticky;top:0;z-index:50}
       .topbar-in{max-width:1280px;margin:0 auto;padding:.55rem 1rem;
                 display:flex;align-items:center;gap:.9rem;flex-wrap:wrap}
       .brand{display:flex;align-items:center;gap:.45rem;font-weight:700;
@@ -30,10 +30,11 @@
         text-decoration:none;user-select:none;white-space:nowrap}
       .navgroup > summary:hover,.navgroup.open > .ng-title{background:#eef0fb;color:var(--ink)}
       .navgroup.active > .ng-title{background:#eef0fb;color:var(--accent);font-weight:600}
-      .ng-menu{display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:20;
+      .ng-menu{display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:60;
         background:var(--panel);border:1px solid var(--line);border-radius:10px;
         box-shadow:var(--shadow);padding:.35rem;min-width:210px}
-      .navgroup:hover .ng-menu,.navgroup:focus-within .ng-menu{display:block}
+      /* hover-меню на тач-устройствах недоступно — раскрытие по тапу (JS ниже) */
+      .navgroup.open > .ng-menu{display:block}
       .ng-menu a{display:block;padding:.4rem .6rem;border-radius:7px;color:var(--ink);
         text-decoration:none;font-size:.88rem;white-space:nowrap}
       .ng-menu a:hover{background:#f2f4fd}
@@ -61,7 +62,7 @@
       table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;
             font-size:.85rem;background:transparent}
       th,td{border-bottom:1px solid var(--line);padding:.5rem .65rem;vertical-align:top;
-            overflow:hidden;word-break:normal;overflow-wrap:anywhere;text-align:left}
+            word-break:normal;overflow-wrap:anywhere;text-align:left}
       tr:last-child td{border-bottom:0}
       tbody tr:hover{background:#fafbff}
       thead th{background:#f2f4fa;color:var(--muted);font-weight:600;font-size:.78rem;
@@ -70,18 +71,18 @@
       td a{color:var(--accent);text-decoration:none}
       td a:hover{text-decoration:underline}
       /* Ширины колонок задаёт <colgroup> из browse (серверный список widths):
-         id/статусы узкие, текстовые колонки забирают остаток. Колонка с class
-         'wide' — единственная «резиновая»: фиксирует ширину через min-width,
-         остальное пространство делится между узкими col автоматически. */
+         id/статусы узкие, текстовые колонки забирают остаток. 'wide' —
+         резиновые колонки с гарантированным минимумом. */
       col.wide{min-width:180px}
-      /* Подрезка ячеек: 2 строки для текста, 3 для JSON — длинный raw-JSON или
-         about не растягивают высоту строки; полный текст виден по title. */
+      /* Подрезка ячеек: 2 строки для текста, 3 для JSON — длинный raw_json или
+         about не растягивают высоту строки; полный текст виден по title.
+         display:-webkit-box совместим со всеми Chromium/WebKit/Firefox(≥68). */
       td.clamp{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
-               line-height:1.35}
-      td.json{white-space:pre-wrap;word-break:break-all;
-              font-family:ui-monospace,monospace;font-size:.78rem;
+               line-height:1.35;max-height:calc(1.35em * 2 + .9rem);overflow:hidden}
+      td.json{font-family:ui-monospace,monospace;font-size:.78rem;
               display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;
-              line-height:1.3}
+              line-height:1.3;max-height:calc(1.3em * 3 + .9rem);overflow:hidden;
+              white-space:pre-line}
 
       /* --- кнопки: три размера, последовательные состояния --- */
       .btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:8px;
@@ -170,4 +171,19 @@
 {% for cat, m in msgs %}<div class="flash {{ 'err' if cat=='error' }}">{{ m }}</div>{% endfor %}
       {% endwith %}
       {{ content }}
-    </main></body></html>
+    </main>
+    <script>
+    // Раскрытие выпадающих меню навигации тапом/кликом (для тач и как дубль hover).
+    document.querySelectorAll('.navgroup > .ng-title').forEach(function (t) {
+      t.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var g = t.parentElement, was = g.classList.contains('open');
+        document.querySelectorAll('.navgroup.open').forEach(function (o) { o.classList.remove('open'); });
+        if (!was) g.classList.add('open');
+      });
+    });
+    document.addEventListener('click', function () {
+      document.querySelectorAll('.navgroup.open').forEach(function (o) { o.classList.remove('open'); });
+    });
+    </script>
+    </body></html>

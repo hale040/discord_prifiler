@@ -172,10 +172,10 @@
   {% else %}
 {% for block in related %}
 <h5><a href="{{ url_for('browse', table=block.table) }}?col=user_id&val={{ uid }}" style='color:var(--accent)'>{{ block.table }}</a> <span class='muted'>(до {{ block.rows|length }})</span></h5>
-<div class='tbl-wrap' style='margin-bottom:.8rem'><table><tr>{% for c in block.cols %}<th>{{ c }}</th>{% endfor %}</tr>
+<div class='tbl-wrap' style='margin-bottom:.8rem'><table><thead><tr>{% for c in block.cols %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>
   {% for row2 in block.rows %}<tr>
     {% for v in row2 %}<td title='{% if v != '—' %}{{ v }}{% endif %}'>{% if loop.index0 == 0 %}<a href="{{ url_for('record', table=block.table, pk=block.pks[loop.index0]) }}">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
-  </tr>{% endfor %}</table></div>
+  </tr>{% endfor %}</tbody></table></div>
 {% endfor %}
   {% endif %}
 </div>

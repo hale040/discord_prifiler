@@ -29,7 +29,7 @@
 <div class='tbl-wrap'><table><colgroup>
   {% if has_priority %}<col style='width:40px'>{% endif %}
   {% for w in widths %}<col{% if w.w %} style='width:{{ w.w }}'{% endif %}{% if w.wide %} class='wide'{% endif %}>{% endfor %}
-  <col style='width:86px'></colgroup>
+  <col style='width:96px'></colgroup>
 <thead><tr>
   {% if has_priority %}<th title='приоритетный пользователь'>★</th>{% endif %}
   {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr></thead>
@@ -65,7 +65,8 @@
   {% if is_psych_profiles %}<a class='btn gray sm' title='читаемый вид результата LLM'
      href="{{ url_for('profile_view', pid=row.pk) }}">👁</a>{% endif %}
   <a class='btn sm' href="{{ url_for('record', table=table, pk=row.pk) }}">открыть ▸</a></td>
-  </tr>{% endfor %}</tbody></table></div>
+  </tr>{% else %}<tr><td colspan='{{ (1 if has_priority else 0) + cols|length + 1 }}'
+    style='text-align:center;color:var(--muted);padding:1.2rem'>нет строк по текущему фильтру</td></tr>{% endfor %}</tbody></table></div>
 
 <p class='pager'>
   {% if cur_page > 1 %}<a class='btn gray sm' href='{{ href(cur_page-1) }}'>← назад</a>{% endif %}

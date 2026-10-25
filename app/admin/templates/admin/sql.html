@@ -15,8 +15,8 @@
     {% endif %}
     {% if result is not none %}
       <div class='card'><h4>Результат ({{ result|length }} строк)</h4>
-      {% if result %}<table><tr>{% for k in result[0].keys() %}<th>{{ k }}</th>{% endfor %}</tr>
-      {% for r in result %}<tr>{% for v in r.values() %}<td>{{ v }}</td>{% endfor %}</tr>{% endfor %}</table>
+      {% if result %}<div class='tbl-wrap'><table style='table-layout:auto'><thead><tr>{% for k in result[0].keys() %}<th>{{ k }}</th>{% endfor %}</tr></thead><tbody>
+      {% for r in result %}<tr>{% for v in r.values() %}<td>{{ v }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
       {% else %}<p class='muted'>пусто</p>{% endif %}</div>
     {% endif %}
     <form method='post' class='card'>

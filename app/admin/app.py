@@ -281,7 +281,12 @@ def create_app(database_url: str) -> Flask:
             if c in all_cols and c not in chosen:
                 chosen.append(c)
         hidden = ENV_HIDE.get(table, set())
-        return [c for c in chosen if c not in hidden]
+        chosen = [c for c in chosen if c not in hidden]
+        # unknown-таблица без VIEW_COLUMNS может дать 20+ колонок — «каша»,
+        # которую fixed-раскладка не спасает: режем до читаемых 12 (PK первый)
+        if table not in VIEW_COLUMNS and len(chosen) > 12:
+            chosen = chosen[:12]
+        return chosen
 
     # --- ссылки на пользователя и связанные записи ---------------------------
     def user_names_for(ids: set) -> dict:
