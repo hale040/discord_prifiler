@@ -747,3 +747,60 @@ main > .section:not(.section--dark) .step__num { color: #fff; }
 .adv--icon h3 { font-size: 1rem; }
 .adv__lead { max-width: 900px; margin: 2rem auto 0; text-align: center; color: #4a5560; font-size: .98rem; line-height: 1.65; }
 #advantages.section--accent .adv--icon { background: #fff; border: 1px solid #e3e7ec; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+
+/* ===== НОВЫЕ СЕКЦИИ: услуги, СРО, этапы, доставка-оплата ===== */
+/* Услуги металлообработки */
+.srv__wrap { display: grid; grid-template-columns: 1.1fr .9fr; gap: 2rem; align-items: start; margin-top: 1.4rem; }
+.srv__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6rem; }
+.srv__lead { font-family: 'Oswald', sans-serif; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--text-dark); margin-bottom: .6rem; }
+.srv__list { list-style: none; margin: 0; padding: 0; }
+.srv__list li { position: relative; padding: .5rem 0 .5rem 1.7rem; border-bottom: 1px solid #e3e7ec; font-size: .95rem; color: var(--text-dark); }
+.srv__list li::before { content: ""; position: absolute; left: 0; top: .95rem; width: 10px; height: 10px; background: var(--accent); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.srv__text { background: #fff; border: 1px solid #e3e7ec; border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.4rem 1.5rem; font-size: .95rem; color: #5b6672; line-height: 1.65; box-shadow: 0 4px 16px rgba(0,0,0,.05); }
+@media (max-width: 900px) { .srv__wrap { grid-template-columns: 1fr; } }
+
+/* Вступление в СРО */
+#sro { background: #fff; color: var(--text-dark); }
+#sro .section__title { color: var(--text-dark); }
+#sro .section__subtitle { color: #5b6672; }
+#sro .section__subtitle b { color: var(--accent-dark); }
+.sro__grid { display: grid; grid-template-columns: 320px 1fr; gap: 2rem; margin-top: 1.6rem; align-items: start; }
+.sro__card { background: #f2f4f7; border: 1px solid #e3e7ec; border-radius: var(--radius); padding: 1.5rem; }
+.sro__card h3 { font-size: 1.05rem; margin-bottom: .8rem; color: var(--text-dark); }
+.sro__list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: .4rem .8rem; }
+.sro__list li { background: #fff; border: 1px solid #e3e7ec; border-radius: 8px; padding: .5rem .7rem; font-size: .9rem; font-weight: 600; }
+.sro__main h3 { font-size: 1.15rem; margin-bottom: 1rem; color: var(--text-dark); }
+.sro__logos { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+.sro__logo { display: flex; flex-direction: column; justify-content: center; gap: .3rem; min-height: 96px; padding: 1rem; background: #f7f8fa; border: 1px solid #e3e7ec; border-radius: var(--radius); text-align: center; transition: border-color .2s, transform .2s; }
+.sro__logo:hover { border-color: var(--accent); transform: translateY(-3px); }
+.sro__logo span { font-family: 'Oswald', sans-serif; font-weight: 600; font-size: .86rem; text-transform: uppercase; letter-spacing: .02em; color: var(--text-dark); }
+.sro__logo small { color: #7a8794; font-size: .74rem; }
+.sro__logo--dashed { border-style: dashed; background: repeating-linear-gradient(45deg, #fafbfc, #fafbfc 8px, #f4f5f7 8px, #f4f5f7 16px); }
+.sro__note { margin-top: 1.2rem; font-size: .92rem; color: #5b6672; }
+.sro__note a { color: var(--accent-dark); font-weight: 600; }
+@media (max-width: 900px) { .sro__grid { grid-template-columns: 1fr; } }
+
+/* Этапы обработки металла (тёмная секция) */
+.stages__list { list-style: none; counter-reset: st; margin: 1.6rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.2rem; }
+.stage { position: relative; background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.4rem; transition: border-color .2s, transform .2s; }
+.stage:hover { border-color: var(--accent); transform: translateY(-4px); }
+.stage__num { display: block; font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 2rem; color: var(--accent); opacity: .9; margin-bottom: .5rem; }
+.stage h3 { font-size: 1.02rem; margin-bottom: .45rem; color: var(--text); }
+.stage p { font-size: .88rem; color: var(--muted); line-height: 1.55; }
+.stages__adv-title { margin-top: 2.4rem; font-size: 1.25rem; color: var(--text); }
+.stages__adv { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: .8rem 1.6rem; }
+.stages__adv li { position: relative; padding-left: 1.8rem; font-size: .95rem; color: var(--text); }
+.stages__adv li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--accent); font-weight: 700; }
+@media (max-width: 1024px) { .stages__list { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .stages__list { grid-template-columns: 1fr; } }
+
+/* Доставка и оплата */
+.dlv__subtitle { margin: 2.2rem 0 1rem; font-size: 1.3rem; color: var(--text-dark); border-left: 4px solid var(--accent); padding-left: .8rem; }
+.dlv__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4rem; }
+.dlv__grid--4 { grid-template-columns: repeat(4, 1fr); }
+.dlv__link { display: inline-block; margin-top: .3rem; color: var(--accent-dark); font-weight: 600; font-size: .9rem; }
+.dlv__docs { list-style: none; margin: 0; padding: 0; display: grid; gap: .8rem; }
+.dlv__docs li { position: relative; padding-left: 1.8rem; font-size: .95rem; color: #5b6672; line-height: 1.55; }
+.dlv__docs li::before { content: ""; position: absolute; left: 0; top: .4rem; width: 12px; height: 12px; border: 2px solid var(--accent); border-radius: 3px; }
+@media (max-width: 1024px) { .dlv__grid, .dlv__grid--4 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 640px) { .dlv__grid, .dlv__grid--4 { grid-template-columns: 1fr; } }
