@@ -13,7 +13,7 @@
       <b>{{ username or p.user_id }}</b> · модель: {{ p.model or '?' }} ·
       анализ за {{ p.period_from or '?' }} .. {{ p.period_to or '?' }},
       сообщений: {{ p.messages_analyzed if p.messages_analyzed is not none else '?' }} ·
-      версия: {{ 'актуальная' if p.is_current else 'архивная' }} · создано {{ p.created_at }}
+      версия: {{ 'актуальная' if p.is_current else 'архивная' }} · создано {{ fmtdt(p.created_at) }}
     </div>
     <div class='card'><h4>Итоговое резюме</h4>
       {% if res.get('summary') %}<p style='white-space:pre-wrap'>{{ res.summary }}</p>

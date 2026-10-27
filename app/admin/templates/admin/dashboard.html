@@ -14,7 +14,7 @@
   {% else %}
     <span class='pill'>○ давно нет данных ({{ '%.1f'|format(age_min/60) }} ч)</span>
   {% endif %}
-  {% if last_msg_ts %}<span class='muted'>последнее guild-сообщение: {{ last_msg_ts }}</span>{% endif %}
+  {% if last_msg_ts %}<span class='muted'>последнее guild-сообщение: {{ fmtdt(last_msg_ts) }}</span>{% endif %}
   {% if health.dm_pending %}<span class='pill'>⏳ ЛС в очереди: {{ health.dm_pending }}</span>{% endif %}
   {% if health.dm_stuck %}<a class='pill warn' href="{{ url_for('browse', table='user_profiles', col='dm_status', val='error') }}">⚠ ЛС с ошибками: {{ health.dm_stuck }}</a>{% endif %}
   {% if health.psych_current is not none %}<a class='pill' href="{{ url_for('browse', table='psych_profiles', cur='1') }}">🧠 психо-профилей: {{ health.psych_current }}</a>{% endif %}
@@ -25,6 +25,6 @@
     <a href="{{ url_for('browse', table=name) }}">просмотр →</a></div>{% endfor %}</div>
 <div class='card'><h4>Последние действия</h4>
   {% if recent %}<div class='tbl-wrap' style='border:0;box-shadow:none'><table><thead><tr><th style='width:170px'>когда</th><th style='width:180px'>действие</th><th>объект</th><th>результат</th></tr></thead><tbody>
-  {% for r in recent %}<tr><td class='nowrap'>{{ r.created_at }}</td><td>{{ r.action }}</td>
+  {% for r in recent %}<tr><td class='nowrap'>{{ fmtdt(r.created_at) }}</td><td>{{ r.action }}</td>
   <td>{{ r.target }}</td><td>{{ r.result }}</td></tr>{% endfor %}</tbody></table></div>
   {% else %}<p class='muted'>пусто</p>{% endif %}</div>

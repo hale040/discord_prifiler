@@ -75,7 +75,7 @@
        title='вставить ответ нейросети вручную с проверкой структуры JSON'
        href="/psych/manual/{{ uid }}">📋 Вставить ответ модели</a>
     {% if ps %}<a class='btn gray' style='text-decoration:none'
-       title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ ps.created_at }})'
+       title='актуальный профиль #{{ ps.id }} ({{ ps.model or '?' }}, {{ fmtdt(ps.created_at) }})'
        href="{{ url_for('profile_view', pid=ps.id) }}">👁 Текущий профиль</a>{% endif %}
     {# ---- ЛС-сбор: выгрузка истории диалога по кнопке (dm-loop) ---- #}
     <form method='post' action='/dm/toggle/{{ uid }}' style='display:inline'
@@ -103,7 +103,7 @@
       <span class='{{ dm_cls }}' id='dm-state'>{{ dm_run }}</span>
       <span class='muted'>сохранено: <b id='dm-total'>{{ values.get('dm_messages_total') or 0 }}</b> сообщ.</span>
       <span class='muted'>канал: <b>{{ values.get('dm_channel_id') or '—' }}</b>{% if values.get('dm_channel_manual') %} <i>(ручной)</i>{% endif %}</span>
-      <span class='muted'>синхронизация: <b id='dm-synced'>{{ values.get('dm_synced_at') or 'ещё не выполнялась' }}</b></span>
+      <span class='muted'>синхронизация: <b id='dm-synced'>{{ (fmtdt(values.get('dm_synced_at')) if values.get('dm_synced_at') else 'ещё не выполнялась') }}</b></span>
       <form method='post' action='/dm/run_now/{{ uid }}' style='display:inline;margin-left:auto'
             onsubmit="this.querySelector('button').disabled=true;">
         <input type='hidden' name='csrf_token' value='{{ csrf_token() }}'>

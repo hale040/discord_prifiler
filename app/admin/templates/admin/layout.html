@@ -200,6 +200,14 @@
         <a class="nav-direct {{ 'on' if page=='sql' }}" href="{{ url_for('sql_page') }}">SQL</a>
         <a class="nav-direct {{ 'on' if page=='audit' }}" href="{{ url_for('audit_page') }}">Аудит</a>
         <a class="nav-direct {{ 'on' if page=='actions' }}" href="{{ url_for('actions_page') }}">⚙️ Действия</a>
+        {# --- выбор часового пояса: ?tz=... сохраняет в сессии, редирект назад #}
+        <select id="tzSelect" class="theme-toggle" style="padding:.3rem .4rem;max-width:170px"
+                title="Часовой пояс отображения времени (в БД всё хранится в UTC)">
+          <option value="-" {{ 'selected' if not tz_cur }}>UTC (как в БД)</option>
+          {% for z in tz_all %}
+            <option value="{{ z }}" {{ 'selected' if z == tz_cur }}>{{ z }}</option>
+          {% endfor %}
+        </select>
         <button type="button" class="theme-toggle" id="themeToggle" title="Переключить тему (Discord dark/light)">🌓</button>
         <a class="btn gray sm" href="{{ url_for('logout') }}">Выйти</a>
       </span>
@@ -224,6 +232,16 @@
     document.addEventListener('click', function () {
       document.querySelectorAll('.navgroup.open').forEach(function (o) { o.classList.remove('open'); });
     });
+    // Выбор часового пояса: редирект на текущую страницу с ?tz=<выбранный>.
+    (function () {
+      var sel = document.getElementById('tzSelect');
+      if (!sel) return;
+      sel.addEventListener('change', function () {
+        var u = new URL(window.location.href);
+        u.searchParams.set('tz', sel.value);
+        window.location.href = u.toString();
+      });
+    })();
     // Переключатель темы Discord dark/light; выбор запоминается в localStorage.
     (function () {
       var btn = document.getElementById('themeToggle');

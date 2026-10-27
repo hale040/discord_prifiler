@@ -9,7 +9,8 @@ import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote_plus
+from zoneinfo import ZoneInfo, available_timezones
+from urllib.parse import quote_plus, urlencode
 
 from dotenv import load_dotenv
 from flask import (
@@ -36,6 +37,49 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 def utcnow() -> datetime:
     """Текущее время UTC (совпадает с helpers.utcnow в моделях)."""
     return datetime.now(timezone.utc)
+
+
+# --------------------------------------------------------------------------- #
+# Часовой пояс отображения (настройка в шапке, сохраняется в session['tz']).   #
+# В БД всё хранится в UTC; преобразование — только на слое отображения.        #
+# --------------------------------------------------------------------------- #
+TZ_DEFAULT = "Europe/Moscow"
+TZ_POPULAR = [
+    "Europe/Moscow", "Europe/Kyiv", "Europe/Berlin", "Europe/London",
+    "Asia/Almaty", "Asia/Tashkent", "Asia/Dubai", "Asia/Shanghai",
+    "Asia/Tokyo", "America/New_York", "America/Chicago",
+    "America/Los_Angeles", "America/Sao_Paulo", "Australia/Sydney",
+    "UTC",
+]
+
+
+def tz_list() -> list[str]:
+    """Популярные пояса первыми + полный список IANA для поиска браузером."""
+    full = sorted(t for t in available_timezones() if t not in TZ_POPULAR)
+    return TZ_POPULAR + full
+
+
+# вычисляется один раз при импорте (~600 элементов, поиск в браузере нативный)
+TZ_ALL: list[str] = tz_list()
+
+
+
+def to_local(v, tzname: str | None):
+    """datetime (aware или naive-UTC) -> строка 'ГГГГ-ММ-ДД ЧЧ:ММ' в поясе tzname.
+
+    Naive-значения трактуются как UTC (в БД timestamp with tz, но часть путей
+    отдаёт naive). Пустой/не-дата — без изменений. Без выбора пояса — как раньше.
+    """
+    if v is None or not isinstance(v, datetime) or not tzname:
+        return v
+    try:
+        z = ZoneInfo(tzname)
+    except Exception:
+        return v
+    if v.tzinfo is None:
+        v = v.replace(tzinfo=timezone.utc)
+    return v.astimezone(z).strftime("%Y-%m-%d %H:%M")
+
 
 # --------------------------------------------------------------------------- #
 # Какие столбцы показывать в лентах таблиц («только нужные»).                 #
@@ -237,7 +281,12 @@ def create_app(database_url: str) -> Flask:
         return name
 
     def fmt_cell(v) -> tuple[str, bool]:
-        """(текст, is_json) для отображения; длинные значения сворачиваются."""
+        """(текст, is_json) для отображения; длинные значения сворачиваются.
+
+        datetime приводится к выбранному в шапке поясу (session['tz']);
+        без выбора — как раньше (строка БД)."""
+        if isinstance(v, datetime):
+            v = to_local(v, session.get("tz"))
         if v is None:
             return "—", False
         if isinstance(v, (dict, list)):  # JSONB-колонки приходят уже разобранными
@@ -507,6 +556,9 @@ def create_app(database_url: str) -> Flask:
         # current_psych доступен шаблонам (карточка пользователя показывает
         # кнопку 🧠 «Обновить», только если профиль уже строился)
         ctx.setdefault("current_psych", current_psych)
+        # локальное время для шаблонов: {{ fmtdt(...) }} — по поясу из шапки
+        _tzv = session.get("tz") or os.getenv("ADMIN_TZ", "")
+        ctx.setdefault("fmtdt", lambda v: to_local(v, _tzv))
         return render_template(
             "admin/layout.html",
             content=Markup(render_template(f"admin/{tpl}.html", **ctx)),
@@ -554,7 +606,33 @@ def create_app(database_url: str) -> Flask:
         extra = [t for t in tables() if t not in grouped and t not in hidden]
         return {"nav_tables": tables(), "nav_groups": groups,
                 "nav_extra": extra, "page": "",
-                "has_psych": "psych_profiles" in have}
+                "has_psych": "psych_profiles" in have,
+                # выбор часового пояса в шапке (по умолчанию — из ENV ADMIN_TZ)
+                "tz_cur": session.get("tz") or os.getenv("ADMIN_TZ", ""),
+                "tz_all": TZ_ALL}
+
+    # --- настройка пояса: ?tz=Europe/Moscow | tz=UTC | tz=- (сброс) ---------
+    @app.before_request
+    def apply_tz_param():
+        v = request.args.get("tz")
+        if v is None:
+            return
+        if v in ("-", "none"):
+            session.pop("tz", None)
+        elif v in TZ_ALL:
+            session["tz"] = v
+        ref = request.referrer or url_for("dashboard")
+        # чтобы tz-параметр не «наследовался» при пагинации/фильтрах —
+        # пересобираем referrer с текущими параметрами запроса без tz
+        try:
+            base, _, _old = ref.partition("?")
+            qs = [(k, val) for k, vals in request.args.items()
+                  if k != "tz" for val in vals]
+            ref = f"{base}?{urlencode(qs)}" if qs else base
+        except Exception:
+            pass
+        return redirect(ref)
+
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -794,6 +872,7 @@ def create_app(database_url: str) -> Flask:
         table = safe_ident(table)
         if table not in tables():
             abort(404)
+        _tzsel = session.get("tz") or os.getenv("ADMIN_TZ", "")  # пояс отображения
         pk_col = pk_of(table)
         sa_tbl = Table(table, MetaData(), autoload_with=engine)
         fields = editable_fields(sa_tbl)
@@ -841,9 +920,23 @@ def create_app(database_url: str) -> Flask:
                 input_name = f"fld_{name}"
                 if input_name not in request.form:
                     continue  # поля нет в форме — не трогаем
+                raw_val = request.form.get(input_name, "")
+                # datetime-поля показаны в локальном поясе (см. шапку) —
+                # при сохранении переводим обратно в UTC, иначе сдвиг
+                # «приморозится» к значению при каждом редактировании
+                if kind_by_name[name] == "datetime" and _tzsel:
+                    try:
+                        _d = parse_field("datetime", raw_val, True)
+                        if isinstance(_d, datetime):
+                            if _d.tzinfo is None:
+                                _d = _d.replace(tzinfo=ZoneInfo(_tzsel))
+                            _d = _d.astimezone(timezone.utc)
+                            raw_val = _d.strftime("%Y-%m-%d %H:%M:%S.%f")
+                    except ValueError:
+                        pass  # пусть обычная ветка выдаст понятную ошибку
                 try:
                     parsed[name] = parse_field(
-                        kind_by_name[name], request.form.get(input_name, ""),
+                        kind_by_name[name], raw_val,
                         null_by_name[name])
                 except ValueError as e:
                     errors[name] = str(e)
@@ -899,7 +992,9 @@ def create_app(database_url: str) -> Flask:
              "type": str(sa_tbl.columns[f["name"]].type.compile()).split()[0],
              "value": (_json_pretty(values.get(f["name"]))
                        if f["kind"] == "textarea" and _is_json_field(f["name"])
-                       else values.get(f["name"])),
+                       else (to_local(values.get(f["name"]), _tzsel)
+                             if f["kind"] == "datetime"
+                             else values.get(f["name"]))),
              "error": errors.get(f["name"])}
             for f in fields
         ]
@@ -1100,6 +1195,11 @@ def create_app(database_url: str) -> Flask:
             except Exception:  # noqa: BLE001
                 pass
         state["stale_running"] = stale
+        # JS-виджет показывает это поле как текст — отдаём локальное время
+        # (пояс из шапки), иначе после live-обновления строка возвращается к UTC.
+        if isinstance(state.get("dm_synced_at"), datetime):
+            state["dm_synced_at"] = to_local(
+                state["dm_synced_at"], session.get("tz") or os.getenv("ADMIN_TZ", ""))
         return state
 
     @app.get("/dm/status/<int:user_id>")
