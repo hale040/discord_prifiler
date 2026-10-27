@@ -3,6 +3,14 @@
 <p class='muted'>{% if guild_id %}<a href="{{ url_for('guilds_page') }}">← Серверы</a>{% else %}
   Выберите сервер в разделе 🖥 Серверы — там список по ID.{% endif %}</p>
 
+{% if guild_id %}
+{# обновить чаты: подтянуть ВСЕ каналы сервера из Discord (не только те, откуда уже есть сообщения) #}
+<form method='post' action="{{ url_for('chats_page', guild_id=guild_id) }}" style='margin:.6rem 0'>
+  <button class='btn sm' {{ '' if can_sync else 'disabled title=DISCORD_TOKEN не задан в .env' }}>🔄 Обновить чаты с сервера</button>
+  {% if not can_sync %}<span class='muted' style='margin-left:.5rem'>нужен DISCORD_TOKEN в .env</span>{% endif %}
+</form>
+{% endif %}
+
 <div class='tbl-wrap' style='--cols: 6'>
 <table class='lenta'><colgroup><col><col class='wide'><col style='width:90px'><col style='width:100px'><col style='width:110px'><col style='width:170px'></colgroup>
 <thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>анкеты (галка)</th></tr></thead>

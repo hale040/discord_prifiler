@@ -1887,16 +1887,86 @@ def create_app(database_url: str) -> Flask:
                 .order_by(g.columns.guild_id.desc())).mappings().all()
         return render("guilds", page="guilds", rows=rows)
 
-    @app.route("/chats/<int:guild_id>")
+    def _sync_guild_channels(conn, gid: int, c, m) -> tuple[int, str]:
+        """Подтянуть список каналов сервера из Discord в таблицу chats.
+
+        Возвращает (добавлено_новых, сообщение_для_flash). Без этого шага в
+        «чатах сервера» видны только каналы, откуда уже собирались сообщения.
+        Ошибки сети/токена не валят страницу — только предупреждение.
+        """
+        token = os.getenv("DISCORD_TOKEN", "")
+        if not token:
+            return 0, "DISCORD_TOKEN не задан в .env — список каналов из Discord недоступен."
+        try:
+            import asyncio
+
+            from app.services.discord_gateway import UserbotClient
+
+            async def _fetch():
+                got: list = []
+
+                async def ready(_cl):
+                    got.extend(await _cl.fetch_guild_channels(gid))
+
+                cl = UserbotClient(token, gateway_callback=None,
+                                   ready_callback=ready)
+                try:
+                    await asyncio.wait_for(cl.start(token), timeout=25)
+                finally:
+                    try:
+                        await cl.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                return got
+
+            try:
+                channels = asyncio.run(_fetch())
+            except RuntimeError:          # свой event loop уже крутится
+                loop = asyncio.new_event_loop()
+                try:
+                    channels = loop.run_until_complete(asyncio.wait_for(
+                        _fetch(), timeout=30))
+                finally:
+                    loop.close()
+            if not channels:
+                return 0, "Каналы не получены (сервер недоступен или нет доступа)."
+            existing = {r[0] for r in conn.execute(
+                sa_select(c.columns.channel_id).where(c.columns.guild_id == gid))}
+            msg_counts = dict(conn.execute(
+                sa_select(m.columns.channel_id, func.count())
+                .where(m.columns.guild_id == gid).group_by(m.columns.channel_id)))
+            new_n = 0
+            for cid, cname in channels:
+                if cid in existing:
+                    continue
+                conn.execute(sa_insert(c).values(
+                    channel_id=cid, guild_id=gid, name=str(cname)[:256],
+                    collects_qa=False, messages_total=msg_counts.get(cid, 0),
+                    created_at=utcnow()))
+                new_n += 1
+            conn.commit()
+            audit("chats_sync", target=f"guild={gid}",
+                  details=f"new={new_n} total={len(channels)}", result="ok")
+            return new_n, f"Синхронизировано: каналов {len(channels)}, новых {new_n}."
+        except Exception as exc:  # noqa: BLE001
+            return 0, f"Не удалось получить каналы из Discord: {exc}"
+
+    @app.route("/guilds/<int:guild_id>/chats", methods=["GET", "POST"])
+    @app.route("/chats/<int:guild_id>", methods=["GET", "POST"])
     @app.route("/chats")
     def chats_page(guild_id: int | None = None):
-        """Список чатов сервера; галка «анкеты» включает подмешивание анкет."""
+        """Чаты внутри сервера; галка «анкеты» включает подмешивание анкет."""
         if not _qa_tables_ok("chats", "chat_members"):
             abort(404)
         c = Table("chats", MetaData(), autoload_with=engine)
         cm = Table("chat_members", MetaData(), autoload_with=engine)
         pred = (c.columns.guild_id == guild_id) if guild_id is not None else None
         with engine.connect() as conn:
+            if request.method == "POST" and guild_id is not None:
+                m = Table("messages", MetaData(), autoload_with=engine)
+                _new, msg = _sync_guild_channels(conn, guild_id, c, m)
+                flash(msg, "ok" if "Синхронизировано" in msg else "warn")
+                return redirect(url_for("chats_page", guild_id=guild_id))
             sel = (sa_select(
                 c,
                 sa_select(func.count()).select_from(cm)
@@ -1916,7 +1986,9 @@ def create_app(database_url: str) -> Flask:
                 gname = conn.execute(sa_select(g.columns.name).where(
                     g.columns.guild_id == guild_id)).scalar()
         return render("chats", page="chats", rows=rows, guild_id=guild_id,
-                      guild_name=gname or "")
+                      guild_name=gname or "",
+                      can_sync=(guild_id is not None
+                                and bool(os.getenv("DISCORD_TOKEN"))))
 
     @app.route("/chats/qa/<int:channel_id>", methods=["POST"])
     def chat_toggle_qa(channel_id: int):

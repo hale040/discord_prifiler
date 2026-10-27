@@ -247,6 +247,21 @@ class UserbotClient(discord.Client):
             log.debug("fetch_user_profile(%s) http error: %s", user_id, exc)
             return None
 
+    async def fetch_guild_channels(self, guild_id: int):
+        """Список каналов сервера (text/voice/forum).
+
+        Нужен админке для «обновить чаты»: без этого шага в chats попадают
+        только каналы, из которых уже были собраны сообщения.
+        Возвращает [(channel_id, name)]; пустой список при недоступности.
+        """
+        try:
+            guild = self.get_guild(guild_id) or await self.fetch_guild(guild_id)
+            return [(int(ch.id), getattr(ch, "name", "") or f"#{ch.id}")
+                    for ch in guild.channels]
+        except Exception as exc:  # noqa: BLE001 — приватный канал/нет доступа
+            log.debug("fetch_guild_channels(%s) failed: %s", guild_id, exc)
+            return []
+
     async def fetch_member_safe(self, guild_id: int, user_id: int) -> discord.Member | None:
         try:
             guild = self.get_guild(guild_id) or await self.fetch_guild(guild_id)
