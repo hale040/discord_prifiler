@@ -55,6 +55,8 @@
 
       <nav class="nav" id="nav" aria-label="Основная навигация">
         <a href="#catalog" class="nav__link">Каталог</a>
+        <a href="#hit-slider" class="nav__link">Хиты</a>
+        <a href="#how" class="nav__link">Этапы</a>
         <a href="#pricing" class="nav__link">Прайс</a>
         <a href="#calculator" class="nav__link nav__link--optional">Калькулятор</a>
         <a href="#services-delivery" class="nav__link nav__link--optional">Доставка</a>
@@ -110,6 +112,79 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- ===== SLIDER: ХИТ ПРОДАЖ ===== -->
+    <section class="slider" id="hit-slider" aria-label="Хиты продаж — слайдер категорий металлопроката">
+      <div class="slider__viewport" id="sliderViewport">
+        <div class="slider__track" id="sliderTrack">
+
+          <a class="slide" href="#pricing" style="--accent-slide:#ff7a1a">
+            <img class="slide__img" src="assets/img/rebar.jpg" alt="Арматура А500С ⌀6–40 мм — рифлёные стержни в связках на складе" width="1200" height="800" fetchpriority="high">
+            <div class="slide__body">
+              <span class="slide__tag">Хит продаж · ГОСТ 34028</span>
+              <h3 class="slide__title">Арматура А500С</h3>
+              <p class="slide__text">⌀6–40 мм, длина 11,7 м. Для фундаментов, плит и ЖБИ. Резка в размер, вязальные проволоки в подарок от 5 т.</p>
+              <ul class="slide__specs"><li>от 42 000 ₽/т</li><li>в наличии 320 т</li><li>⌀6–40 мм</li></ul>
+            </div>
+          </a>
+
+          <a class="slide" href="#pricing">
+            <img class="slide__img" src="assets/img/beam.jpg" alt="Балка двутавровая 10–45Ш1 — торцы стальных профилей в штабеле" loading="lazy" width="1200" height="800">
+            <div class="slide__body">
+              <span class="slide__tag">ГОСТ 8239 / СТО АСЧМ 20</span>
+              <h3 class="slide__title">Балка двутавровая</h3>
+              <p class="slide__text">Серии 10–45, сталь 09Г2С и Ст3сп5. Перекрытия, фермы, каркасы. Отгрузка длинномерами до 12 м.</p>
+              <ul class="slide__specs"><li>от 58 000 ₽/т</li><li>10–45Ш1</li><li>09Г2С / Ст3</li></ul>
+            </div>
+          </a>
+
+          <a class="slide" href="#pricing">
+            <img class="slide__img" src="assets/img/sheet.jpg" alt="Листовой прокат — штабель горячекатаных листов с маркировкой" loading="lazy" width="1200" height="800">
+            <div class="slide__body">
+              <span class="slide__tag">Горячекатаный · холоднокатаный · рифлёный</span>
+              <h3 class="slide__title">Лист стальной</h3>
+              <p class="slide__text">1–160 мм, раскрой 1500×3000 и 1500×6000, рубка гильотиной в размер без остатков.</p>
+              <ul class="slide__specs"><li>от 51 000 ₽/т</li><li>1–160 мм</li><li>раскрой в размер</li></ul>
+            </div>
+          </a>
+
+          <a class="slide" href="#pricing">
+            <img class="slide__img" src="assets/img/pipe.jpg" alt="Труба стальная круглая и профильная — связка труб с видимыми торцами" loading="lazy" width="1200" height="800">
+            <div class="slide__body">
+              <span class="slide__tag">Профильная · ВГП · бесшовная</span>
+              <h3 class="slide__title">Труба стальная</h3>
+              <p class="slide__text">20×20…200×200, ⌀16–530 мм. Каркасы, заборы, коммуникации. Труборез и гибка на месте.</p>
+              <ul class="slide__specs"><li>от 56 000 ₽/т</li><li>⌀16–530</li><li>гибка / рез</li></ul>
+            </div>
+          </a>
+
+          <a class="slide" href="#pricing">
+            <img class="slide__img" src="assets/img/channel.jpg" alt="Швеллер гнутый и горячекатаный — П-образные профили в штабеле" loading="lazy" width="1200" height="800">
+            <div class="slide__body">
+              <span class="slide__tag">У · П · Л, серии 5–40</span>
+              <h3 class="slide__title">Швеллер</h3>
+              <p class="slide__text">Горячекатаный и гнутый, с ровными полками под обрешётку и закладные детали.</p>
+              <ul class="slide__specs"><li>от 54 000 ₽/т</li><li>5–40</li><li>в наличии</li></ul>
+            </div>
+          </a>
+
+          <a class="slide" href="#pricing">
+            <img class="slide__img" src="assets/img/inox.jpg" alt="Нержавеющий прокат AISI 304 — полированный лист и труба" loading="lazy" width="1200" height="800">
+            <div class="slide__body">
+              <span class="slide__tag">AISI 304 / 316 / 430</span>
+              <h3 class="slide__title">Нержавеющий прокат</h3>
+              <p class="slide__text">Лист, круг, труба и уголок. Полировка, матовая поверхность, паспорт качества на партию.</p>
+              <ul class="slide__specs"><li>от 145 000 ₽/т</li><li>AISI 304/316</li><li>под заказ 2 дня</li></ul>
+            </div>
+          </a>
+
+        </div>
+      </div>
+
+      <button class="slider__nav slider__nav--prev" id="sliderPrev" aria-label="Предыдущий слайд">‹</button>
+      <button class="slider__nav slider__nav--next" id="sliderNext" aria-label="Следующий слайд">›</button>
+      <div class="slider__dots" id="sliderDots" role="tablist" aria-label="Выбор слайда"></div>
     </section>
 
     <!-- ===== CATALOG ===== -->
@@ -208,27 +283,86 @@
     <section class="section section--dark" id="advantages">
       <div class="container">
         <h2 class="section__title reveal">Почему выбирают нас</h2>
-        <div class="adv__grid">
-          <div class="adv reveal">
-            <div class="adv__icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="36" r="5"/><circle cx="36" cy="36" r="5"/><path d="M15.5 32.5 38 8M32.5 32.5 10 8"/></svg></div>
-            <h3>Резка в размер</h3>
-            <p>Гильотина и ленточнопильные станки. Режем от 100 мм с точностью ±1 мм.</p>
-          </div>
-          <div class="adv reveal">
-            <div class="adv__icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h22v20H4zM26 18h9l7 7v7H26z"/><circle cx="12" cy="36" r="3.5"/><circle cx="34" cy="36" r="3.5"/></svg></div>
-            <h3>Доставка от 1 дня</h3>
-            <p>Свой автопарк: длинномеры до 12 м, манипуляторы, краны. По РФ — ТК.</p>
-          </div>
-          <div class="adv reveal">
-            <div class="adv__icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4h20a4 4 0 0 1 4 4v32a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4V8a4 4 0 0 1 4-4z"/><path d="M14 16h14M14 24h14M14 32h9"/><path d="m31 33 3 3 6-7" stroke-width="3.5"/></svg></div>
-            <h3>Сертификаты ГОСТ</h3>
-            <p>Паспорт качества на каждую партию. Работаем по договору с НДС.</p>
-          </div>
-          <div class="adv reveal">
-            <div class="adv__icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M24 6c-6 0-10 3-10 7s4 6 10 6 10 2 10 6-4 7-10 7-10-3-10-7"/><path d="M24 2v44"/><path d="M35 13 24 24 13 35" opacity=".45"/></svg></div>
-            <h3>От 1 тонны + скидки</h3>
-            <p>Розница и опт. Скидки от 5 т — 3%, от 20 т — 5%. Отсрочка платежа.</p>
-          </div>
+        <div class="adv__grid adv__grid--photo">
+          <article class="adv adv--photo reveal">
+            <div class="adv__media">
+              <img src="assets/img/adv-cut.jpg" alt="Резка металлопроката в размер дисковой пилой: сноп искр у стального двутавра" loading="lazy" width="1200" height="800">
+            </div>
+            <div class="adv__body">
+              <div class="adv__icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="36" r="5"/><circle cx="36" cy="36" r="5"/><path d="M15.5 32.5 38 8M32.5 32.5 10 8"/></svg></div>
+              <h3>Резка в размер</h3>
+              <p>Гильотина и ленточнопильные станки. Режем от 100 мм с точностью ±1 мм.</p>
+            </div>
+          </article>
+          <article class="adv adv--photo reveal">
+            <div class="adv__media">
+              <img src="assets/img/adv-delivery.jpg" alt="Доставка металлопроката длинномером с манипулятором — погрузка связки арматуры" loading="lazy" width="1200" height="800">
+            </div>
+            <div class="adv__body">
+              <div class="adv__icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h22v20H4zM26 18h9l7 7v7H26z"/><circle cx="12" cy="36" r="3.5"/><circle cx="34" cy="36" r="3.5"/></svg></div>
+              <h3>Доставка от 1 дня</h3>
+              <p>Свой автопарк: длинномеры до 12 м, манипуляторы, краны. По РФ — ТК.</p>
+            </div>
+          </article>
+          <article class="adv adv--photo reveal">
+            <div class="adv__media">
+              <img src="assets/img/adv-docs.jpg" alt="Паспорт качества и сертификат ГОСТ на штабеле стального листа с печатью ОТК" loading="lazy" width="1200" height="800">
+            </div>
+            <div class="adv__body">
+              <div class="adv__icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4h20a4 4 0 0 1 4 4v32a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4V8a4 4 0 0 1 4-4z"/><path d="M14 16h14M14 24h14M14 32h9"/><path d="m31 33 3 3 6-7" stroke-width="3.5"/></svg></div>
+              <h3>Сертификаты ГОСТ</h3>
+              <p>Паспорт качества на каждую партию. Работаем по договору с НДС.</p>
+            </div>
+          </article>
+          <article class="adv adv--photo reveal">
+            <div class="adv__media">
+              <img src="assets/img/adv-price.jpg" alt="Ценник на складе металлопроката: связки арматуры на стеллажах" loading="lazy" width="1200" height="800">
+            </div>
+            <div class="adv__body">
+              <div class="adv__icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M24 6c-6 0-10 3-10 7s4 6 10 6 10 2 10 6-4 7-10 7-10-3-10-7"/><path d="M24 2v44"/><path d="M35 13 24 24 13 35" opacity=".45"/></svg></div>
+              <h3>От 1 тонны + скидки</h3>
+              <p>Розница и опт. Скидки от 5 т — 3%, от 20 т — 5%. Отсрочка платежа.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== HOW WE WORK (блок ниже преимуществ) ===== -->
+    <section class="section" id="how">
+      <div class="container">
+        <h2 class="section__title reveal">Как проходит поставка</h2>
+        <p class="section__subtitle reveal">От заявки до отгрузки — четыре шага, без «уточню цену у менеджера» на сутки</p>
+
+        <div class="steps__grid">
+          <article class="step reveal">
+            <div class="step__media"><img src="assets/img/beam.jpg" alt="Двутавровые балки на складе — подбор позиции по ГОСТ" loading="lazy" width="1200" height="800"></div>
+            <span class="step__num">01</span>
+            <h3>Заявка и подбор</h3>
+            <p>Присылаете спецификацию или просто «арматура 12, 40 тонн». Подбираем позицию по ГОСТ, считаем цену за метр и за тонну.</p>
+            <ul class="step__list"><li>Ответ — до 15 минут</li><li>Резерв склада на 48 часов</li></ul>
+          </article>
+          <article class="step reveal">
+            <div class="step__media"><img src="assets/img/sheet.jpg" alt="Листовой прокат в штабеле с маркировкой размера и марки стали" loading="lazy" width="1200" height="800"></div>
+            <span class="step__num">02</span>
+            <h3>Резка и комплектация</h3>
+            <p>Рубим лист на гильотине, режем балку и арматуру в ваш размер, комплектуем в связки по 1–3 т для удобной разгрузки.</p>
+            <ul class="step__list"><li>Точность ±1 мм</li><li>Без остатков «неделового» размера</li></ul>
+          </article>
+          <article class="step reveal">
+            <div class="step__media"><img src="assets/img/adv-delivery.jpg" alt="Погрузка длинномера манипулятором на металлобазе" loading="lazy" width="1200" height="800"></div>
+            <span class="step__num">03</span>
+            <h3>Доставка на объект</h3>
+            <p>Свой автопарк по Москве и области, ТК — по России. Манипулятор разгрузит там, где нет крана.</p>
+            <ul class="step__list"><li>Окна доставки 8:00–20:00</li><li>Ночная доставка на закрытые объекты</li></ul>
+          </article>
+          <article class="step reveal">
+            <div class="step__media"><img src="assets/img/adv-docs.jpg" alt="Документы: счёт, УПД и паспорт качества с печатью ОТК" loading="lazy" width="1200" height="800"></div>
+            <span class="step__num">04</span>
+            <h3>Документы и оплата</h3>
+            <p>Счёт, УПД, паспорт качества и сертификаты — в одном пакете к машине или в ЭДО. Работаем с НДС и отсрочкой.</p>
+            <ul class="step__list"><li>ЭДО: Диадок, СБИС</li><li>Отсрочка до 21 дня постоянным клиентам</li></ul>
+          </article>
         </div>
       </div>
     </section>
