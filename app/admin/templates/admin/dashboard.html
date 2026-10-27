@@ -1,5 +1,24 @@
 <h2>Дашборд</h2>
 <p class='muted'>БД: {{ db }} · всего строк: {{ total }}</p>
+{# --- статус коллектора (жив/завис) + здоровье ЛС и психо --- #}
+{% set age_min = None %}
+{% if last_msg_ts %}{% set age_min = ((now - last_msg_ts).total_seconds() // 60) | int %}{% endif %}
+<div class='card' style='display:flex;gap:1.2rem;align-items:center;flex-wrap:wrap'>
+  <h4 style='margin:0'>Статус сбора</h4>
+  {% if age_min is none %}
+    <span class='pill warn'>нет сообщений</span>
+  {% elif age_min <= 30 %}
+    <span class='pill ok'>● коллектор жив</span>
+  {% elif age_min <= 180 %}
+    <span class='pill warn'>последние данные {{ age_min }} мин назад</span>
+  {% else %}
+    <span class='pill'>○ давно нет данных ({{ '%.1f'|format(age_min/60) }} ч)</span>
+  {% endif %}
+  {% if last_msg_ts %}<span class='muted'>последнее guild-сообщение: {{ last_msg_ts }}</span>{% endif %}
+  {% if health.dm_pending %}<span class='pill'>⏳ ЛС в очереди: {{ health.dm_pending }}</span>{% endif %}
+  {% if health.dm_stuck %}<a class='pill warn' href="{{ url_for('browse', table='user_profiles', col='dm_status', val='error') }}">⚠ ЛС с ошибками: {{ health.dm_stuck }}</a>{% endif %}
+  {% if health.psych_current is not none %}<a class='pill' href="{{ url_for('browse', table='psych_profiles', cur='1') }}">🧠 психо-профилей: {{ health.psych_current }}</a>{% endif %}
+</div>
 <div class='grid'>{% for name, cnt in counts %}
   <div class='card stat' style='margin:0'><span class='muted'>{{ name }}</span>
     <b>{{ '{:,}'.format(cnt).replace(',',' ') }}</b>

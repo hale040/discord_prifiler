@@ -1,0 +1,94 @@
+/* ============================================================
+   Discord-тема для админки Профайлера — слой поверх layout.html.
+   Переопределяет только CSS-переменные и ключевые поверхности;
+   вся структурная вёрстка (топбар, таблицы, colgroup, clamp) не трогается.
+   Светлая тема = значения по умолчанию из layout v16.
+   Тёмная включается: data-theme="dark" на <html> или prefers-color-scheme.
+   ============================================================ */
+
+/* --- палитра Discord (dark) --- */
+[data-theme="dark"]{
+  --bg:#313338;            /* channel area */
+  --panel:#2b2d31;         /* sidebar / cards */
+  --elev:#1e1f22;          /* menus, popovers, code */
+  --ink:#dbdee1;
+  --muted:#949ba4;
+  --line:#3f4147;
+  --accent:#5865f2;        /* blurple */
+  --accent-h:#4752c4;
+  --danger:#f23f43;
+  --ok:#23a55a;
+  --warn:#f0b232;
+  --hover:#383a40;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.35);
+}
+
+/* авто-тёмная тема, если переключатель ещё не трогали */
+@media (prefers-color-scheme: dark){
+  html:not([data-theme]){
+    --bg:#313338; --panel:#2b2d31; --elev:#1e1f22;
+    --ink:#dbdee1; --muted:#949ba4; --line:#3f4147;
+    --accent:#5865f2; --accent-h:#4752c4;
+    --danger:#f23f43; --ok:#23a55a; --warn:#f0b232;
+    --hover:#383a40;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.35);
+  }
+}
+
+/* --- поверхности --- */
+[data-theme="dark"] body{background:var(--bg);color:var(--ink)}
+[data-theme="dark"] .topbar{background:var(--panel);border-bottom-color:var(--line)}
+[data-theme="dark"] .card{background:var(--panel);border-color:var(--line)}
+[data-theme="dark"] .tbl-wrap{background:var(--panel);border-color:var(--line)}
+[data-theme="dark"] thead th{background:var(--elev);color:var(--muted)}
+[data-theme="dark"] tbody tr:hover{background:var(--hover)}
+[data-theme="dark"] td a,[data-theme="dark"] .stat a{color:#8fa1ff}
+[data-theme="dark"] pre.sql{background:var(--elev);color:#9fe3a4;border:1px solid var(--line)}
+
+/* --- навигация --- */
+[data-theme="dark"] .brand{color:var(--ink)}
+[data-theme="dark"] .navgroup > summary:hover,
+[data-theme="dark"] .navgroup.open > .ng-title,
+[data-theme="dark"] .nav-direct:hover{background:var(--hover);color:var(--ink)}
+[data-theme="dark"] .navgroup.active > .ng-title,
+[data-theme="dark"] .nav-direct.on,
+[data-theme="dark"] .ng-menu a.on{background:#404eed33;color:#8fa1ff}
+[data-theme="dark"] .ng-menu{background:var(--elev);border-color:#111214}
+[data-theme="dark"] .ng-menu a{color:var(--ink)}
+[data-theme="dark"] .ng-menu a:hover{background:var(--accent);color:#fff}
+
+/* --- формы --- */
+[data-theme="dark"] input[type=password],
+[data-theme="dark"] input[type=text],
+[data-theme="dark"] input[type=search],
+[data-theme="dark"] textarea,
+[data-theme="dark"] select{background:#1e1f22;border-color:#111214;color:var(--ink)}
+[data-theme="dark"] input:focus,
+[data-theme="dark"] textarea:focus,
+[data-theme="dark"] select:focus{outline-color:var(--accent);border-color:var(--accent)}
+
+/* --- кнопки --- */
+[data-theme="dark"] .btn{background:var(--accent)}
+[data-theme="dark"] .btn:hover{background:var(--accent-h)}
+[data-theme="dark"] .btn.warn{background:var(--danger);color:#fff}
+[data-theme="dark"] .btn.gray{background:#4e5058;color:var(--ink)}
+[data-theme="dark"] .btn.gray:hover{background:#64666d}
+
+/* --- флэши и пилюли --- */
+[data-theme="dark"] .flash{background:#23a55a1f;border-color:#23a55a55;color:#53de8f}
+[data-theme="dark"] .flash.err{background:#f23f431f;border-color:#f23f4355;color:#ff7b7e}
+[data-theme="dark"] .flash.warn{background:#f0b2321f;border-color:#f0b23255;color:#f6c158}
+[data-theme="dark"] .pill{background:#5865f233;color:#8fa1ff}
+[data-theme="dark"] .pill.ok{background:#23a55a2a;color:#53de8f}
+[data-theme="dark"] .pill.warn{background:#f0b2322a;color:#f6c158}
+
+/* --- переключатель темы в шапке --- */
+.theme-toggle{cursor:pointer;border:1px solid var(--line);background:transparent;
+  color:var(--muted);border-radius:8px;padding:.3rem .55rem;font-size:.9rem;line-height:1}
+.theme-toggle:hover{background:var(--hover);color:var(--ink)}
+
+/* --- скроллбары в стиле Discord --- */
+[data-theme="dark"] ::-webkit-scrollbar{width:10px;height:10px}
+[data-theme="dark"] ::-webkit-scrollbar-track{background:var(--panel)}
+[data-theme="dark"] ::-webkit-scrollbar-thumb{background:#1a1b1e;border-radius:5px;
+  border:2px solid var(--panel)}

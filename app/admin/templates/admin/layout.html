@@ -2,6 +2,9 @@
     <title>{% block t %}Профайлер — админка{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
+    {# анти-мигание: тема ставится на <html> до отрисовки #}
+    <script>(function(){try{var t=localStorage.getItem('dp_theme');
+      if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
     <style>
       /* ===== Дизайн v16: чистая, спокойная админка без горизонтального скролла ===== */
       :root{
@@ -28,7 +31,8 @@
       .navgroup > summary,.navgroup > .ng-title{list-style:none;cursor:pointer;
         padding:.35rem .7rem;border-radius:8px;color:var(--muted);font-size:.88rem;
         text-decoration:none;user-select:none;white-space:nowrap}
-      .navgroup > summary:hover,.navgroup.open > .ng-title{background:#eef0fb;color:var(--ink)}
+      .navgroup > summary:hover,.navgroup > .ng-title:hover,
+      .navgroup.open > .ng-title{background:#eef0fb;color:var(--ink)}
       .navgroup.active > .ng-title{background:#eef0fb;color:var(--accent);font-weight:600}
       .ng-menu{display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:60;
         background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -122,7 +126,10 @@
       .stat b{display:block;font-size:1.5rem;margin:.2rem 0}
       .stat a{color:var(--accent);text-decoration:none;font-size:.85rem}
       @media (max-width:720px){.topbar-in{gap:.4rem}.navgroup > summary{padding:.3rem .5rem}}
-    </style></head><body>
+    </style>
+    {# Discord-тема: слой поверх базовых стилей (светлая/тёмная, blurple #5865f2) #}
+    <link rel="stylesheet" href="{{ url_for('static', filename='discord.css') }}">
+    </head><body>
     {% if session.get('admin_ok') %}
     <header class="topbar"><div class="topbar-in">
       <a class="brand" href="{{ url_for('dashboard') }}">
@@ -163,6 +170,7 @@
         <a class="nav-direct {{ 'on' if page=='sql' }}" href="{{ url_for('sql_page') }}">SQL</a>
         <a class="nav-direct {{ 'on' if page=='audit' }}" href="{{ url_for('audit_page') }}">Аудит</a>
         <a class="nav-direct {{ 'on' if page=='actions' }}" href="{{ url_for('actions_page') }}">⚙️ Действия</a>
+        <button type="button" class="theme-toggle" id="themeToggle" title="Переключить тему (Discord dark/light)">🌓</button>
         <a class="btn gray sm" href="{{ url_for('logout') }}">Выйти</a>
       </span>
     </div></header>
@@ -186,5 +194,24 @@
     document.addEventListener('click', function () {
       document.querySelectorAll('.navgroup.open').forEach(function (o) { o.classList.remove('open'); });
     });
+    // Переключатель темы Discord dark/light; выбор запоминается в localStorage.
+    (function () {
+      var btn = document.getElementById('themeToggle');
+      if (!btn) return;
+      function cur() {
+        var t = document.documentElement.getAttribute('data-theme');
+        if (t) return t;
+        return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      function paint() { btn.textContent = cur() === 'dark' ? '☀️' : '🌙'; }
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var next = cur() === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        try { localStorage.setItem('dp_theme', next); } catch (err) {}
+        paint();
+      });
+      paint();
+    })();
     </script>
     </body></html>

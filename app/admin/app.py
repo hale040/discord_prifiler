@@ -525,14 +525,21 @@ def create_app(database_url: str) -> Flask:
     # профили и психо; сырые ленты собраны в раскрывающуюся группу «Данные».
     NAV_GROUPS = [
         ("Профили", [("user_profiles", "👤 Пользователи")]),
-        ("Психо", [("psych_profiles", "🧠 Психопрофили")]),
+        ("Психо", [("psych_profiles", "🧠 Психопрофили"),
+                  ("psych_signals", "📡 Сигналы"),
+                  ("profile_snapshots", "📸 Снимки профилей")]),
         ("Мессенджер", [("messages", "💬 Сообщения"),
                         ("message_revisions", "✏️ Правки"),
-                        ("reaction_events", "😀 Реакции")]),
-        ("Контекст", [("guild_members", "🏛 Участники"),
+                        ("reaction_events", "😀 Реакции"),
+                        ("attachments", "📎 Вложения")]),
+        ("Контекст", [("guild_member_profiles", "🏛 Участники"),
                       ("presence_snapshots", "🟢 Присутствие"),
                       ("interaction_aggregates", "↔ Взаимодействия"),
-                      ("channel_stats", "📊 Статы каналов")]),
+                      ("channel_states", "📊 Каналы"),
+                      ("user_games", "🎮 Игры"),
+                      ("user_interests", "❤️ Интересы"),
+                      ("roles", "🛡 Роли"),
+                      ("user_roles", "👥 Роли пользователей")]),
     ]
 
     @app.context_processor
@@ -541,8 +548,10 @@ def create_app(database_url: str) -> Flask:
         groups = [(title, [(t, label) for t, label in items if t in have])
                   for title, items in NAV_GROUPS]
         groups = [(t, its) for t, its in groups if its]
-        extra = [t for t in tables()
-                 if t not in {x for _, its in groups for x, _ in its}]
+        grouped = {x for _, its in groups for x, _ in its}
+        # служебные таблицы не показываем в «Ещё» даже если они есть в БД
+        hidden = {"alembic_version", "schema_version", "audit_log"}
+        extra = [t for t in tables() if t not in grouped and t not in hidden]
         return {"nav_tables": tables(), "nav_groups": groups,
                 "nav_extra": extra, "page": "",
                 "has_psych": "psych_profiles" in have}
@@ -585,9 +594,33 @@ def create_app(database_url: str) -> Flask:
                     text("SELECT created_at, action, target, result FROM audit_log "
                          "ORDER BY id DESC LIMIT 10")
                 ).mappings().all()
+        # Индикатор «коллектор жив»: последний timestamp guild-сообщений.
+        last_msg_ts = None
+        health = {}
+        try:
+            with engine.connect() as conn:
+                if "messages" in ts:
+                    last_msg_ts = conn.execute(text(
+                        "SELECT max(timestamp) FROM messages WHERE guild_id IS NOT NULL"
+                    )).scalar()
+                if "user_profiles" in ts and "pending_dm" in columns_of("user_profiles"):
+                    health["dm_pending"] = conn.execute(text(
+                        "SELECT count(*) FROM user_profiles WHERE pending_dm IS TRUE"
+                    )).scalar() or 0
+                if "user_profiles" in ts and "dm_status" in columns_of("user_profiles"):
+                    health["dm_stuck"] = conn.execute(text(
+                        "SELECT count(*) FROM user_profiles WHERE dm_status IN ('error','failed')"
+                    )).scalar() or 0
+                if "psych_profiles" in ts and "is_current" in columns_of("psych_profiles"):
+                    health["psych_current"] = conn.execute(text(
+                        "SELECT count(*) FROM psych_profiles WHERE is_current IS TRUE"
+                    )).scalar() or 0
+        except Exception:
+            pass  # diag-индикаторы не должны ронять дашборд
         return render(
             "dashboard", page="dash", db=app.config["DATABASE_URL"],
             counts=counts, total=total, recent=recent,
+            last_msg_ts=last_msg_ts, health=health, now=utcnow(),
         )
 
     # --- просмотр таблиц ----------------------------------------------------------
