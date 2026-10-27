@@ -110,6 +110,10 @@ VIEW_COLUMNS: dict[str, list[str]] = {
                        "created_at"],
     "psych_signals": ["id", "user_id", "signal_key", "severity"],
     "user_interests": ["id", "user_id", "topic", "evidence_count"],
+    # --- серверы / чаты / анкеты (миграция a00000000006) --------------------
+    "guilds": ["guild_id", "name"],
+    "chats": ["channel_id", "name", "collects_qa", "messages_total"],
+    "chat_members": ["author_id", "questionnaire", "updated_at"],
 }
 
 # Человекочитаемые заголовки колонок в лентах (сырые имена — в title-th).
@@ -127,6 +131,8 @@ COL_LABELS: dict[str, str] = {
     "timestamp": "время", "created_at": "создано", "last_updated": "обновлён",
     "joined_at": "вступил", "last_seen": "виден", "taken_at": "снимок",
     "last_poll_at": "поллинг",
+    "guild_id": "сервер", "channel_id": "чат", "collects_qa": "анкеты",
+    "questionnaire": "анкета", "updated_at": "обновлено",
 }
 
 # Ссылки «кто это?» — колонки, по которым строится ссылка на user_profiles.
@@ -588,6 +594,7 @@ def create_app(database_url: str) -> Flask:
     # вываливаются списком из 15 пунктов. Ключевые рабочие области — сверху:
     # профили и психо; сырые ленты собраны в раскрывающуюся группу «Данные».
     NAV_GROUPS = [
+        ("Серверы", [("guilds", "🖥 Серверы"), ("chats", "💬 Чаты")]),
         ("Профили", [("user_profiles", "👤 Пользователи")]),
         ("Психо", [("psych_profiles", "🧠 Психопрофили"),
                   ("psych_signals", "📡 Сигналы"),
@@ -609,6 +616,13 @@ def create_app(database_url: str) -> Flask:
     @app.context_processor
     def inject_nav():
         have = set(tables())
+        # ссылки навигации: таблицы -> обычный browse; спец-маршруты (guilds,
+        # chats) -> умные страницы, если таблицы новой схемы уже созданы
+        href_map = {"guilds": url_for("guilds_page"),
+                    "chats": url_for("chats_page")}
+
+        def nav_href(t: str) -> str:
+            return href_map.get(t) or url_for("browse", table=t)
         groups = [(title, [(t, label) for t, label in items if t in have])
                   for title, items in NAV_GROUPS]
         groups = [(t, its) for t, its in groups if its]
@@ -617,6 +631,7 @@ def create_app(database_url: str) -> Flask:
         hidden = {"alembic_version", "schema_version", "audit_log"}
         extra = [t for t in tables() if t not in grouped and t not in hidden]
         return {"nav_tables": tables(), "nav_groups": groups,
+                "nav_href": nav_href,
                 "nav_extra": extra, "page": "",
                 "has_psych": "psych_profiles" in have,
                 # выбор часового пояса в шапке (по умолчанию — из ENV ADMIN_TZ)
@@ -1632,6 +1647,7 @@ def create_app(database_url: str) -> Flask:
                 methodology={"prompt_sha256": ph,
                              "prompt_bytes": len(info["prompt"].encode("utf-8")),
                              "behavior_block": bool(info.get("behavior_present")),
+                             "questionnaires": int(info.get("questionnaires_injected") or 0),
                              "window_days": info.get("window_days")},
             )
             audit("psych_refresh", target=f"user={user_id}",
@@ -1833,6 +1849,179 @@ def create_app(database_url: str) -> Flask:
             flash(last, "ok")
             return redirect(url_for("actions_page"))
         return render("actions", page="actions", last=last)
+
+    # --- серверы → чаты → анкеты (миграция a00000000006) ---------------------- #
+    def _qa_tables_ok(*names: str) -> bool:
+        have = set(tables())
+        return all(t in have for t in names)
+
+    @app.route("/guilds", methods=["GET", "POST"])
+    def guilds_page():
+        """ID сервера → список чатов. Ручной ввод дополняет перенос из БД."""
+        if not _qa_tables_ok("guilds"):
+            abort(404)
+        g = Table("guilds", MetaData(), autoload_with=engine)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            if request.method == "POST":
+                raw = (request.form.get("guild_id") or "").strip()
+                if raw.isdigit():
+                    gid = int(raw)
+                    exists = conn.execute(sa_select(g.columns.guild_id).where(
+                        g.columns.guild_id == gid)).scalar()
+                    if not exists:
+                        conn.execute(sa_insert(g).values(
+                            guild_id=gid, name=(request.form.get("name") or "").strip()[:256],
+                            created_at=utcnow()))
+                        audit("guild_add", target=f"guild={gid}", result="ok")
+                    conn.commit()
+                return redirect(url_for("guilds_page"))
+            rows = conn.execute(
+                sa_select(g, sa_select(func.count(c.columns.channel_id))
+                          .where(c.columns.guild_id == g.columns.guild_id)
+                          .correlate(g).scalar_subquery().label("chats_n"),
+                          sa_select(func.count())
+                          .select_from(c.join(g, g.columns.guild_id == c.columns.guild_id))
+                          .where(c.columns.collects_qa.is_(True))
+                          .scalar_subquery().label("qa_chats_n"))
+                .order_by(g.columns.guild_id.desc())).mappings().all()
+        return render("guilds", page="guilds", rows=rows)
+
+    @app.route("/chats/<int:guild_id>")
+    @app.route("/chats")
+    def chats_page(guild_id: int | None = None):
+        """Список чатов сервера; галка «анкеты» включает подмешивание анкет."""
+        if not _qa_tables_ok("chats", "chat_members"):
+            abort(404)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        cm = Table("chat_members", MetaData(), autoload_with=engine)
+        pred = (c.columns.guild_id == guild_id) if guild_id is not None else None
+        with engine.connect() as conn:
+            sel = (sa_select(
+                c,
+                sa_select(func.count()).select_from(cm)
+                .where(cm.columns.channel_id == c.columns.channel_id)
+                .correlate(c).scalar_subquery().label("members_n"),
+                sa_select(func.count()).select_from(cm)
+                .where(cm.columns.channel_id == c.columns.channel_id,
+                       cm.columns.questionnaire.isnot(None))
+                .correlate(c).scalar_subquery().label("qa_n"))
+                .order_by(c.columns.messages_total.desc()))
+            if pred is not None:
+                sel = sel.where(pred)
+            rows = conn.execute(sel).mappings().all()
+            gname = None
+            if guild_id is not None and "guilds" in tables():
+                g = Table("guilds", MetaData(), autoload_with=engine)
+                gname = conn.execute(sa_select(g.columns.name).where(
+                    g.columns.guild_id == guild_id)).scalar()
+        return render("chats", page="chats", rows=rows, guild_id=guild_id,
+                      guild_name=gname or "")
+
+    @app.route("/chats/qa/<int:channel_id>", methods=["POST"])
+    def chat_toggle_qa(channel_id: int):
+        """Галка «анкеты»: чаты с collects_qa=TRUE отдают анкеты в промпт LLM."""
+        if not _qa_tables_ok("chats"):
+            abort(404)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        on = request.form.get("on") == "1"
+        with engine.connect() as conn:
+            conn.execute(sa_update(c).where(
+                c.columns.channel_id == channel_id).values(collects_qa=on))
+            conn.commit()
+        audit("chat_collects_qa", target=f"channel={channel_id}",
+              details="on" if on else "off", result="ok")
+        return redirect(request.referrer or url_for("chats_page"))
+
+    @app.route("/chats/members/<int:channel_id>")
+    def chat_members_page(channel_id: int):
+        """Участники чата + анкеты (ссылка на карточку анкетирования)."""
+        if not _qa_tables_ok("chats", "chat_members"):
+            abort(404)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        cm = Table("chat_members", MetaData(), autoload_with=engine)
+        up = Table("user_profiles", MetaData(), autoload_with=engine) \
+            if "user_profiles" in tables() else None
+        m = Table("messages", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            chat = conn.execute(sa_select(c).where(
+                c.columns.channel_id == channel_id)).mappings().first()
+            q = (request.args.get("q") or "").strip()
+            sel = (sa_select(
+                cm,
+                up.columns.username.label("username"),
+                up.columns.global_name.label("global_name"),
+                sa_select(func.count()).select_from(m)
+                .where(m.columns.channel_id == cm.columns.channel_id,
+                       m.columns.author_id == cm.columns.author_id)
+                .correlate(cm).scalar_subquery().label("msgs_n"))
+                .select_from(cm)
+                .outerjoin(up, up.columns.user_id == cm.columns.author_id)
+                .where(cm.columns.channel_id == channel_id)
+                .order_by(sa_text("msgs_n DESC NULLS LAST")))
+            if q:
+                like = f"%{q}%"
+                sel = sel.where(sa_or(
+                    cm.columns.questionnaire.ilike(like),
+                    up.columns.username.ilike(like),
+                    up.columns.global_name.ilike(like),
+                    cast(cm.columns.author_id, String).like(f"{q}%")))
+            members = conn.execute(sel).mappings().all()
+        return render("chat_members", page="chats", chat=chat,
+                      members=members, channel_id=channel_id, q=q)
+
+    @app.route("/qa/<int:channel_id>/<int:author_id>", methods=["GET", "POST"])
+    def questionnaire_edit(channel_id: int, author_id: int):
+        """Анкета участника — только текстом. Сохранение помечает обновлённое
+        время; психо-профиль пользователя пересчитывается кнопкой в карточке."""
+        if not _qa_tables_ok("chat_members"):
+            abort(404)
+        cm = Table("chat_members", MetaData(), autoload_with=engine)
+        up = Table("user_profiles", MetaData(), autoload_with=engine) \
+            if "user_profiles" in tables() else None
+        m = Table("messages", MetaData(), autoload_with=engine)
+        with engine.connect() as conn:
+            if request.method == "POST":
+                text_v = (request.form.get("questionnaire") or "").strip()
+                anchor_raw = (request.form.get("message_id") or "").strip()
+                anchor = int(anchor_raw) if anchor_raw.isdigit() else None
+                upd = {"questionnaire": text_v or None,
+                       "message_id": anchor, "updated_at": utcnow()}
+                res = conn.execute(sa_update(cm).where(
+                    cm.columns.channel_id == channel_id,
+                    cm.columns.author_id == author_id).values(**upd))
+                if res.rowcount == 0:      # участника ещё нет в чате — создаём
+                    conn.execute(sa_insert(cm).values(
+                        channel_id=channel_id, author_id=author_id, **upd))
+                conn.commit()
+                audit("questionnaire_save",
+                      target=f"channel={channel_id} user={author_id}",
+                      details=f"len={len(text_v)}", result="ok")
+                flash("Анкета сохранена. Для применения в психо профиле "
+                      "нажмите «🧠 Обновить» в карточке пользователя.", "ok")
+                return redirect(url_for("questionnaire_edit",
+                                         channel_id=channel_id,
+                                         author_id=author_id))
+            row = conn.execute(sa_select(cm).where(
+                cm.columns.channel_id == channel_id,
+                cm.columns.author_id == author_id)).mappings().first()
+            uname = None
+            if up is not None:
+                uname = conn.execute(sa_select(
+                    up.columns.username, up.columns.global_name).where(
+                    up.columns.user_id == author_id)).first()
+            # последние сообщения автора в этом чате — кандидаты в якоря ленты
+            anchors = conn.execute(
+                sa_select(m.columns.id, m.columns.timestamp,
+                          func.left(func.coalesce(m.columns.clean_content,
+                                                  m.columns.content), 80)
+                          .label("snippet"))
+                .where(m.columns.channel_id == channel_id,
+                       m.columns.author_id == author_id)
+                .order_by(m.columns.timestamp.desc()).limit(15)).mappings().all()
+        return render("questionnaire", page="chats", row=row,
+                      channel_id=channel_id, author_id=author_id,
+                      uname=uname, anchors=anchors)
 
     return app
 

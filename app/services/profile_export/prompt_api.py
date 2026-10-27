@@ -17,6 +17,7 @@ from .dialog import CONTEXT_WINDOW_SEC, build_dialog, rebuild_links
 from .transcript import DEFAULT_PROMPT_MAX_KB
 from .dossier import _date_only, build_dossier, render_prompt_md
 from .behavior import build_behavior_block
+from .questionnaire import fetch_questionnaires, inject_into_dialog, render_block
 
 
 def build_prompt_for_user(db_url: str, user_id: int, *,
@@ -65,6 +66,14 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
             window_sec=(context_window if context_window is not None
                         else _env_int("EXPORT_CONTEXT_WINDOW", CONTEXT_WINDOW_SEC)))
 
+        # анкеты (админка «Серверы → чаты с галкой „анкеты“»): вставляются в
+        # ленту служебными строками «[анкета] ...» + отдельный блок в промпте.
+        qa_items = fetch_questionnaires(conn)
+        qa_injected = 0
+        if qa_items:
+            dialog_msgs, qa_injected = inject_into_dialog(
+                dialog_msgs, names, qa_items, user_id)
+
         ns = argparse.Namespace(
             max_lines=None,
             prompt_max_kb=(prompt_max_kb if prompt_max_kb is not None
@@ -87,6 +96,8 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
                 msgs_all, user_id,
                 given_events=events_map.get(user_id),
                 presence_snaps=presence_map.get(user_id)),
+            questionnaire_block=(render_block(qa_items, user_id)
+                                 if qa_items else None),
         )
         st = dossier["statistics"]
         bh = dossier.get("behavior") or {}
@@ -107,6 +118,9 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
             "behavior_present": bool(bh.get("sessions")
                                      or bh.get("initiative_latency")
                                      or bh.get("segments")),
+            # снимок методики: анкеты (сведения от оператора) — часть промпта;
+            # admin пишет в methodology_snapshot из этого dict
+            "questionnaires_injected": qa_injected,
             "window_days": eff_window,
         }
     except SQLAlchemyError as e:

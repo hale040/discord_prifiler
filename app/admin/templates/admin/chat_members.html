@@ -1,0 +1,33 @@
+<h2>👥 Участники чата {{ channel_id }}{% if chat and chat.name %} «{{ chat.name }}»{% endif %}
+  <span class='pill'>{{ members|length }}</span></h2>
+<p class='muted'><a href="{{ url_for('chats_page', guild_id=chat.guild_id) if chat and chat.guild_id else url_for('chats_page') }}">← Чаты</a>
+  {% if chat and chat.collects_qa %}<span class='pill ok' style='margin-left:.5rem'>анкеты включены — попадают в промпт LLM</span>
+  {% elif chat %}<span class='pill warn' style='margin-left:.5rem'>галка «анкеты» на чате выключена — анкеты НЕ попадут в промпт</span>{% endif %}</p>
+
+<form method='get' class='card'>
+  <div class='formrow'>
+    <div style='flex:2'><label>Поиск (ник, ID, текст анкеты)</label>
+      <input type='search' name='q' value='{{ q }}' placeholder='например @nick или "живёт в"'></div>
+    <div style='flex:0;min-width:auto;display:flex;align-items:end;padding-bottom:1px'>
+      <button class='btn'>Найти</button>
+      <a class='btn gray' href="{{ url_for('chat_members_page', channel_id=channel_id) }}">сброс</a></div>
+  </div>
+</form>
+
+<div class='tbl-wrap' style='--cols: 5'>
+<table class='lenta'><colgroup><col style='width:170px'><col class='wide'><col style='width:90px'><col style='width:130px'><col style='width:120px'></colgroup>
+<thead><tr><th>участник</th><th>анкета</th><th>сообщений</th><th>обновлено</th><th></th></tr></thead>
+<tbody>
+{% for m in members %}<tr>
+  <td title='{{ m.author_id }}'>{% if m.global_name or m.username %}
+      <a href="/browse/user_profiles?col=user_id&val={{ m.author_id }}">@{{ m.global_name or m.username }}</a>
+    {% else %}{{ m.author_id }}{% endif %}</td>
+  <td class='clamp' title='{{ (m.questionnaire or "")|e }}'>{{ v_or(m.questionnaire) }}</td>
+  <td style='text-align:right'>{{ v_or(m.msgs_n) }}</td>
+  <td>{{ fmtdt(m.updated_at) if m.updated_at else '—' }}</td>
+  <td><a class='btn sm' href="{{ url_for('questionnaire_edit', channel_id=channel_id, author_id=m.author_id) }}"
+         title="редактировать анкету">{{ '✎ анкета' if m.questionnaire else '+ анкета' }}</a></td>
+</tr>{% else %}
+<tr><td colspan='5' class='muted'>Никого не найдено.</td></tr>
+{% endfor %}
+</tbody></table></div>

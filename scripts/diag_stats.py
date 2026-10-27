@@ -335,6 +335,29 @@ def main():
                 for u, st, fc, er in stuckp:
                     emit(f"pending user={u} status={st} fails={fc} err={er}")
 
+        # --- 7e. Серверы/чаты/анкеты (миграция a00000000006) ---
+        if table_exists(cur, "chats"):
+            section("\n## CHATS_QA")
+            emit(f"guilds={scalar(cur, 'SELECT count(*) FROM guilds') if table_exists(cur, 'guilds') else 'MISSING guilds'}")
+            emit(f"chats={scalar(cur, 'SELECT count(*) FROM chats')}")
+            emit(f"chats_collects_qa={scalar(cur, 'SELECT count(*) FROM chats WHERE collects_qa IS true')}")
+            emit(f"chat_members={scalar(cur, 'SELECT count(*) FROM chat_members') if table_exists(cur, 'chat_members') else 'MISSING chat_members'}")
+            if table_exists(cur, "chat_members"):
+                q_filled = scalar(cur,
+                    "SELECT count(*) FROM chat_members "
+                    "WHERE btrim(coalesce(questionnaire,'')) <> ''")
+                emit(f"questionnaires_filled={q_filled}")
+                orphan = scalar(cur, "SELECT count(*) FROM chat_members cm LEFT JOIN chats c ON c.channel_id = cm.channel_id WHERE c.channel_id IS NULL")
+                emit(f"members_orphan_no_chat={orphan}")  # >0 => перенос не покрывает авторов ЛС/левых каналов
+                if orphan not in ("ERR", 0):
+                    emit("WARN members_orphan_no_chat>0: анкеты этих участников не видны в админке (нет строки chats)")
+                qa_off = scalar(cur,
+                    "SELECT count(*) FROM chat_members cm JOIN chats c ON c.channel_id=cm.channel_id "
+                    "WHERE c.collects_qa IS NOT true AND btrim(coalesce(cm.questionnaire,'')) <> ''")
+                emit(f"qa_filled_but_chat_disabled={qa_off}")  # заполненные анкеты, которые НЕ попадут в промпт
+                if qa_off not in ("ERR", 0):
+                    emit(f"WARN qa_filled_but_chat_disabled={qa_off}: поставьте галку «анкеты» на чатах или это ожидаемо")
+
         # --- 8. схема/миграции ---
         section("\n## SCHEMA")
         sm = "alembic_version" if table_exists(cur, "alembic_version") else None

@@ -1,0 +1,28 @@
+<h2>{% if guild_id %}💬 Чаты сервера {{ guild_id }}{% if guild_name %} «{{ guild_name }}»{% endif %}{% else %}💬 Все чаты{% endif %}
+  <span class='pill'>{{ rows|length }}</span></h2>
+<p class='muted'>{% if guild_id %}<a href="{{ url_for('guilds_page') }}">← Серверы</a>{% else %}
+  Выберите сервер в разделе 🖥 Серверы — там список по ID.{% endif %}</p>
+
+<div class='tbl-wrap' style='--cols: 6'>
+<table class='lenta'><colgroup><col><col class='wide'><col style='width:90px'><col style='width:100px'><col style='width:110px'><col style='width:170px'></colgroup>
+<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>анкеты (галка)</th></tr></thead>
+<tbody>
+{% for r in rows %}<tr>
+  <td><a href="{{ url_for('chat_members_page', channel_id=r.channel_id) }}" title="участники и анкеты">{{ r.channel_id }}</a></td>
+  <td class='clamp' title='{{ r.name or "" }}'>{{ v_or(r.name) }}</td>
+  <td style='text-align:right'>{{ r.members_n }}</td>
+  <td style='text-align:right'>{% if r.qa_n %}<span class='pill ok'>{{ r.qa_n }}</span>{% else %}0{% endif %}</td>
+  <td style='text-align:right'>{{ r.messages_total }}</td>
+  <td>
+    {# галка «анкеты»: только отмеченные чаты отдают анкеты участников в промпт LLM #}
+    <form method='post' action="{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
+      <input type='hidden' name='on' value="{{ 0 if r.collects_qa else 1 }}">
+      <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'>
+        <input type='checkbox' onchange='this.form.submit()' {{ 'checked' if r.collects_qa }} style='width:auto'>
+        <span>{{ 'включены' if r.collects_qa else 'выкл' }}</span></label>
+    </form>
+  </td>
+</tr>{% else %}
+<tr><td colspan='6' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
+{% endfor %}
+</tbody></table></div>

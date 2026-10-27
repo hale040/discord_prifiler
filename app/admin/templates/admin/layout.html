@@ -183,13 +183,13 @@
         {% if items|length == 1 %}
           {% set t0, l0 = items[0] %}
           <a class="nav-direct {{ 'on' if page=='browse' and table==t0 }}"
-             href="{{ url_for('browse', table=t0) }}">{{ l0 }}</a>
+             href="{{ nav_href(t0) }}">{{ l0 }}</a>
         {% else %}
           <span class="navgroup {{ 'active' if page=='browse' and table in items|map(attribute=0)|list }}">
             <span class="ng-title">{{ title }} ▾</span>
             <span class="ng-menu">
               {% for t, l in items %}<a class="{{ 'on' if page=='browse' and table==t }}"
-                 href="{{ url_for('browse', table=t) }}">{{ l }}</a>{% endfor %}
+                 href="{{ nav_href(t) }}">{{ l }}</a>{% endfor %}
             </span>
           </span>
         {% endif %}

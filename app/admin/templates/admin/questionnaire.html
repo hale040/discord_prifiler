@@ -1,0 +1,36 @@
+<h2>📝 Анкета — {{ ('@' ~ (uname[1] or uname[0])) if uname else author_id }}
+  <span class='pill'>чат {{ channel_id }}</span></h2>
+<p class='muted'><a href="{{ url_for('chat_members_page', channel_id=channel_id) }}">← Участники чата</a>
+  &nbsp;·&nbsp; ID пользователя: {{ author_id }}</p>
+
+<form method='post' class='card'>
+  <div class='formrow'>
+    <div><label>Анкета (только текст; попадёт в запрос к нейронке как первичные сведения)</label>
+      <textarea name='questionnaire' rows='14' style='width:100%'
+        placeholder='Что известно о человеке: возраст, занятость, привычки, семья, здоровье, характер по наблюдениям оператора…'>{{ row.questionnaire if row and row.questionnaire else '' }}</textarea></div>
+  </div>
+  <div class='formrow'>
+    <div style='flex:2'><label>ID сообщения-якоря (необязательно)</label>
+      <input type='text' name='message_id' inputmode='numeric' value='{{ row.message_id if row and row.message_id else "" }}'
+        placeholder="анкета встанет в ленте рядом с этим сообщением"></div>
+    <div style='flex:0;min-width:auto;display:flex;align-items:end;padding-bottom:1px'>
+      <button class='btn'>💾 Сохранить анкету</button></div>
+  </div>
+  <p class='muted' style='margin:.6rem 0 0'>После сохранения нажмите «🧠 Обновить психо профиль»
+    в карточке пользователя — анкета будет подмешана в промпт (только если на чате стоит галка «анкеты»).
+    Выводы нейросети по анкете помечаются ссылкой «[анкета]», а выводы по чужим анкетам — «дугого пользователя».</p>
+</form>
+
+{% if anchors %}
+<h3>Последние сообщения автора в этом чате — кандидаты в якоря</h3>
+<div class='tbl-wrap' style='--cols: 3'>
+<table class='lenta'><colgroup><col style='width:190px'><col style='width:200px'><col class='wide'></colgroup>
+<thead><tr><th>ID сообщения</th><th>время</th><th>фрагмент</th></tr></thead>
+<tbody>
+{% for a in anchors %}<tr>
+  <td><code>{{ a.id }}</code></td>
+  <td>{{ fmtdt(a.timestamp) }}</td>
+  <td class='clamp' title='{{ (a.snippet or "")|e }}'>{{ v_or(a.snippet) }}</td>
+</tr>{% endfor %}
+</tbody></table></div>
+{% endif %}

@@ -657,3 +657,56 @@ class InteractionAggregate(Base):
     __table_args__ = (
         UniqueConstraint("source_user_id", "target_user_id", name="uq_interaction_pair"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Серверы, чаты и анкеты (миграция a00000000006)
+# Иерархия работы админки: ID сервера -> список чатов -> участники -> анкета.
+# Анкета — текст от оператора, попадает в промпт LLM как первичный источник
+# (см. app/services/profile_export/questionnaire.py). Галка «анкеты» на чате
+# (chats.collects_qa) включает подмешивание анкет этого чата в психо-профиль.
+# ---------------------------------------------------------------------------
+class Guild(Base):
+    """Сервер: заводится в админке по ID; данные подтягиваются из сообщений."""
+
+    __tablename__ = "guilds"
+
+    guild_id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+class Chat(Base):
+    """Чат сервера. collects_qa — галка «анкеты» для этого чата."""
+
+    __tablename__ = "chats"
+
+    channel_id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True)
+    guild_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    # галка «анкеты»: только чаты с TRUE отдают анкеты участников в промпт
+    collects_qa: Mapped[bool] = mapped_column(Boolean, default=False)
+    messages_total: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+class ChatMember(Base):
+    """Участник чата с анкетой (текст вручную; NULL = анкета не заполнена)."""
+
+    __tablename__ = "chat_members"
+
+    id: Mapped[int] = mapped_column(SnowflakeId, primary_key=True, autoincrement=True)
+    channel_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    author_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    questionnaire: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # сообщение-якорь в ленте, рядом с которым вставляется анкета (необязательно)
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("channel_id", "author_id", name="uq_chat_member"),
+    )

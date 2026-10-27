@@ -89,7 +89,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   history: dict | None = None,
                   psych: dict | None = None,
                   behavior: dict | None = None,
-                  role_names: dict | None = None) -> dict:
+                  role_names: dict | None = None,
+                  questionnaire_block: str | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
     max_bytes = _kb_to_bytes(getattr(args, "prompt_max_kb", None))
@@ -220,6 +221,9 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
         "history": history or {"snaps": [], "roles_hist": []},
         # активный психопрофиль от нейросети (если импортировался)
         "psych_profile": psych or {},
+        # анкета от оператора (questionnaire.py): текст + пометка, что это НЕ
+        # наблюдения; попадает в промпт отдельным блоком до транскрипта
+        "questionnaire": questionnaire_block or "",
         "transcript": transcript,
         # служебное: исходные сообщения транскрипта для точной подгонки веса
         # промпта (fit_prompt_size); в dataset.jsonl не сериализуется (main)
@@ -471,8 +475,13 @@ def _render_prompt_text(dossier: dict) -> str:
         + f"{_date_only(st.get('last_message_at'))}, {st.get('span_days')} дн. "
         + "MBTI/эннеаграмма — слабо валидные гипотезы, указывай confidence; "
           "это не клиническая диагностика.",
-        "Верни ТОЛЬКО валидный JSON по схеме выше.",
     ]
+    # блок анкеты (если оператор заполнял): ПЕРВИЧНЫЙ источник, выводы по ней
+    # помечать «[анкета]»
+    qa = (dossier.get("questionnaire") or "").strip()
+    if qa:
+        lines += ["", qa, ""]
+    lines.append("Верни ТОЛЬКО валидный JSON по схеме выше.")
     return "\n".join(lines)
 
 
