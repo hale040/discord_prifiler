@@ -22,16 +22,9 @@ body {
   color: var(--text);
   line-height: 1.6;
 }
-h1, h2, h3, .section__title, .stat__num, .card__price, .hero__lead {
+h1, h2, h3, .section__title, .stat__num, .offer__price, .hero__lead {
   font-family: "Oswald", "PT Sans", "Segoe UI", Roboto, Arial, sans-serif;
   letter-spacing: .01em;
-}
-.visually-hidden {
-  position: absolute !important;
-  width: 1px; height: 1px;
-  margin: -1px; padding: 0; border: 0;
-  clip: rect(0 0 0 0); clip-path: inset(50%);
-  overflow: hidden; white-space: nowrap;
 }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
@@ -163,54 +156,19 @@ a { color: inherit; text-decoration: none; }
 .section--dark { background: var(--bg-2); }
 .section__title { font-size: clamp(1.5rem, 3vw, 2rem); margin-bottom: .5rem; }
 .section__subtitle { color: var(--muted); margin-bottom: 1.6rem; }
-#catalog .section__title, #pricing .section__title, #about .section__title { text-align: left; }
-#catalog .section__subtitle, #pricing .section__subtitle { text-align: left; }
+#catalog .section__title, #offers .section__title, #about .section__title { text-align: left; }
+#catalog .section__subtitle { text-align: left; }
 
 /* Light sections */
 main > .section:not(.section--dark) { background: #f2f4f7; color: var(--text-dark); }
 main > .section:not(.section--dark) .section__title { color: var(--text-dark); }
 .slider .slide__title { color: #fff; }
-main > .section:not(.section--dark) .section__subtitle,
-main > .section:not(.section--dark) .card__desc,
-main > .section:not(.section--dark) .price__note { color: #5b6672; }
+main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 
-/* ===== Catalog ===== */
-.catalog__grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 1.4rem;
-}
-.card {
-  background: #fff; border-radius: var(--radius); padding: 1.6rem;
-  box-shadow: 0 4px 16px rgba(0,0,0,.06);
-  border: 1px solid #e3e7ec;
-  transition: transform .2s, box-shadow .2s;
-  display: flex; flex-direction: column; gap: .5rem;
-}
-.card:hover { transform: translateY(-5px); box-shadow: 0 12px 28px rgba(0,0,0,.12); }
-.card__media { position: relative; display: block; border-radius: 10px; overflow: hidden; margin-bottom: 1rem; aspect-ratio: 3 / 2; background: #e6eaf0; }
-.card__media img { width: 100%; height: 100%; object-fit: cover; transition: transform .4s ease; }
-.card:hover .card__media img { transform: scale(1.06); }
-.card__badge {
-  position: absolute; top: .7rem; left: .7rem; z-index: 1;
-  background: var(--accent); color: #fff;
-  font-family: "Oswald", sans-serif; font-weight: 600; font-size: .72rem;
-  text-transform: uppercase; letter-spacing: .06em;
-  padding: .25rem .65rem; border-radius: 999px;
-  box-shadow: 0 4px 12px rgba(229,103,12,.45);
-}
-.card__badge--inox { background: #2b6cb0; box-shadow: 0 4px 12px rgba(43,108,176,.4); }
-/* тёмная подложка под изображениями проката — металл выглядит «студийно» */
-.card__media::after {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(180deg, transparent 62%, rgba(15,18,22,.28));
-}
+/* ===== About media (общие отступы/подпись блока «О компании») ===== */
 .about__media { margin: 0 0 1.5rem; }
 .about__media img { border-radius: var(--radius); box-shadow: 0 14px 34px rgba(0,0,0,.12); }
 .about__media figcaption { font-size: .85rem; color: var(--muted); margin-top: .5rem; text-align: center; }
-.card__title { font-size: 1.15rem; }
-.card__desc { font-size: .9rem; color: #5b6672; flex: 1; }
-.card__price { font-weight: 800; color: var(--accent-dark); }
-.card__link { font-weight: 600; font-size: .9rem; color: #2b6cb0; }
-.card__link:hover { text-decoration: underline; }
 
 /* ===== Advantages ===== */
 .adv__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1.4rem; margin-top: 1.2rem; }
@@ -220,59 +178,6 @@ main > .section:not(.section--dark) .price__note { color: #5b6672; }
 .adv__icon svg { width: 100%; height: 100%; }
 .adv h3 { margin-bottom: .4rem; font-size: 1.05rem; }
 .adv p { color: var(--muted); font-size: .9rem; }
-
-/* ===== Pricing ===== */
-.price__toolbar { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
-.price__search {
-  flex: 1; min-width: 220px;
-  padding: .8rem 1.1rem; border-radius: var(--radius);
-  border: 1px solid #d4dae1; font-size: 1rem; background: #fff; color: var(--text-dark);
-}
-.price__search:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.price__filter {
-  padding: .8rem 1rem; border-radius: var(--radius);
-  border: 1px solid #d4dae1; font-size: .95rem; background: #fff; color: var(--text-dark);
-  cursor: pointer;
-}
-.price__filter:focus { outline: 2px solid var(--accent); border-color: transparent; }
-
-.price__timer {
-  background: rgba(255,122,26,.1);
-  border: 1px dashed var(--accent);
-  color: #b45309;
-  border-radius: var(--radius);
-  padding: .7rem 1.1rem;
-  font-size: .92rem;
-  margin-bottom: 1.4rem;
-}
-main > .section:not(.section--dark) .price__timer { color: #9a5b1f; }
-.price__timer b { color: var(--accent-dark); font-variant-numeric: tabular-nums; }
-
-.price__table-wrap { overflow-x: auto; border-radius: var(--radius); box-shadow: 0 4px 16px rgba(0,0,0,.06); max-width: 100%; }
-.price__table { width: 100%; border-collapse: collapse; background: #fff; min-width: 720px; }
-.price__table th, .price__table td { padding: .8rem 1rem; text-align: left; font-size: .93rem; }
-@media (max-width: 760px) {
-  .price__table th, .price__table td { padding: .65rem .55rem; font-size: .82rem; }
-}
-.price__table thead th {
-  background: var(--bg-2); color: #fff; text-transform: uppercase; font-size: .78rem; letter-spacing: .04em;
-}
-.price__table tbody tr { border-bottom: 1px solid #eceff3; }
-.price__table tbody tr.is-hidden { display: none; }
-.price__table tbody tr:hover { background: #fff6ef; }
-.price__table td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-.stock--yes { color: #1a7f37; font-weight: 600; }
-.stock--low { color: #b45309; font-weight: 600; }
-.stock--no  { color: #b91c1c; }
-.price__note { margin-top: 1rem; font-size: .85rem; color: #5b6672; }
-.price__note a { color: #2b6cb0; }
-
-.btn--order {
-  background: var(--accent); color: #fff; border: none; cursor: pointer;
-  font-weight: 700; font-size: .82rem; border-radius: 8px;
-  padding: .45rem .9rem; white-space: nowrap; transition: background .2s, transform .15s;
-}
-.btn--order:hover { background: var(--accent-dark); transform: translateY(-1px); }
 
 /* ===== Calculator (white module on dark section) ===== */
 .calc {
@@ -656,36 +561,6 @@ main > .section:not(.section--dark) .price__timer { color: #9a5b1f; }
 .adv__body h3 { font-size: 1.08rem; }
 .adv__body p { color: var(--muted); font-size: .9rem; }
 
-/* ===== Как проходит поставка (блок ниже преимуществ) ===== */
-.steps__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.4rem; margin-top: 1.4rem; }
-.step {
-  position: relative;
-  background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius);
-  padding: 0 1.4rem 1.4rem; overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0,0,0,.06);
-  transition: transform .2s, box-shadow .2s;
-}
-.step:hover { transform: translateY(-5px); box-shadow: 0 14px 30px rgba(0,0,0,.12); }
-.step__media { margin: 0 -1.4rem 1.1rem; aspect-ratio: 16 / 9; overflow: hidden; background: #dfe4ea; }
-.step__media img { width: 100%; height: 100%; object-fit: cover; }
-.step__num {
-  position: absolute; top: .7rem; left: .7rem;
-  font-family: "Oswald", sans-serif; font-weight: 700; font-size: 1.5rem;
-  color: #fff; background: var(--accent);
-  padding: .1rem .6rem; border-radius: 8px;
-  box-shadow: 0 6px 16px rgba(229,103,12,.4);
-}
-.step h3 { font-size: 1.1rem; margin-bottom: .4rem; color: var(--text-dark); }
-.step p { color: #5b6672; font-size: .92rem; }
-.step__list { list-style: none; margin-top: .8rem; display: grid; gap: .35rem; }
-.step__list li { position: relative; padding-left: 1.3rem; font-size: .86rem; color: #414b56; font-weight: 700; }
-.step__list li::before {
-  content: ""; position: absolute; left: 0; top: .42rem;
-  width: .7rem; height: .38rem;
-  border-left: 2.5px solid var(--accent); border-bottom: 2.5px solid var(--accent);
-  transform: rotate(-45deg);
-}
-main > .section:not(.section--dark) .step__num { color: #fff; }
 /* ===== «Почему выбирают нас» — светлый акцентный блок (как на металлостал.рф) ===== */
 .section--accent { background: #eef1f5; color: var(--text-dark); }
 #advantages.section--dark .section__title { color: var(--text); }
@@ -708,7 +583,6 @@ main > .section:not(.section--dark) .step__num { color: #fff; }
 @media (max-width: 560px) {
   .slide { flex-basis: 88%; }
   .slide__title { font-size: 1.3rem; }
-  .steps__grid { grid-template-columns: 1fr; }
 }
 
 /* ===== Шапка: навигация в два ряда на узких экранах ===== */

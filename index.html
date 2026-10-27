@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-price-updated="2026-10-15">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Компания «МЕТАЛЛОСТАЛЬ» - продажа металлопроката и услуги металлообработки</title>
   <meta name="description" content="Компания «МЕТАЛЛОСТАЛЬ» — надежный поставщик на рынке черных, цветных, нержавеющих и спецсталей. Более 10 000 уникальных позиций, резка, гибка, изготовление по чертежам, доставка по всей России.">
-  <link rel="icon" type="image/svg+xml" href="assets/img/logo-metallostal.png">
+  <link rel="icon" type="image/png" href="assets/img/logo-metallostal.png">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Компания «МЕТАЛЛОСТАЛЬ» — продажа металлопроката и услуги металлообработки">
   <meta property="og:description" content="Более 10 000 уникальных позиций в ассортименте компании. Широкий спектр услуг по металлообработке: гибка, резка, изготовление по чертежам. Оперативная логистика — доставка металла по всей России.">
@@ -38,8 +38,7 @@
       "addressLocality": "Екатеринбург",
       "addressCountry": "RU"
     },
-    "openingHours": "Mo-Su 09:00-20:00",
-    "aggregateRating": { "@type": "AggregateRating", "ratingValue": "4.9", "reviewCount": "214" }
+    "openingHours": "Mo-Su 09:00-20:00"
   }
   </script>
 </head>
@@ -56,12 +55,14 @@
       <nav class="nav" id="nav" aria-label="Основная навигация">
         <a href="#catalog" class="nav__link">Каталог</a>
         <a href="#services" class="nav__link">Услуги</a>
-        <a href="#sro" class="nav__link nav__link--optional">СРО</a>
-        <a href="#stages" class="nav__link nav__link--optional">Этапы</a>
+        <a href="#sro" class="nav__link">СРО</a>
+        <a href="#stages" class="nav__link">Этапы</a>
         <a href="#advantages" class="nav__link">Преимущества</a>
-        <a href="#calculator" class="nav__link nav__link--optional">Калькулятор</a>
-        <a href="#delivery" class="nav__link nav__link--optional">Доставка</a>
-        <a href="#about" class="nav__link nav__link--optional">О компании</a>
+        <a href="#calculator" class="nav__link">Калькулятор</a>
+        <a href="#reviews" class="nav__link">Отзывы</a>
+        <a href="#delivery" class="nav__link">Доставка</a>
+        <a href="#faq" class="nav__link">Вопросы</a>
+        <a href="#about" class="nav__link">О компании</a>
         <a href="#contacts" class="nav__link">Контакты</a>
       </nav>
 
@@ -150,58 +151,63 @@
         <p class="section__subtitle reveal">Более 10&nbsp;000 уникальных позиций в ассортименте компании. В наличии и под заказ отгружаем продукцию с отметкой РТ-Техприёмка — Авиатехприёмка АТП</p>
 
         <div class="catalog__grid catalog__grid--groups">
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="armatura">
             <img class="gcard__pic" src="assets/img/cat-sortovoj.png" alt="Сортовой прокат" loading="lazy" width="221" height="221">
             <span class="gcard__count">16&nbsp;112</span>
             <h3 class="gcard__title">Сортовой прокат</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="nerzhaveika">
             <img class="gcard__pic" src="assets/img/cat-nerzhavej.png" alt="Нержавеющий прокат" loading="lazy" width="221" height="221">
             <span class="gcard__count">16&nbsp;401</span>
             <h3 class="gcard__title">Нержавеющий прокат</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="krug-polosa">
             <img class="gcard__pic" src="assets/img/cat-cvetnoy.png" alt="Цветной прокат" loading="lazy" width="221" height="221">
             <span class="gcard__count">13&nbsp;214</span>
             <h3 class="gcard__title">Цветной прокат</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="list-gk">
             <img class="gcard__pic" src="assets/img/cat-list.png" alt="Листовой прокат" loading="lazy" width="221" height="221">
             <span class="gcard__count">1&nbsp;063</span>
             <h3 class="gcard__title">Листовой прокат</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="truba">
             <img class="gcard__pic" src="assets/img/cat-trubnyj.png" alt="Трубный прокат" loading="lazy" width="221" height="221">
             <span class="gcard__count">4&nbsp;431</span>
             <h3 class="gcard__title">Трубный прокат</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="nerzhaveika">
             <img class="gcard__pic" src="assets/img/cat-titan.png" alt="Титановый прокат" loading="lazy" width="221" height="221">
             <span class="gcard__count">1&nbsp;229</span>
             <h3 class="gcard__title">Титановый</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="truba">
             <img class="gcard__pic" src="assets/img/cat-truboprovod.png" alt="Трубопроводная арматура" loading="lazy" width="221" height="221">
             <span class="gcard__count">830</span>
             <h3 class="gcard__title">Трубопроводная арматура</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="ugolok">
             <img class="gcard__pic" src="assets/img/cat-zhd-oborud.png" alt="ЖД оборудование" loading="lazy" width="200" height="200">
             <span class="gcard__count">289</span>
             <h3 class="gcard__title">ЖД оборудование</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="balka">
             <img class="gcard__pic" src="assets/img/cat-prom.png" alt="Промышленное оборудование" loading="lazy" width="200" height="200">
             <span class="gcard__count">232</span>
             <h3 class="gcard__title">Промышленное оборудование</h3>
           </a>
-          <a class="gcard reveal" href="#calculator">
+          <a class="gcard reveal" href="#calculator" data-calc="krug-polosa">
             <img class="gcard__pic" src="assets/img/cat-metizy.png" alt="Метизы" loading="lazy" width="200" height="200">
             <span class="gcard__count">7</span>
             <h3 class="gcard__title">Метизы</h3>
           </a>
         </div>
+      </div>
+    </section>
 
+    <!-- ===== НАШИ ПРЕДЛОЖЕНИЯ (отдельная секция, один h2) ===== -->
+    <section class="section section--alt" id="offers">
+      <div class="container">
         <div class="offers__head reveal">
           <h2 class="section__title">Наши предложения</h2>
           <span class="offers__updated">Обновлено: <span id="priceDate"></span></span>
@@ -404,7 +410,7 @@
           </div>
           <div class="calc__checks">
             <label><input type="checkbox" id="calcCut"> Резка в размер (+1 500 ₽/т)</label>
-            <label><input type="checkbox" id="calcDelivery"> Доставка по Москве (+8 000 ₽)</label>
+            <label><input type="checkbox" id="calcDelivery"> Доставка до терминала ТК (+8 000 ₽)</label>
           </div>
           <div class="calc__result">
             <div>Итого: <span id="calcSum">—</span><small class="calc__hint" id="calcHint"></small></div>
@@ -678,8 +684,8 @@
 
         <form class="form reveal" id="leadForm" novalidate>
           <h3>Оставить заявку</h3>
-          <input type="text" name="name" placeholder="Ваше имя *" required>
-          <input type="tel" name="phone" id="phoneInput" placeholder="Телефон *" required>
+          <input type="text" name="name" placeholder="Ваше имя *" required minlength="2" autocomplete="name">
+          <input type="tel" name="phone" id="phoneInput" placeholder="Телефон *" required inputmode="tel" autocomplete="tel" aria-describedby="formStatus">
           <textarea name="message" rows="3" placeholder="Что нужно? (позиция, объём, сроки)"></textarea>
           <label class="form__agree"><input type="checkbox" id="agree" required> Согласен на обработку персональных данных</label>
           <button type="submit" class="btn btn--accent btn--block">Отправить заявку</button>
@@ -723,19 +729,20 @@
   </div>
 
   <!-- Modal -->
-  <div class="modal" id="modal">
+  <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <div class="modal__box">
       <button class="modal__close" id="modalClose" aria-label="Закрыть">×</button>
       <h3 id="modalTitle">Заказать звонок</h3>
       <p id="modalText">Оставьте телефон — перезвоним в течение 15 минут.</p>
       <form id="modalForm">
-        <input type="tel" placeholder="+7 (___) ___-__-__" id="modalPhone" required>
+        <input type="tel" placeholder="+7 (___) ___-__-__" id="modalPhone" required inputmode="tel" autocomplete="tel" aria-describedby="modalStatus">
         <button type="submit" class="btn btn--accent btn--block">Жду звонка</button>
       </form>
-      <p class="form__status" id="modalStatus"></p>
+      <p class="form__status" id="modalStatus" role="status" aria-live="polite"></p>
     </div>
   </div>
 
-  <script src="script.js"></script>
+  <noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
+  <script src="script.js" defer></script>
 </body>
 </html>

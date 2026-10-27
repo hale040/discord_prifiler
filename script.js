@@ -30,6 +30,19 @@ const PRICE_DATA = [
 const fmt = n => n.toLocaleString("ru-RU") + " ₽";
 
 /* =========================================================
+   Единый источник контактов (шапка, JSON-LD, PDF/DOCX).
+   ========================================================= */
+const CONTACTS = {
+  phoneDisplay: "+7 (343) 202-00-01",
+  email: "4499@metallostal.ru",
+};
+
+// Канал приёма заявок: Formspree/Telegram-bot URL.
+// Пока пусто — лиды копятся в localStorage ("leads_queue"), не теряясь.
+const LEAD_WEBHOOK = ""; // напр.: "https://formspree.io/f/xxxxxxx"
+const METRIKA_ID = null; // id Яндекс.Метрики после подключения счётчика
+
+/* =========================================================
    Таблица прайса вынесена из страницы (блок «Прайс» удалён).
    Данные PRICE_DATA используются только для генерации
    файлов прайса (PDF/CSV) в разделе «Документы».
@@ -39,7 +52,7 @@ const fmt = n => n.toLocaleString("ru-RU") + " ₽";
    Скачивание документов (PDF / CSV / DOCX) из раздела «Документы»
    ========================================================= */
 (function () {
-  const COMPANY = "ООО «Металлостал» · +7 (495) 123-45-67 · info@metallostal-example.ru";
+  const COMPANY = `ООО «Металлостал» · ${CONTACTS.phoneDisplay} · ${CONTACTS.email}`;
 
   function triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
@@ -143,7 +156,7 @@ const fmt = n => n.toLocaleString("ru-RU") + " ₽";
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:body>
 <w:p><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t>ZAYAVKA NA POSAVKU METALLOPROKATA</w:t></w:r></w:p>
-<w:p><w:r><w:t>To: OOO Metalostal, tel. +7 (495) 123-45-67, info@metallostal-example.ru</w:t></w:r></w:p>
+<w:p><w:r><w:t>To: OOO Metalostal, tel. ${CONTACTS.phoneDisplay}, ${CONTACTS.email}</w:t></w:r></w:p>
 <w:p><w:r><w:t>Date: ______  Request No.: ______</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Customer:</w:t></w:r></w:p>
 <w:p><w:r><w:t>Company / FIO: ________________________________________</w:t></w:r></w:p>
@@ -349,17 +362,31 @@ const calcDelivery = document.getElementById("calcDelivery");
 const calcSum = document.getElementById("calcSum");
 const calcHint = document.getElementById("calcHint");
 
-// наполняем select уникальными категориями по цене "от"
-const calcOptions = [
-  { label: "Арматура — 42 000 ₽/т", price: 42000 },
-  { label: "Уголок — 48 000 ₽/т", price: 48000 },
-  { label: "Круг / полоса — 49 000 ₽/т", price: 49000 },
-  { label: "Лист ГК — 51 000 ₽/т", price: 51000 },
-  { label: "Швеллер — 54 000 ₽/т", price: 54000 },
-  { label: "Труба — 56 000 ₽/т", price: 56000 },
-  { label: "Балка — 58 000 ₽/т", price: 58000 },
-  { label: "Нержавейка AISI 304 — 145 000 ₽/т", price: 145000 },
-];
+// наполняем select категориями строго из PRICE_DATA (единый источник цен)
+const CATEGORY_ALIASES = {
+  "Арматура А500С": "Арматура",
+  "Арматура А240 (гладкая)": "Арматура гладкая",
+  "Балка двутавровая": "Балка",
+  "Швеллер": "Швеллер",
+  "Уголок равнополочный": "Уголок",
+  "Лист горячекатаный": "Лист ГК",
+  "Лист холоднокатаный": "Лист ХК",
+  "Лист рифлёный": "Лист рифлёный",
+  "Труба профильная": "Труба профильная",
+  "Труба электросварная": "Труба э/с",
+  "Круг горячекатаный": "Круг / полоса",
+  "Полоса": "Круг / полоса",
+  "Лист нержавеющий": "Нержавейка AISI 304",
+  "Круг нержавеющий": "Нержавейка AISI 316",
+};
+const calcOptions = (() => {
+  const byName = new Map(); // alias -> минимальная цена (позиция «от»)
+  PRICE_DATA.forEach(i => {
+    const label = CATEGORY_ALIASES[i.name] || i.name;
+    if (!byName.has(label) || i.price < byName.get(label)) byName.set(label, i.price);
+  });
+  return Array.from(byName, ([label, price]) => ({ label: `${label} — от ${price.toLocaleString("ru-RU")} ₽/т`, price }));
+})();
 calcType.innerHTML = calcOptions.map((o, i) =>
   `<option value="${i}">${o.label}</option>`).join("");
 
@@ -384,6 +411,26 @@ function calcUpdate() {
 [calcType, calcWeight, calcCut, calcDelivery].forEach(el =>
   el.addEventListener("change", calcUpdate));
 calcWeight.addEventListener("input", calcUpdate);
+
+// Клик по карточке категории каталога предвыбирает тип проката в калькуляторе
+const CALC_KEYWORDS = {
+  "armatura":     ["арматура"],
+  "nerzhaveika":  ["нержав"],
+  "krug-polosa":  ["круг", "полоса", "метиз"],
+  "list-gk":      ["лист гк", "лист хк", "рифлён", "листов"],
+  "truba":        ["труба", "трубопровод"],
+  "ugolok":       ["уголок", "жд"],
+  "balka":        ["балка", "швеллер", "промышлен"],
+};
+document.querySelectorAll(".gcard[data-calc]").forEach(card => {
+  card.addEventListener("click", () => {
+    const keys = CALC_KEYWORDS[card.dataset.calc] || [];
+    const idx = calcOptions.findIndex(o =>
+      keys.some(k => o.label.toLowerCase().includes(k)));
+    if (idx >= 0) { calcType.value = String(idx); calcUpdate(); }
+  });
+});
+
 calcUpdate();
 
 document.getElementById("calcOrder").addEventListener("click", () => {
@@ -420,16 +467,32 @@ const modalTitle = document.getElementById("modalTitle");
 const modalText = document.getElementById("modalText");
 
 const DEFAULT_MODAL_TEXT = "Оставьте телефон — перезвоним в течение 15 минут.";
+let lastFocused = null;
 
 function openModal(html, title) {
+  lastFocused = document.activeElement;
   modalText.innerHTML = html || DEFAULT_MODAL_TEXT;
   modalTitle.textContent = title || "Заказать звонок";
   modal.classList.add("open");
+  const input = document.getElementById("modalPhone");
+  setTimeout(() => input && input.focus(), 60);
 }
 function closeModal() {
   modal.classList.remove("open");
   modalStatus.textContent = "";
+  if (lastFocused && lastFocused.focus) lastFocused.focus();
 }
+
+// focus-trap: Tab не должен выходить за пределы открытой модалки
+modal.addEventListener("keydown", e => {
+  if (e.key !== "Tab" || !modal.classList.contains("open")) return;
+  const focusables = modal.querySelectorAll("button, input, [href], select, textarea");
+  if (!focusables.length) return;
+  const first = focusables[0], last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+
 document.getElementById("callBtn").addEventListener("click", () => openModal());
 
 // ===== Кнопки «Заказать» в блоке «Наши предложения» =====
@@ -446,7 +509,7 @@ modalClose.addEventListener("click", closeModal);
 modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
 
-modalForm.addEventListener("submit", e => {
+modalForm.addEventListener("submit", async e => {
   e.preventDefault();
   const phone = document.getElementById("modalPhone").value;
   if (phone.replace(/\D/g, "").length < 11) {
@@ -454,28 +517,57 @@ modalForm.addEventListener("submit", e => {
     modalStatus.className = "form__status err";
     return;
   }
-  modalStatus.textContent = "Заявка принята! Перезвоним в течение 15 минут.";
-  modalStatus.className = "form__status ok";
-  setTimeout(closeModal, 2500);
+  const sent = await sendLead({ type: "callback", phone, page: location.href, ts: new Date().toISOString() });
+  modalStatus.textContent = sent
+    ? "Заявка принята! Перезвоним в течение 15 минут."
+    : "Не удалось отправить. Позвоните сами: " + CONTACTS.phoneDisplay;
+  modalStatus.className = "form__status " + (sent ? "ok" : "err");
+  if (sent) setTimeout(closeModal, 2500);
 });
 
 /* =========================================================
-   Форма заявки (валидация)
+   Форма заявки (валидация + отправка)
    ========================================================= */
+
+async function sendLead(payload) {
+  try {
+    if (LEAD_WEBHOOK) {
+      await fetch(LEAD_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      const q = JSON.parse(localStorage.getItem("leads_queue") || "[]");
+      q.push(payload);
+      localStorage.setItem("leads_queue", JSON.stringify(q));
+    }
+    return true;
+  } catch (err) {
+    console.error("Не удалось отправить заявку:", err);
+    return false;
+  }
+}
+
+document.addEventListener("click", e => {
+  const goal = e.target.closest("#callBtn, .js-order, #calcOrder, .header__phone, .fab--wa");
+  if (goal && window.ym) { try { ym(METRIKA_ID, "reachGoal", "click_contact"); } catch (_) {} }
+});
+
 const leadForm = document.getElementById("leadForm");
 const formStatus = document.getElementById("formStatus");
 
-leadForm.addEventListener("submit", e => {
+leadForm.addEventListener("submit", async e => {
   e.preventDefault();
   const name = leadForm.elements.name;
   const phone = leadForm.elements.phone;
   const agree = document.getElementById("agree");
   let ok = true;
 
-  [name, phone].forEach(f => f.classList.remove("invalid"));
+  [name, phone].forEach(f => { f.classList.remove("invalid"); f.setAttribute("aria-invalid", "false"); });
 
-  if (name.value.trim().length < 2) { name.classList.add("invalid"); ok = false; }
-  if (phone.value.replace(/\D/g, "").length < 11) { phone.classList.add("invalid"); ok = false; }
+  if (name.value.trim().length < 2) { name.classList.add("invalid"); name.setAttribute("aria-invalid", "true"); ok = false; }
+  if (phone.value.replace(/\D/g, "").length < 11) { phone.classList.add("invalid"); phone.setAttribute("aria-invalid", "true"); ok = false; }
   if (!agree.checked) ok = false;
 
   if (!ok) {
@@ -483,9 +575,21 @@ leadForm.addEventListener("submit", e => {
     formStatus.className = "form__status err";
     return;
   }
-  formStatus.textContent = "Спасибо, " + name.value.trim() + "! Заявка отправлена (демо).";
-  formStatus.className = "form__status ok";
-  leadForm.reset();
+  formStatus.textContent = "Отправляем…";
+  formStatus.className = "form__status";
+  const sent = await sendLead({
+    type: "lead",
+    name: name.value.trim(),
+    phone: phone.value,
+    message: leadForm.elements.message.value.trim(),
+    page: location.href,
+    ts: new Date().toISOString(),
+  });
+  formStatus.textContent = sent
+    ? "Спасибо, " + name.value.trim() + "! Заявка принята — менеджер свяжется с вами."
+    : "Не удалось отправить заявку. Позвоните нам: " + CONTACTS.phoneDisplay;
+  formStatus.className = "form__status " + (sent ? "ok" : "err");
+  if (sent) leadForm.reset();
   setTimeout(() => { formStatus.textContent = ""; }, 6000);
 });
 
@@ -592,11 +696,12 @@ leadForm.addEventListener("submit", e => {
   restart();
 })();
 
-// ===== Дата обновления прайса (авто) =====
+// ===== Дата обновления прайса (берётся из git-коммита script.js, см. tools/update-price-date.sh;
+// при недоступности — сегодняшняя дата как fallback) =====
 (function () {
   const el = document.getElementById("priceDate");
-  if (el) {
-    const d = new Date();
-    el.textContent = String(d.getDate()).padStart(2, "0") + "." + String(d.getMonth() + 1).padStart(2, "0") + "." + d.getFullYear();
-  }
+  if (!el) return;
+  const iso = document.documentElement.getAttribute("data-price-updated");
+  const d = iso ? new Date(iso) : new Date();
+  el.textContent = String(d.getDate()).padStart(2, "0") + "." + String(d.getMonth() + 1).padStart(2, "0") + "." + d.getFullYear();
 })();

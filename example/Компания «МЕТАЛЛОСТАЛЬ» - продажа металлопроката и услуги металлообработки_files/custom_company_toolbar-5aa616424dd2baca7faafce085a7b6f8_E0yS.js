@@ -1,1 +1,0 @@
-app.modules.stickingCustomToolbar=function(o){function n(){var o=$(".js-company-head-wrapper");a=o.offset().top+o.outerHeight(),t()}function t(){$(".js-custom-company-toolbar").toggleClass("fixed",$win.scrollTop()>a)}function s(){$win.on("scroll",t)}var a;return o.load=function(){n(),s()},o}(app.modules.stickingCustomToolbar||{});
