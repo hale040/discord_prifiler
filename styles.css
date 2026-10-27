@@ -22,7 +22,7 @@ body {
   color: var(--text);
   line-height: 1.6;
 }
-h1, h2, h3, .section__title, .stat__num, .offer__price, .hero__lead {
+h1, h2, h3, .section__title, .stat__num, .hero__lead {
   font-family: "Oswald", "PT Sans", "Segoe UI", Roboto, Arial, sans-serif;
   letter-spacing: .01em;
 }
@@ -152,11 +152,10 @@ a { color: inherit; text-decoration: none; }
 
 /* ===== Sections ===== */
 .section { padding: 2.8rem 0; }
-.section--tight { padding: 2rem 0; }
 .section--dark { background: var(--bg-2); }
 .section__title { font-size: clamp(1.5rem, 3vw, 2rem); margin-bottom: .5rem; }
 .section__subtitle { color: var(--muted); margin-bottom: 1.6rem; }
-#catalog .section__title, #offers .section__title, #about .section__title { text-align: left; }
+#catalog .section__title, #about .section__title { text-align: left; }
 #catalog .section__subtitle { text-align: left; }
 
 /* Light sections */
@@ -178,44 +177,6 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .adv__icon svg { width: 100%; height: 100%; }
 .adv h3 { margin-bottom: .4rem; font-size: 1.05rem; }
 .adv p { color: var(--muted); font-size: .9rem; }
-
-/* ===== Calculator (white module on dark section) ===== */
-.calc {
-  background: #fff; border: 1px solid #e3e7ec;
-  border-radius: var(--radius); padding: 2rem; margin-top: 2rem;
-  display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem;
-  box-shadow: 0 12px 32px rgba(0,0,0,.25);
-}
-.calc__field label { display: block; margin-bottom: .4rem; font-size: .9rem; color: #5b6672; }
-.calc__field select, .calc__field input[type="number"] {
-  width: 100%; padding: .75rem 1rem; border-radius: 8px;
-  border: 1px solid #d4dae1; background: #f6f8fa; color: #232a31; font-size: 1rem;
-}
-.calc__field select:focus, .calc__field input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.calc__checks { grid-column: 1 / -1; display: flex; gap: 1.5rem; flex-wrap: wrap; }
-.calc__checks label { display: flex; align-items: center; gap: .5rem; color: #232a31; font-size: .95rem; cursor: pointer; }
-.calc__result {
-  grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
-  gap: 1rem; flex-wrap: wrap; border-top: 1px solid #e3e7ec; padding-top: 1.2rem;
-  font-size: 1.2rem; color: #232a31;
-}
-.calc__result span { color: var(--accent-dark); font-weight: 800; font-size: 1.6rem; }
-.calc__hint { display: block; font-size: .85rem; color: #158a3f; min-height: 1.2em; }
-
-/* ===== Reviews ===== */
-.reviews__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.4rem; }
-.review {
-  background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius);
-  padding: 1.6rem; box-shadow: 0 4px 16px rgba(0,0,0,.06);
-  display: flex; flex-direction: column; gap: .8rem;
-}
-.review__stars { color: #f5a623; letter-spacing: .15em; font-size: 1.05rem; }
-.review p { color: #3d4650; font-size: .95rem; font-style: italic; flex: 1; margin: 0; }
-.review footer { display: flex; flex-direction: column; border-top: 1px solid #eceff3; padding-top: .8rem; font-style: normal; }
-.review footer b { color: var(--text-dark); }
-.review footer span, .review > footer:not(:has(b)) { color: #5b6672; font-size: .85rem; }
-#reviews .section__subtitle { color: var(--muted); }
-.review > footer { color: #5b6672; font-size: .85rem; }
 
 /* ===== FAQ ===== */
 .faq__list { margin-top: 1.5rem; display: flex; flex-direction: column; gap: .8rem; max-width: 860px; }
@@ -373,7 +334,7 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
   .logo__text { font-size: 1.05rem; white-space: normal; overflow-wrap: anywhere; }
 }
 @media (max-width: 900px) {
-  .contacts, .about, .calc { grid-template-columns: 1fr; }
+  .contacts, .about { grid-template-columns: 1fr; }
   .header__phone { display: none; }
 }
 @media (max-width: 760px) {
@@ -386,59 +347,18 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 }
 
 /* ===== Раздел «Услуги и доставка» ===== */
-.serv__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.25rem; margin-bottom: 1.5rem; }
 .serv { background: #fff; border: 1px solid #e3e7ec; border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.4rem 1.5rem; box-shadow: 0 4px 16px rgba(0,0,0,.05); transition: transform .2s, box-shadow .2s; }
 .serv:hover { transform: translateY(-4px); box-shadow: 0 12px 26px rgba(0,0,0,.1); }
 .serv h3 { font-size: 1.1rem; margin-bottom: .45rem; color: var(--text-dark); }
 .serv p { font-size: .92rem; color: #5b6672; margin: 0; }
 
 .zones { background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius); padding: 1.8rem; box-shadow: 0 4px 16px rgba(0,0,0,.05); }
-.zones__title { font-size: 1.25rem; margin-bottom: 1rem; }
-.zones__table { width: 100%; border-collapse: collapse; font-size: .95rem; }
-.zones__table th, .zones__table td { text-align: left; padding: .65rem .8rem; border-bottom: 1px solid #eceff3; vertical-align: top; }
-.zones__table thead th { background: var(--bg-2); color: #fff; text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; }
-.zones__table tbody tr:last-child td { border-bottom: none; }
-.zones__note { margin-top: 1rem; font-size: .9rem; color: #5b6672; }
-.zones__note b { color: #1a7f37; }
 
 /* ===== Footer SEO-строка ===== */
 .footer__seo { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .footer__seo p { font-size: .78rem; line-height: 1.7; color: #6b7683; max-width: 960px; }
 .footer__seo b { color: #8b96a3; }
 
-/* ===== Раздел «Документы и скачивания» ===== */
-.section--alt { background: #f4f5f7; }
-.docs__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 1.25rem;
-}
-.doc-card {
-  background: var(--card, #fff);
-  border: 1px solid rgba(0,0,0,.08);
-  border-radius: 12px;
-  padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: .6rem;
-  transition: transform .25s ease, box-shadow .25s ease;
-}
-.doc-card:hover { transform: translateY(-4px); box-shadow: 0 10px 24px rgba(0,0,0,.12); }
-.doc-card h3 { font-size: 1.05rem; margin: 0; }
-.doc-card p { color: var(--muted, #6b7280); font-size: .9rem; margin: 0; flex: 1; }
-.doc-card__badge {
-  align-self: flex-start;
-  font-weight: 700;
-  font-size: .75rem;
-  letter-spacing: .04em;
-  padding: .3rem .6rem;
-  border-radius: 6px;
-  color: #fff;
-}
-.doc-card__badge--pdf  { background: #c0392b; }
-.doc-card__badge--csv  { background: #1e8449; }
-.doc-card__badge--doc  { background: #2471a3; }
-.doc-card__badge--cert { background: #b9770e; }
 .btn--outline {
   background: transparent;
   border: 1.5px solid var(--accent, #e67e22);
@@ -507,14 +427,6 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 }
 .slide__title { font-family: "Oswald", sans-serif; font-size: 1.55rem; line-height: 1.15; }
 .slide__text { color: #cfd8e2; font-size: .92rem; }
-.slide__specs { list-style: none; display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .3rem; }
-.slide__specs li {
-  font-size: .8rem; font-weight: 700;
-  padding: .3rem .7rem; border-radius: 8px;
-  background: rgba(255,255,255,.1);
-  border: 1px solid rgba(255,255,255,.14);
-}
-.slide__specs li:first-child { background: var(--accent); border-color: var(--accent); color: #1a1206; }
 
 .slider__nav {
   position: absolute; top: 50%; transform: translateY(-50%);
@@ -544,35 +456,14 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
   .slide__img, .slide:hover .slide__img { transition: none; transform: none; }
 }
 
-/* ===== Преимущества с фото ===== */
-.adv__grid--photo { grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); }
-.adv--photo { padding: 0; overflow: hidden; display: flex; flex-direction: column; gap: 0; }
-.adv__media { position: relative; aspect-ratio: 3 / 2; overflow: hidden; background: #10141a; }
-.adv__media img {
-  width: 100%; height: 100%; object-fit: cover;
-  opacity: .92; transition: transform .5s ease, opacity .3s;
-}
-.adv--photo:hover .adv__media img { transform: scale(1.06); opacity: 1; }
-.adv__media::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(180deg, transparent 58%, rgba(28,34,41,.9));
-}
-.adv__body { padding: 1.3rem 1.4rem 1.5rem; display: flex; flex-direction: column; gap: .5rem; }
-.adv__body h3 { font-size: 1.08rem; }
-.adv__body p { color: var(--muted); font-size: .9rem; }
-
-/* ===== «Почему выбирают нас» — светлый акцентный блок (как на металлостал.рф) ===== */
-.section--accent { background: #eef1f5; color: var(--text-dark); }
+/* ===== Преимущества (тёмная секция, белые карточки) ===== */
 #advantages.section--dark .section__title { color: var(--text); }
 #advantages.section--dark .section__subtitle, #advantages.section--dark .adv__lead { color: var(--muted); }
 #advantages.section--dark .adv { background: #fff; border: 1px solid #e3e7ec; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 #advantages.section--dark .adv:hover { border-color: var(--accent); box-shadow: 0 14px 30px rgba(0,0,0,.35); }
-#advantages.section--dark .adv__body h3 { color: var(--text-dark); }
-#advantages.section--dark .adv__body p { color: #5b6672; }
+#advantages.section--dark .adv h3 { color: var(--text-dark); }
+#advantages.section--dark .adv p { color: #5b6672; }
 #advantages.section--dark .adv__icon { color: var(--accent); }
-
-/* ===== «Как проходит поставка» — тёмный фон, карточки остаются светлыми ===== */
-#how.section--dark .section__subtitle { color: var(--muted); }
 
 
 @media (max-width: 900px) {
@@ -600,28 +491,22 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
   .slide__body { padding: 1.1rem; }
 }
 
-/* ===== МЕТАЛЛОСТАЛЬ: каталог-группы, предложения, преимущества с иконками ===== */
-.catalog__grid--groups { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1rem; }
+/* ===== МЕТАЛЛОСТАЛЬ: каталог продукции, преимущества с иконками ===== */
+.catalog__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1.2rem; margin-top: 1.6rem; }
 .gcard {
-  display: flex; flex-direction: column; align-items: center; text-align: center;
+  width: 100%; font: inherit; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; text-align: center;
   background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius);
-  padding: 1.2rem .8rem; text-decoration: none; color: inherit;
+  padding: 1.2rem .8rem; gap: .35rem;
   transition: transform .2s, box-shadow .2s, border-color .2s;
 }
 .gcard:hover { transform: translateY(-4px); box-shadow: 0 10px 26px rgba(0,0,0,.12); border-color: var(--accent); }
 .gcard__pic { width: 96px; height: 96px; object-fit: contain; margin-bottom: .6rem; }
 .gcard__count { font-family: 'Oswald', sans-serif; font-weight: 600; color: var(--accent); font-size: 1.15rem; }
+.gcard__meta { font-size: .82rem; color: #5b6672; margin: 0; }
 .gcard__title { font-size: .95rem; margin-top: .15rem; line-height: 1.25; }
+.gcard .btn--sm { margin-top: auto; }
 
-.offers__head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
-.offers__updated { color: #7a8794; font-size: .85rem; }
-#catalog .offers__head .section__title { color: var(--text-dark); }
-.offers__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1.2rem; margin-top: 1.2rem; }
-.offer { background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius); padding: 1rem; display: flex; flex-direction: column; gap: .5rem; transition: box-shadow .2s, transform .2s; }
-.offer:hover { box-shadow: 0 10px 26px rgba(0,0,0,.12); transform: translateY(-4px); }
-.offer img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: calc(var(--radius) - 6px); background: #f1f3f6; }
-.offer h3 { font-size: .95rem; line-height: 1.3; font-weight: 700; }
-.offer__price { font-family: 'Oswald', sans-serif; font-weight: 600; color: var(--accent); font-size: 1.05rem; margin-top: auto; }
 .btn--sm { padding: .5rem 1rem; font-size: .85rem; }
 
 .adv__grid--icons { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
@@ -665,19 +550,20 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .sro__note a { color: var(--accent); font-weight: 600; }
 @media (max-width: 900px) { .sro__grid { grid-template-columns: 1fr; } }
 
-/* Этапы обработки металла (светлая секция) */
-#stages .section__title { color: var(--text-dark); }
-#stages .section__subtitle { color: #5b6672; }
+/* Этапы обработки металла — подсекция внутри «Вступление в СРО» (тёмная секция) */
+.sro__stages { margin-top: 3rem; padding-top: 2.4rem; border-top: 1px solid var(--line); }
+.sro__sub-title { font-size: 1.45rem; color: var(--text); margin: 0 0 .6rem; }
+.sro__sub-lead { color: var(--muted); font-size: .95rem; max-width: 720px; margin: 0; }
 .stages__list { list-style: none; counter-reset: st; margin: 1.6rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.2rem; }
-.stage { position: relative; background: #fff; border: 1px solid #dfe4ea; border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.4rem; box-shadow: 0 2px 10px rgba(0,0,0,.04); transition: transform .2s, box-shadow .2s; }
-.stage:hover { transform: translateY(-4px); box-shadow: 0 12px 26px rgba(0,0,0,.1); }
+.stage { position: relative; background: rgba(255,255,255,.04); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.4rem; transition: transform .2s, box-shadow .2s, background .2s; }
+.stage:hover { transform: translateY(-4px); background: rgba(255,255,255,.07); box-shadow: 0 12px 26px rgba(0,0,0,.25); }
 .stage__num { display: block; font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 2rem; color: var(--accent); opacity: .9; margin-bottom: .5rem; }
-.stage h3 { font-size: 1.02rem; margin-bottom: .45rem; color: var(--text-dark); }
-.stage p { font-size: .88rem; color: #5b6672; line-height: 1.55; margin: 0; }
-.stages__adv-title { margin-top: 2.4rem; font-size: 1.25rem; color: var(--text-dark); }
+.stage h3 { font-size: 1.02rem; margin-bottom: .45rem; color: var(--text); }
+.stage p { font-size: .88rem; color: var(--muted); line-height: 1.55; margin: 0; }
+.stages__adv-title { margin-top: 2.4rem; font-size: 1.25rem; color: var(--text); }
 .stages__adv { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: .8rem 1.6rem; }
-.stages__adv li { position: relative; padding-left: 1.8rem; font-size: .95rem; color: #3c454e; }
-.stages__adv li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--accent-dark); font-weight: 700; }
+.stages__adv li { position: relative; padding-left: 1.8rem; font-size: .95rem; color: var(--text); }
+.stages__adv li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--accent); font-weight: 700; }
 @media (max-width: 1024px) { .stages__list { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .stages__list { grid-template-columns: 1fr; } }
 
