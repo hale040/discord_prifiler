@@ -15,7 +15,7 @@
   --shadow: 0 10px 30px rgba(0,0,0,.25);
 }
 
-html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
 body {
   font-family: "PT Sans", "Segoe UI", Roboto, Arial, sans-serif;
   background: var(--bg);
@@ -95,13 +95,18 @@ a { color: inherit; text-decoration: none; }
 
 /* ===== Hero ===== */
 .hero {
-  padding: 3rem 0 2.6rem;
+  padding: 4rem 0 3.2rem;
   background:
-    linear-gradient(rgba(20,24,29,.72), rgba(20,24,29,.86)),
-    radial-gradient(circle at 80% 10%, rgba(255,122,26,.12), transparent 45%),
-    url("assets/img/slide1.jpg") center/cover no-repeat;
-  text-align: center;
+    radial-gradient(ellipse 60% 50% at 85% 0%, rgba(255,122,26,.14), transparent 60%),
+    radial-gradient(ellipse 50% 60% at 10% 100%, rgba(255,122,26,.07), transparent 55%),
+    linear-gradient(160deg, #151a1f 0%, #1c2229 55%, #232b34 100%);
+  border-bottom: 1px solid var(--line);
 }
+.hero__inner {
+  display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr);
+  gap: 2.5rem; align-items: center;
+}
+.hero__content { text-align: left; }
 .hero__badge {
   display: inline-block;
   background: rgba(255,122,26,.15);
@@ -132,7 +137,7 @@ a { color: inherit; text-decoration: none; }
 }
 .hero__lead b { color: var(--accent); }
 .hero__subtitle { color: var(--muted); font-size: 1.15rem; margin-bottom: 2rem; }
-.hero__buttons { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1.2rem; }
+.hero__buttons { display: flex; gap: 1rem; justify-content: flex-start; flex-wrap: wrap; margin-bottom: 1.2rem; }
 .hero__trust { color: var(--muted); font-size: .9rem; margin-bottom: 1.8rem; }
 .hero__trust b { color: var(--text); }
 
@@ -143,8 +148,8 @@ a { color: inherit; text-decoration: none; }
 .pulse { animation: pulse 2.2s ease-in-out infinite; }
 
 .hero__stats {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 1rem; max-width: 800px; margin-inline: auto;
+  display: grid; grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 1rem;
 }
 .stat { background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.2rem; }
 .stat__num { font-size: 2rem; font-weight: 800; color: var(--accent); }
@@ -317,14 +322,15 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .reveal.visible { opacity: 1; transform: none; }
 
 /* ===== Responsive ===== */
-@media (max-width: 1024px) {
-  /* на планшетах/узких десктопах меню не влазит — сразу переключаем на бургер */
+.header__phone small { white-space: nowrap; }
+/* ниже 1240px навигация уходит в бургер (совпадает с двухрядным режимом шапки выше) */
+@media (max-width: 1240px) {
   .burger { display: block; }
   .nav {
-    position: fixed; inset: 56px 0 auto 0; flex-direction: column;
+    position: fixed; inset: 100% 0 auto 0; flex-direction: column;
     background: var(--bg-2); padding: 1.4rem 4%; gap: 1rem;
     transform: translateY(-130%); transition: transform .3s; z-index: 99;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--line); box-shadow: 0 16px 30px rgba(0,0,0,.35);
   }
   .nav.open { transform: none; }
 }
@@ -336,6 +342,10 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 @media (max-width: 900px) {
   .contacts, .about { grid-template-columns: 1fr; }
   .header__phone { display: none; }
+}
+@media (max-width: 1024px) {
+  .hero__inner { grid-template-columns: 1fr; gap: 2rem; }
+  .hero__stats { max-width: 640px; }
 }
 @media (max-width: 760px) {
   .hero { padding: 2.6rem 0 2.2rem; }
@@ -476,12 +486,6 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
   .slide__title { font-size: 1.3rem; }
 }
 
-/* ===== Шапка: навигация в два ряда на узких экранах ===== */
-@media (max-width: 1240px) {
-  .header__inner { flex-wrap: wrap; row-gap: .4rem; }
-  .nav { order: 3; width: 100%; flex-wrap: wrap; gap: .5rem 1.1rem; padding-bottom: .2rem; }
-  .nav__link { font-size: .82rem; }
-}
 @media (max-width: 900px) {
   .slider { padding-top: 1.2rem; }
   .slide { aspect-ratio: 3 / 4; }
@@ -492,7 +496,8 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 }
 
 /* ===== МЕТАЛЛОСТАЛЬ: каталог продукции, преимущества с иконками ===== */
-.catalog__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1.2rem; margin-top: 1.6rem; }
+.catalog__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1.2rem; margin-top: 1.6rem; }
+@media (min-width: 1400px) { .catalog__grid { grid-template-columns: repeat(5, 1fr); } }
 .gcard {
   width: 100%; font: inherit; cursor: pointer;
   display: flex; flex-direction: column; align-items: center; justify-content: flex-start; text-align: center;
@@ -502,9 +507,7 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 }
 .gcard:hover { transform: translateY(-4px); box-shadow: 0 10px 26px rgba(0,0,0,.12); border-color: var(--accent); }
 .gcard__pic { width: 96px; height: 96px; object-fit: contain; margin-bottom: .6rem; }
-.gcard__count { font-family: 'Oswald', sans-serif; font-weight: 600; color: var(--accent); font-size: 1.15rem; }
-.gcard__meta { font-size: .82rem; color: #5b6672; margin: 0; }
-.gcard__title { font-size: .95rem; margin-top: .15rem; line-height: 1.25; }
+.gcard__title { font-size: 1rem; margin-top: .3rem; line-height: 1.25; }
 .gcard .btn--sm { margin-top: auto; }
 
 .btn--sm { padding: .5rem 1rem; font-size: .85rem; }
