@@ -20,9 +20,10 @@
       {% else %}<p class='muted'>резюме отсутствует — профиль создан до добавления
  блока «summary». Нажмите «🧠 Обновить психо профиль» для пересчёта.</p>{% endif %}</div>
     <div class='card'><h4>Big Five</h4>
-      <table><thead><tr><th>открытость</th><th>добросовестность</th><th>экстраверсия</th><th>доброжелательность</th><th>нейротизм</th></tr></thead><tbody>
-      <tr><td>{{ bf.openness }}</td><td>{{ bf.conscientiousness }}</td><td>{{ bf.extraversion }}</td>
-  <td>{{ bf.agreeableness }}</td><td>{{ bf.neuroticism }}</td></tr></tbody></table></div>
+      {# 5 колонок: min-width по --cols не нужен (карточка широкая), но значения None -> '—' #}
+      <table style='table-layout:auto'><thead><tr><th>открытость</th><th>добросовестность</th><th>экстраверсия</th><th>доброжелательность</th><th>нейротизм</th></tr></thead><tbody>
+      <tr><td>{{ v_or(bf.openness) }}</td><td>{{ v_or(bf.conscientiousness) }}</td><td>{{ v_or(bf.extraversion) }}</td>
+  <td>{{ v_or(bf.agreeableness) }}</td><td>{{ v_or(bf.neuroticism) }}</td></tr></tbody></table></div>
     <div class='card'><h4>Типологии (гипотезы)</h4>
       <p><b>MBTI:</b> {{ res.mbti.type if res.get('mbti') else p.mbti_type }}
  alt: {{ (res.mbti.alt or [])|join(', ') if res.get('mbti') else '—' }}
@@ -39,16 +40,16 @@
 <li><b>{{ i.topic }}</b> (×{{ i.evidence_count }}) — {{ i.evidence or '' }}</li>{% endfor %}</ul>
       {% else %}<p class='muted'>пусто</p>{% endif %}</div>
     <div class='card'><h4>Риск-флаги</h4>
-      {% if risks %}<table><thead><tr><th>флаг</th><th>severity</th><th>пример</th></tr></thead><tbody>
-{% for r in risks %}<tr><td>{{ r.flag }}</td>
-<td style='{{ "color:#c62828;font-weight:700" if r.severity=="high" else ("color:#e65100" if r.severity=="med" else "") }}'>{{ r.severity }}</td>
-<td class='json'>{{ r.evidence }}</td></tr>{% endfor %}</tbody></table>
+      {% if risks %}<table style='table-layout:auto'><thead><tr><th>флаг</th><th>severity</th><th>пример</th></tr></thead><tbody>
+{% for r in risks %}<tr><td>{{ v_or(r.flag) }}</td>
+<td style='{{ "color:#c62828;font-weight:700" if r.severity=="high" else ("color:#e65100" if r.severity=="med" else "") }}'>{{ v_or(r.severity) }}</td>
+<td class='json'>{{ v_or(r.evidence) }}</td></tr>{% endfor %}</tbody></table>
       {% else %}<p class='muted'>нет</p>{% endif %}</div>
     <div class='card'><h4>Сигналы (psych_signals, дедуп)</h4>
-      {% if signals %}<table><thead><tr><th>signal</th><th>цитата</th><th>сообщение</th><th>context</th></tr></thead><tbody>
-{% for s in signals %}<tr><td>{{ s.signal_key }}</td><td class='json'>{{ s.quote }}</td>
+      {% if signals %}<table style='table-layout:auto'><thead><tr><th>signal</th><th>цитата</th><th>сообщение</th><th>context</th></tr></thead><tbody>
+{% for s in signals %}<tr><td>{{ v_or(s.signal_key) }}</td><td class='json'>{{ v_or(s.quote) }}</td>
 <td>{% if s.message_id %}<a href="/browse/messages/{{ s.message_id }}">{{ s.message_id }}</a>{% else %}—{% endif %}</td>
-<td>{{ s.context or '' }}</td></tr>{% endfor %}</tbody></table>
+<td>{{ v_or(s.context) }}</td></tr>{% endfor %}</tbody></table>
       {% else %}<p class='muted'>пусто</p>{% endif %}</div>
     <div class='card'><h4>Полный JSON ответа</h4>
       <pre class='sql' style='max-height:500px'>{{ raw_json_pretty }}</pre></div>

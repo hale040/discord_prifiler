@@ -26,7 +26,10 @@
     Все действия — внутри карточки записи.</p>
 </form>
 
-<div class='tbl-wrap'><table><colgroup>
+{# --cols = фактическое число <col>: ★ + данные + кнопка «открыть».
+   min-width в CSS считает по этому числу — колонки не спрессовываются. #}
+<div class='tbl-wrap' style='--cols: {{ (1 if has_priority else 0) + cols|length + 1 }}'>
+<table><colgroup>
   {% if has_priority %}<col style='width:40px'>{% endif %}
   {% for w in widths %}<col{% if w.w %} style='width:{{ w.w }}'{% endif %}{% if w.wide %} class='wide'{% endif %}>{% endfor %}
   <col style='width:96px'></colgroup>

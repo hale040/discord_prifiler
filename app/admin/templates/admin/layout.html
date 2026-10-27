@@ -73,13 +73,17 @@
       .card h4{font-size:.85rem;color:var(--muted);text-transform:uppercase;
                letter-spacing:.03em;margin:0 0 .7rem;font-weight:600}
 
-      /* --- таблицы: фиксированная раскладка, никаких горизонтальных скроллов окна --- */
+      /* --- таблицы: фиксированная раскладка + min-width по числу колонок.
+         Без min-width на узких окнах fixed-раскладка спрессовывает колонки в
+         «кашу» (заголовки разъезжаются с данными); скролл — меньшее зло. --- */
       .tbl-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid #26282c;
                 background:var(--panel)}
       table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;
             font-size:.85rem;background:transparent}
+      .tbl-wrap > table{min-width:calc(var(--cols, 8) * 110px)}
       th,td{border-bottom:1px solid var(--line);padding:.5rem .65rem;vertical-align:top;
-            word-break:normal;overflow-wrap:anywhere;text-align:left}
+            overflow-wrap:anywhere;text-align:left}
+      th{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       tr:last-child td{border-bottom:0}
       tbody tr:hover{background:var(--hover)}
       thead th{background:var(--elev);color:var(--muted);font-weight:600;font-size:.75rem;

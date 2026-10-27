@@ -567,6 +567,9 @@ def create_app(database_url: str) -> Flask:
         # без пояса — формат ДД.ММ.ГГГГ ЧЧ:ММ:СС в UTC (не сырая строка БД)
         _tzv = session.get("tz") or os.getenv("ADMIN_TZ", "") or "UTC"
         ctx.setdefault("fmtdt", lambda v: to_local(v, _tzv))
+        # безопасный рендер значения в ячейку: None -> '—' (иначе Jinja печатает
+        # 'None', и колонки с разными «пустыми» выглядят разъехавшимися)
+        ctx.setdefault("v_or", lambda v: v if v not in (None, "") else "—")
         return render_template(
             "admin/layout.html",
             content=Markup(render_template(f"admin/{tpl}.html", **ctx)),

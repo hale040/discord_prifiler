@@ -1,5 +1,5 @@
 <h2>Журнал аудита</h2>
-<div class='tbl-wrap'><table><colgroup><col style='width:70px'><col style='width:150px'>
+<div class='tbl-wrap' style='--cols:6'><table><colgroup><col style='width:70px'><col style='width:150px'>
 <col style='width:130px'><col style='width:180px'><col><col style='width:90px'></colgroup>
 <thead><tr><th>id</th><th>когда</th><th>action</th><th>target</th><th>details</th><th>result</th></tr></thead><tbody>
     {% for r in rows %}<tr><td>{{ r.id }}</td><td class='nowrap'>{{ fmtdt(r.created_at) }}</td><td>{{ r.action }}</td>
