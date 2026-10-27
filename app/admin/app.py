@@ -25,7 +25,7 @@ from flask import (
     url_for,
 )
 from sqlalchemy import Boolean, MetaData, Table, Text, cast as sa_cast, create_engine, func, inspect, select as sa_select, text
-from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update, insert as sa_insert
+from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update, insert as sa_insert, delete as sa_delete
 from sqlalchemy import text as sa_text
 from sqlalchemy import String
 from sqlalchemy.dialects.postgresql import CHAR, VARCHAR
@@ -2099,25 +2099,58 @@ def create_app(database_url: str) -> Flask:
 
     @app.route("/chats/toggle/<int:channel_id>", methods=["POST"])
     def chat_toggle_collect(channel_id: int):
-        """Галка «обрабатывать»: чат в список обработки (история + presence).
+        """Галка «отслеживать»: коллектор собирает live-сообщения этого чата.
 
-        Отдельно от галки «анкеты»: обрабатываемые чаты собираются коллектором,
-        анкеты из них попадают в промпт LLM только при collects_qa=TRUE.
+        Раньше этот маршрут писал в collects_qa (галку анкет) — из-за чего две
+        галки синхронизировались. Теперь «отслеживать» = chats.tracked,
+        «анкеты» = chats.collects_qa (chat_toggle_qa), независимо друг от друга.
         """
         if not _qa_tables_ok("chats"):
             abort(404)
         c = Table("chats", MetaData(), autoload_with=engine)
         on = request.form.get("on") == "1"
         with engine.connect() as conn:
-            conn.execute(sa_update(c).where(
-                c.columns.channel_id == channel_id).values(collects_qa=on))
-            # включение анкет сразу привязывает посты-анкеты этого чата
-            if on:
-                _qa_autofill(conn, channel_id)
+            if "tracked" in set(c.columns.keys()):
+                conn.execute(sa_update(c).where(
+                    c.columns.channel_id == channel_id).values(tracked=on))
+            else:  # старая схема без tracked — до миграции: включает обработку
+                conn.execute(sa_update(c).where(
+                    c.columns.channel_id == channel_id).values(collects_qa=on))
             conn.commit()
-        audit("chat_collects_qa", target=f"channel={channel_id}",
+        audit("chat_tracked", target=f"channel={channel_id}",
               details="on" if on else "off", result="ok")
         return redirect(request.referrer or url_for("chats_page"))
+
+    @app.route("/chats/delete/<int:channel_id>", methods=["POST"])
+    def chat_delete(channel_id: int):
+        """Удалить чат из списка сервера (с подтверждением в UI).
+
+        Сообщения в БД НЕ удаляются (это собранные данные); теряются только
+        строка чата и анкеты участников (chat_members).
+        """
+        if not _qa_tables_ok("chats"):
+            abort(404)
+        confirm = (request.form.get("confirm") or "").strip()
+        if confirm != str(channel_id):
+            flash("Подтверждение не совпало: удалите, введя ID канала "
+                  f"{channel_id} в поле подтверждения.", "error")
+            return redirect(request.referrer or url_for("chats_page"))
+        c = Table("chats", MetaData(), autoload_with=engine)
+        gid = None
+        with engine.connect() as conn:
+            gid = conn.execute(sa_select(c.columns.guild_id).where(
+                c.columns.channel_id == channel_id)).scalar()
+            conn.execute(sa_text("DELETE FROM chat_members WHERE channel_id=:cid"),
+                         {"cid": channel_id})
+            n = conn.execute(sa_delete(c).where(
+                c.columns.channel_id == channel_id)).rowcount
+            conn.commit()
+        audit("chat_delete", target=f"channel={channel_id}",
+              details=f"guild={gid} removed={n}", result="ok")
+        flash(f"Чат {channel_id} удалён из списка (сообщения сохранены)."
+              if n else "Чат не найден.", "ok" if n else "warn")
+        return redirect(url_for("chats_page", guild_id=gid)
+                        if gid else url_for("chats_page"))
 
     @app.route("/chats/qa/<int:channel_id>", methods=["POST"])
     def chat_toggle_qa(channel_id: int):

@@ -424,6 +424,36 @@ class Repository:
                 .distinct()
             ))
 
+    def tracked_channel_ids(self) -> list[int]:
+        """Каналы с галкой «отслеживать» (live-фильтр контроллера)."""
+        with self._sf() as s:
+            return list(s.scalars(
+                select(Chat.channel_id).where(Chat.tracked.is_(True))))
+
+    def set_chat_tracked(self, channel_id: int, on: bool) -> None:
+        """Галка «отслеживать» для одного чата."""
+        with self._sf() as s:
+            s.execute(update(Chat).where(Chat.channel_id == channel_id)
+                      .values(tracked=bool(on)))
+            s.commit()
+
+    def delete_chat(self, channel_id: int) -> bool:
+        """Удалить чат из списка сервера (само множество сообщений НЕ трогает).
+
+        Анкеты участников этого чата (chat_members) удаляются — они привязаны
+        к чату; сообщения в messages остаются как собранные данные.
+        """
+        from sqlalchemy import delete as sa_delete
+
+        from app.models.entities import ChatMember
+        with self._sf() as s:
+            s.execute(sa_delete(ChatMember).where(
+                ChatMember.channel_id == channel_id))
+            res = s.execute(sa_delete(Chat).where(
+                Chat.channel_id == channel_id))
+            s.commit()
+            return res.rowcount > 0
+
     def claim_pending_sync(self, guild_id: int) -> bool:
         """Атомарно забрать сигнал синхронизации: True->False по всему серверу.
 
@@ -473,8 +503,8 @@ class Repository:
                 row = existing.get(cid)
                 if row is None:
                     s.add(Chat(channel_id=cid, guild_id=guild_id, name=name,
-                               collects_qa=False, messages_total=0,
-                               created_at=now))
+                               collects_qa=False, tracked=False,
+                               messages_total=0, created_at=now))
                     new_n += 1
                 elif not row.name and name:
                     row.name = name

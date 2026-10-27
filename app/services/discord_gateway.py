@@ -29,6 +29,44 @@ async def _noop_callback(*_args, **_kwargs) -> None:
     """Заглушка для клиентов «только для чтения» (админка: fetch каналов)."""
 
 
+# --- фильтрация типов каналов -------------------------------------------
+# В chats должны попадать ТОЛЬКО текстовые каналы: голосовые, категории,
+# стаж-каналы и stage не содержат сообщений для сбора.
+_TEXT_TYPE_NAMES = {
+    "text", "news", "forum", "media", "public_thread", "private_thread",
+    "voiceless", "text_thread", "announcementthread",
+}
+_NONTEXT_TYPE_NAMES = {
+    "voice", "category", "stage", "directory", "guild_store",
+    "guild_directory", "events", "unknown",
+}
+
+
+def is_text_channel(ch) -> bool:
+    """True, если канал текстовый (по enum-типу или duck-typing).
+
+    Разные сборки discord.py/discord.py-self дают разные enums; надёжнее
+    всего комбинировать три признака:
+      1) тип по имени (ch.type.name / str(ch.type));
+      2) у voice/category/stage НЕТ метода send/свойства topic — но это
+         слабый признак, поэтому используем только как подсказку;
+      3) явный blacklist не-текстовых типов.
+    """
+    t = getattr(ch, "type", None)
+    name = ""
+    if t is not None:
+        name = str(getattr(t, "name", "") or "").lower() or str(t).lower()
+    # discord.py: ChannelType.text -> "<ChannelType.text: 0>"
+    for frag in _NONTEXT_TYPE_NAMES:
+        if f".{frag}" in name or name == frag:
+            return False
+    if name:
+        return any(frag in name for frag in _TEXT_TYPE_NAMES) or name in (
+            "0", "1", "4", "5", "11", "12")  # числовые id текстовых типов
+    # type недоступен — считаем текстовым только если есть text-признаки
+    return hasattr(ch, "topic") or hasattr(ch, "slowmode_delay")
+
+
 class UserbotClient(discord.Client):
     """Тонкая обёртка над discord.py-self Client с user-oriented настройками."""
 
@@ -277,16 +315,21 @@ class UserbotClient(discord.Client):
             return None
 
     async def fetch_guild_channels(self, guild_id: int):
-        """Список каналов сервера (text/voice/forum).
+        """Список ТЕКСТОВЫХ каналов сервера.
 
         Нужен админке для «обновить чаты»: без этого шага в chats попадают
         только каналы, из которых уже были собраны сообщения.
+        Голосовые/категории/стаж-каналы исключаются — собирать нечего.
         Возвращает [(channel_id, name)]; пустой список при недоступности.
         """
         try:
             guild = self.get_guild(guild_id) or await self.fetch_guild(guild_id)
-            return [(int(ch.id), getattr(ch, "name", "") or f"#{ch.id}")
-                    for ch in guild.channels]
+            out = []
+            for ch in guild.channels:
+                if not is_text_channel(ch):
+                    continue
+                out.append((int(ch.id), getattr(ch, "name", "") or f"#{ch.id}"))
+            return out
         except Exception as exc:  # noqa: BLE001 — приватный канал/нет доступа
             log.debug("fetch_guild_channels(%s) failed: %s", guild_id, exc)
             return []

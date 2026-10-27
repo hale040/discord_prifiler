@@ -101,17 +101,21 @@ class CollectorController:
             except Exception as exc:  # noqa: BLE001
                 log.debug("live %s обработан с ошибкой: %s", action, exc)
             return
+        # --- фильтр «отслеживать»: собираем только целевой канал (.env) и
+        # чаты с chats.tracked=TRUE, отмеченные оператором в админке ------
         try:
-            if int(getattr(getattr(msg, "channel", None), "id", 0) or 0) != self.settings.channel_id:
-                return
+            chid = int(getattr(getattr(msg, "channel", None), "id", 0) or 0)
         except (TypeError, ValueError):
+            return
+        if not self._is_tracked_channel(chid):
             return
         try:
             if action == "MESSAGE_CREATE":
                 state = self.repo.get_state(self.settings.channel_id)
                 saved = await self.collector.handle_live_message(msg, state.guild_id)
                 if saved:
-                    self.repo.update_state(self.settings.channel_id, msg.id, 1, state.guild_id)
+                    if chid == self.settings.channel_id:
+                        self.repo.update_state(self.settings.channel_id, msg.id, 1, state.guild_id)
                     self.view.on_new_messages(1, msg.id)
             elif action == "MESSAGE_EDIT":
                 await self.collector.handle_live_edit(msg, payload.get("before"))
@@ -119,6 +123,28 @@ class CollectorController:
                 await self.collector.handle_live_delete(msg)
         except Exception as exc:  # noqa: BLE001
             log.debug("live %s обработан с ошибкой: %s", action, exc)
+
+    # ------------------------------------------------------ tracked-фильтр
+    def _is_tracked_channel(self, channel_id: int) -> bool:
+        """Собираем live-сообщения только целевого канала (.env) и чатов с
+        chats.tracked=TRUE (галка «отслеживать» в админке).
+
+        Кэш на 30 секунд — чтобы не дёргать БД на каждое сообщение; галка из
+        админки начинает действовать в течение полуминуты. Если таблицы chats
+        ещё нет (старая схема) — поведение как раньше: только .env-канал.
+        """
+        if channel_id == self.settings.channel_id:
+            return True
+        now = asyncio.get_event_loop().time()
+        cache = getattr(self, "_tracked_cache", None)
+        if cache is None or now - cache[0] > 30:
+            try:
+                ids = set(self.repo.tracked_channel_ids())
+            except Exception:  # noqa: BLE001 — старая схема без chats/tracked
+                ids = set()
+            self._tracked_cache = (now, ids)
+            cache = self._tracked_cache
+        return channel_id in cache[1]
 
     # ------------------------------------------------------------ run loop
     async def _stats_loop(self) -> None:

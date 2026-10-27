@@ -11,9 +11,9 @@
 </form>
 {% endif %}
 
-<div class='tbl-wrap' style='--cols: 7'>
-<table class='lenta'><colgroup><col><col class='wide'><col style='width:80px'><col style='width:70px'><col style='width:100px'><col style='width:150px'><col style='width:160px'></colgroup>
-<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>анкеты (галка)</th></tr></thead>
+<div class='tbl-wrap' style='--cols: 9'>
+<table class='lenta'><colgroup><col><col class='wide'><col style='width:80px'><col style='width:70px'><col style='width:100px'><col style='width:150px'><col style='width:110px'><col style='width:120px'><col style='width:70px'></colgroup>
+<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>отслеживать</th><th>анкеты</th><th></th></tr></thead>
 <tbody>
 {% for r in rows %}<tr>
   <td><a href="{{ url_for('chat_members_page', channel_id=r.channel_id) }}" title="участники и анкеты">{{ r.channel_id }}</a></td>
@@ -31,15 +31,32 @@
     {% else %}<span class='muted'>—</span>{% endif %}
   </td>
   <td>
+    {# галка «отслеживать»: коллектор собирает live-сообщения этого чата (chats.tracked) #}
+    <form method='post' action="{{ url_for('chat_toggle_collect', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
+      <input type='hidden' name='on' value="{{ 0 if r.tracked else 1 }}">
+      <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'>
+        <input type='checkbox' onchange='this.form.submit()' {{ 'checked' if r.tracked }} style='width:auto'>
+        <span>{{ 'да' if r.tracked else 'нет' }}</span></label>
+    </form>
+  </td>
+  <td>
     {# галка «анкеты»: только отмеченные чаты отдают анкеты участников в промпт LLM #}
     <form method='post' action="{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
       <input type='hidden' name='on' value="{{ 0 if r.collects_qa else 1 }}">
       <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'>
         <input type='checkbox' onchange='this.form.submit()' {{ 'checked' if r.collects_qa }} style='width:auto'>
-        <span>{{ 'включены' if r.collects_qa else 'выкл' }}</span></label>
+        <span>{{ 'вкл' if r.collects_qa else 'выкл' }}</span></label>
+    </form>
+  </td>
+  <td style='text-align:right'>
+    {# удаление — с подтверждением вводом ID канала (см. chat_delete) #}
+    <form method='post' action="{{ url_for('chat_delete', channel_id=r.channel_id) }}"
+          onsubmit="return confirm('Удалить чат {{ r.channel_id }} «{{ r.name or '' }}» из списка?\nАнкеты участников будут удалены, сообщения в БД останутся.');">
+      <input type='hidden' name='confirm' value="{{ r.channel_id }}">
+      <button class='btn sm danger' title="удалить чат из списка (сообщения останутся)">✕</button>
     </form>
   </td>
 </tr>{% else %}
-<tr><td colspan='7' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
+<tr><td colspan='9' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
 {% endfor %}
 </tbody></table></div>

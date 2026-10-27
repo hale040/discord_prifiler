@@ -694,6 +694,9 @@ class Chat(Base):
     name: Mapped[str] = mapped_column(String(256), default="")
     # галка «анкеты»: только чаты с TRUE отдают анкеты участников в промпт
     collects_qa: Mapped[bool] = mapped_column(Boolean, default=False)
+    # галка «отслеживать»: коллектор собирает сообщения этого канала
+    # (live-фильтр в контроллере + future backfill по отмеченным чатам)
+    tracked: Mapped[bool] = mapped_column(Boolean, default=False)
     messages_total: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
