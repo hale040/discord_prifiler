@@ -679,6 +679,18 @@ main > .section:not(.section--dark) .price__timer { color: #9a5b1f; }
   transform: rotate(-45deg);
 }
 main > .section:not(.section--dark) .step__num { color: #fff; }
+/* ===== «Почему выбирают нас» — светлый акцентный блок (как на металлостал.рф) ===== */
+.section--accent { background: #eef1f5; color: var(--text-dark); }
+#advantages.section--accent .section__title { color: var(--text-dark); }
+#advantages.section--accent .adv { background: #fff; border: 1px solid #e3e7ec; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+#advantages.section--accent .adv:hover { border-color: var(--accent); box-shadow: 0 14px 30px rgba(0,0,0,.12); }
+#advantages.section--accent .adv__body h3 { color: var(--text-dark); }
+#advantages.section--accent .adv__body p { color: #5b6672; }
+#advantages.section--accent .adv__icon { color: var(--accent); }
+
+/* ===== «Как проходит поставка» — тёмный фон, карточки остаются светлыми ===== */
+#how.section--dark .section__subtitle { color: var(--muted); }
+
 
 @media (max-width: 900px) {
   .slider__nav { display: none; }

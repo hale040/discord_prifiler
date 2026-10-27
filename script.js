@@ -30,137 +30,16 @@ const PRICE_DATA = [
 const fmt = n => n.toLocaleString("ru-RU") + " ₽";
 
 /* =========================================================
-   Рендер таблицы прайса + поиск + фильтры + кнопки «Заказать»
-   (таблица уже отрисована в HTML — JS берёт строки из DOM,
-    поэтому прайс виден и индексируется поисковиками без JS)
+   Таблица прайса вынесена из страницы (блок «Прайс» удалён).
+   Данные PRICE_DATA используются только для генерации
+   файлов прайса (PDF/CSV) в разделе «Документы».
    ========================================================= */
-const priceTable = document.getElementById("priceTable");
-const priceTbody = priceTable.querySelector("tbody");
-const priceSearch = document.getElementById("priceSearch");
-const priceCategory = document.getElementById("priceCategory");
-const priceStock = document.getElementById("priceStock");
-
-// модель данных — из статичных строк таблицы
-const PRICE_ROWS = [...priceTbody.querySelectorAll("tr")].map(tr => {
-  const td = tr.children;
-  return {
-    tr,
-    name: td[0].textContent.trim(),
-    size: td[1].textContent.trim(),
-    unit: td[2].textContent.trim(),
-    priceText: td[3].textContent.trim(),
-    stock: td[4].textContent.trim(),
-  };
-});
-
-// категории для фильтра — уникальные наименования из прайса
-[...new Set(PRICE_ROWS.map(i => i.name))].forEach(name => {
-  const opt = document.createElement("option");
-  opt.value = name;
-  opt.textContent = name;
-  priceCategory.appendChild(opt);
-});
-const catAll = document.createElement("option");
-catAll.value = ""; catAll.textContent = "Все категории";
-priceCategory.prepend(catAll);
-
-function getFiltered() {
-  const q = priceSearch.value.trim().toLowerCase();
-  const cat = priceCategory.value;
-  const st = priceStock.value;
-  return PRICE_ROWS.filter(item =>
-    (!q || (item.name + " " + item.size).toLowerCase().includes(q)) &&
-    (!cat || item.name === cat) &&
-    (!st || item.stock === st)
-  );
-}
-
-let emptyRow = null;
-function renderPrice() {
-  const visible = new Set(getFiltered());
-  PRICE_ROWS.forEach(r => r.tr.classList.toggle("is-hidden", !visible.has(r)));
-  const count = visible.size;
-  if (!count) {
-    if (!emptyRow) {
-      emptyRow = document.createElement("tr");
-      emptyRow.innerHTML = '<td colspan="6" style="text-align:center;padding:1.5rem;">Ничего не найдено — позвоните нам, привезём под заказ: <a href="tel:+74951234567" style="color:#e5670c;font-weight:700;">+7 (495) 123-45-67</a></td>';
-    }
-    priceTbody.appendChild(emptyRow);
-  } else if (emptyRow && emptyRow.parentNode) {
-    emptyRow.remove();
-  }
-}
-renderPrice();
-priceSearch.addEventListener("input", renderPrice);
-priceCategory.addEventListener("change", renderPrice);
-priceStock.addEventListener("change", renderPrice);
-
-// делегирование: клик «Заказать» в любой строке -> модалка с предзаполнением
-priceTbody.addEventListener("click", e => {
-  const btn = e.target.closest(".btn--order");
-  if (!btn) return;
-  const rowIdx = [...btn.closest("tbody").children].indexOf(btn.closest("tr"));
-  const item = PRICE_ROWS[rowIdx];
-  openModal(
-    `Заявка на <b>${item.name}</b>, ${item.size} — ${item.priceText}/т (${item.stock.toLowerCase()}).<br>Оставьте телефон — менеджер подтвердит цену и наличие за 15 минут.`,
-    "Заявка на «" + item.name + "»"
-  );
-});
-
-/* =========================================================
-   Таймер обратного отсчёта до конца недели (дедлайн акции)
-   ========================================================= */
-(function () {
-  const el = document.getElementById("timerValue");
-  if (!el) return;
-  function endOfWeek() {
-    const now = new Date();
-    const day = now.getDay(); // 0 вс … 6 сб
-    const add = ((6 - day) + 7) % 7 || 7; // следующий воскресенья 23:59
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + add, 23, 59, 59);
-    return d;
-  }
-  const target = endOfWeek();
-  const pad2 = n => String(n).padStart(2, "0");
-  function tick() {
-    let ms = target - Date.now();
-    if (ms <= 0) { el.textContent = "акция завершена"; return; }
-    const d = Math.floor(ms / 864e5); ms -= d * 864e5;
-    const h = Math.floor(ms / 36e5);  ms -= h * 36e5;
-    const m = Math.floor(ms / 6e4);   ms -= m * 6e4;
-    const s = Math.floor(ms / 1e3);
-    el.textContent = `${d} дн ${pad2(h)}:${pad2(m)}:${pad2(s)}`;
-    setTimeout(tick, 1000);
-  }
-  tick();
-})();
-
-/* =========================================================
-   Скачивание прайса (CSV, с BOM для корректной кириллицы в Excel)
-   ========================================================= */
-document.getElementById("downloadPriceBtn").addEventListener("click", () => {
-  const header = ["Наименование", "Размер / марка", "Ед. изм.", "Цена, руб/т", "Наличие"];
-  const lines = [header.join(";")];
-  PRICE_DATA.forEach(i => {
-    lines.push([i.name, i.size, i.unit, i.price, i.stock].join(";"));
-  });
-  const csv = "\uFEFF" + lines.join("\r\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "price_stalprom_2026-10.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-});
 
 /* =========================================================
    Скачивание документов (PDF / CSV / DOCX) из раздела «Документы»
    ========================================================= */
 (function () {
-  const COMPANY = "ООО «СтальПром» · +7 (495) 123-45-67 · info@stalprom-test.ru";
+  const COMPANY = "ООО «Металлостал» · +7 (495) 123-45-67 · info@metallostal-example.ru";
 
   function triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
@@ -195,7 +74,7 @@ document.getElementById("downloadPriceBtn").addEventListener("click", () => {
 
   function buildPdfPrice() {
     const lines = [];
-    lines.push({ text: "STALPROM - METAL ROLLING PRICE LIST", size: 16, bold: true });
+    lines.push({ text: "METALOSTAL - METAL ROLLING PRICE LIST", size: 16, bold: true });
     lines.push({ text: translit(COMPANY), size: 9 });
     lines.push({ text: "Date: 24.10.2026  |  Prices in RUB per ton, incl. VAT", size: 9 });
     lines.push({ text: "", size: 9 });
@@ -264,7 +143,7 @@ document.getElementById("downloadPriceBtn").addEventListener("click", () => {
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:body>
 <w:p><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t>ZAYAVKA NA POSAVKU METALLOPROKATA</w:t></w:r></w:p>
-<w:p><w:r><w:t>To: OOO Stalprom, tel. +7 (495) 123-45-67, info@stalprom-test.ru</w:t></w:r></w:p>
+<w:p><w:r><w:t>To: OOO Metalostal, tel. +7 (495) 123-45-67, info@metallostal-example.ru</w:t></w:r></w:p>
 <w:p><w:r><w:t>Date: ______  Request No.: ______</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Customer:</w:t></w:r></w:p>
 <w:p><w:r><w:t>Company / FIO: ________________________________________</w:t></w:r></w:p>
@@ -351,14 +230,14 @@ ${[1,2,3,4,5].map(n => `<w:tr><w:tc><w:p><w:r><w:t>${n}</w:t></w:r></w:p></w:tc>
     const header = ["Наименование", "Размер / марка", "Ед. изм.", "Цена, руб/т", "Наличие"];
     const lines = [header.join(";")];
     PRICE_DATA.forEach(i => lines.push([i.name, i.size, i.unit, i.price, i.stock].join(";")));
-    triggerDownload(new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" }), "price_stalprom_2026-10.csv");
+    triggerDownload(new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" }), "price_metalostal_2026-10.csv");
   }
 
   document.querySelectorAll("[data-doc]").forEach(btn => {
     btn.addEventListener("click", async () => {
       const kind = btn.dataset.doc;
       try {
-        if (kind === "price-pdf") triggerDownload(buildPdfPrice(), "price_stalprom_2026-10.pdf");
+        if (kind === "price-pdf") triggerDownload(buildPdfPrice(), "price_metalostal_2026-10.pdf");
         else if (kind === "price-csv") downloadCsv();
         else if (kind === "request-docx") triggerDownload(await buildDocxRequest(), "zayavka_stalprom.docx");
         else if (kind === "certs") alert("Тестовая страница: файлы сертификатов появятся здесь после загрузки на сервер.");
@@ -552,12 +431,8 @@ function closeModal() {
   modalStatus.textContent = "";
 }
 document.getElementById("callBtn").addEventListener("click", () => openModal());
-// «Получить прайс за 15 минут» (hero + мобильная панель)
-const priceOfferText = "Оставьте телефон — отправим актуальный прайс-лист и точную цену по вашим позициям <b>в течение 15 минут</b> (WhatsApp / SMS / e-mail).";
-document.getElementById("heroPriceBtn").addEventListener("click", () =>
-  openModal(priceOfferText, "Прайс за 15 минут"));
-document.getElementById("stickyFormBtn").addEventListener("click", () =>
-  openModal(priceOfferText, "Прайс за 15 минут"));
+// Кнопки «узнать цену» теперь ведут на tel:-ссылку (блок прайса удалён),
+// обработчики heroPriceBtn/stickyFormBtn больше не нужны.
 modalClose.addEventListener("click", closeModal);
 modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
