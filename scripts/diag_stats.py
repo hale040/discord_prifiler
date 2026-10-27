@@ -286,16 +286,26 @@ def main():
             emit(f"users_with_games={distinct_players}")
             topg = rows(cur, "SELECT name, count(*) c FROM user_games GROUP BY 1 ORDER BY c DESC LIMIT 5")
             emit("top_games=" + ",".join(f"{n}:{c}" for n, c in topg) if topg else "top_games=-")
+            # нормализация kind из presence_snapshots: legacy-строки содержат
+            # 'ActivityType.playing' вместо 'playing'. lower + replace префикса.
+            ps_kind_norm = ("lower(replace(activity_kind,'ActivityType.',''))")
             if table_exists(cur, "presence_snapshots"):
                 ps = scalar(cur, "SELECT count(*) FROM presence_snapshots")
                 emit(f"presence_snapshots={ps}")
                 pu = scalar(cur, "SELECT count(DISTINCT user_id) FROM presence_snapshots")
                 emit(f"presence_distinct_users={pu}")
-                # сколько юзеров с presence вообще не имеют ни одной игры — норма при офлайн-статусах
+                # сколько юзеров с games вообще не имеют ни одной игры — норма при офлайн-статусах
                 if ug is not None and str(ug) != "ERR":
                     psu = scalar(cur, "SELECT count(DISTINCT user_id) FROM presence_snapshots"
                                       " WHERE user_id NOT IN (SELECT user_id FROM user_games)")
                     emit(f"presence_users_without_games={psu}")
+                # индикатор «реальной» проблемы: у юзера в presence стоит игра
+                # (kind='playing'), но в user_games пусто => fix_legacy_game_kinds
+                # не отработал или presence завис. Считаем только после нормализации kind.
+                pgw = scalar(cur, f"SELECT count(DISTINCT user_id) FROM presence_snapshots"
+                                  f" WHERE {ps_kind_norm}='playing'"
+                                  " AND user_id NOT IN (SELECT user_id FROM user_games)")
+                emit(f"presence_playing_no_game={pgw}")  # >0 => лечим через fix_legacy_game_kinds
             # когда был последний снимок (в реальной схеме колонка observed_at)
             ps_time_col = next((c for c in ("observed_at", "captured_at", "snapshot_at", "created_at")
                                 if table_exists(cur, "presence_snapshots")

@@ -924,6 +924,15 @@ class CollectionService:
                 added = self.repo.replace_user_games(user_id, games)
                 if added:
                     log.info("GAMES user %s: +%s игр/активностей", user_id, added)
+            else:
+                # Games пустой: либо юзер офлайн (fetch_member отдаёт членов
+                # без presence), либо у Member activities не пришли. Пробуем
+                # вытащить из profile (он тоже может содержать activities).
+                prof_games = mappers.games_from_activities(prof) if prof else []
+                if prof_games:
+                    added = self.repo.replace_user_games(user_id, prof_games)
+                    if added:
+                        log.info("GAMES user %s: +%s игр из profile", user_id, added)
             self._profiled.add(user_id)
             log.debug("Профиль сохранён: %s (+roles=%s)", user_id, len(roles or []))
             self._notify(

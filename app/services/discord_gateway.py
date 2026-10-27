@@ -119,9 +119,14 @@ class UserbotClient(discord.Client):
             status = getattr(after, "status", None) or getattr(before, "status", None)
             activities = getattr(after, "activities", None) or []
             act_name = act_kind = status_text = None
+            # Нормализация через единый маппер: раньше сюда шёл сырой
+            # 'ActivityType.playing' (enum.name), и в presence_snapshots
+            # activity_kind никогда не был равен 'playing' — из-за этого
+            # diag-эвристика users_with_games давала ложные 0.
+            from app.services import mappers
             for a in activities:
-                kind = str(getattr(getattr(a, "type", None), "name", getattr(a, "type", "")))
-                if "custom" in kind.lower():
+                kind = mappers.activity_kind_str(a)
+                if kind == "custom":
                     status_text = getattr(a, "state", None)
                 elif act_name is None:
                     act_name = getattr(a, "name", None)
