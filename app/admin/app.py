@@ -64,8 +64,12 @@ TZ_ALL: list[str] = tz_list()
 
 
 
+# единый формат отображения времени в админке: ДД.ММ.ГГГГ ЧЧ:ММ:СС
+DT_FMT = "%d.%m.%Y %H:%M:%S"
+
+
 def to_local(v, tzname: str | None):
-    """datetime (aware или naive-UTC) -> строка 'ГГГГ-ММ-ДД ЧЧ:ММ' в поясе tzname.
+    """datetime (aware или naive-UTC) -> строка 'ДД.ММ.ГГГГ ЧЧ:ММ:СС' в поясе tzname.
 
     Naive-значения трактуются как UTC (в БД timestamp with tz, но часть путей
     отдаёт naive). Пустой/не-дата — без изменений. Без выбора пояса — как раньше.
@@ -78,7 +82,7 @@ def to_local(v, tzname: str | None):
         return v
     if v.tzinfo is None:
         v = v.replace(tzinfo=timezone.utc)
-    return v.astimezone(z).strftime("%Y-%m-%d %H:%M")
+    return v.astimezone(z).strftime(DT_FMT)
 
 
 # --------------------------------------------------------------------------- #
@@ -283,10 +287,12 @@ def create_app(database_url: str) -> Flask:
     def fmt_cell(v) -> tuple[str, bool]:
         """(текст, is_json) для отображения; длинные значения сворачиваются.
 
-        datetime приводится к выбранному в шапке поясу (session['tz']);
-        без выбора — как раньше (строка БД)."""
+        datetime приводится к формату ДД.ММ.ГГГГ ЧЧ:ММ:СС в выбранном в шапке
+        поясу (session['tz'] или ENV ADMIN_TZ); без пояса — тоже нормализуем
+        формат (UTC), чтобы нигде не осталось '2026-10-27 03:18:41.008798+00:00'."""
         if isinstance(v, datetime):
-            v = to_local(v, session.get("tz"))
+            _tzf = session.get("tz") or os.getenv("ADMIN_TZ", "") or "UTC"
+            v = to_local(v, _tzf)
         if v is None:
             return "—", False
         if isinstance(v, (dict, list)):  # JSONB-колонки приходят уже разобранными
@@ -532,9 +538,9 @@ def create_app(database_url: str) -> Flask:
                 raise ValueError(f"ожидается корректный JSON, получено {raw[:60]!r}")
         if kind == "datetime":
             from datetime import datetime as _dt
-            # Принимает и naive ('2026-10-24 12:59'), и вывод PostgreSQL
-            # ('2023-10-03 15:52:28.201000+00:00'): T->пробел, Z->+00:00,
-            # fromisoformat (понимает смещения), запасные strptime-форматы.
+            # Принимает отображаемый формат 'ДД.ММ.ГГГГ ЧЧ:ММ[:СС]', и naive
+            # ('2026-10-24 12:59'), и вывод PostgreSQL ('2023-10-03 15:52:28.201000+00:00'):
+            # T->пробел, Z->+00:00, fromisoformat (понимает смещения), strptime-форматы.
             s = raw.strip().replace("T", " ")
             if s.endswith("Z"):
                 s = s[:-1] + "+00:00"
@@ -543,12 +549,13 @@ def create_app(database_url: str) -> Flask:
             except ValueError:
                 pass
             s2 = s.split("+")[0].strip()  # отбросить смещение как последний шанс
-            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            for fmt in ("%d.%m.%Y %H:%M:%S.%f", "%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y",
+                        "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
                 try:
                     return _dt.strptime(s2, fmt)
                 except ValueError:
                     continue
-            raise ValueError(f"ожидается дата 'ГГГГ-ММ-ДД [ЧЧ:ММ[:СС]]', получено {raw!r}")
+            raise ValueError(f"ожидается дата 'ДД.ММ.ГГГГ ЧЧ:ММ[:СС]', получено {raw!r}")
         return raw
 
     def render(tpl: str, **ctx):
@@ -556,8 +563,9 @@ def create_app(database_url: str) -> Flask:
         # current_psych доступен шаблонам (карточка пользователя показывает
         # кнопку 🧠 «Обновить», только если профиль уже строился)
         ctx.setdefault("current_psych", current_psych)
-        # локальное время для шаблонов: {{ fmtdt(...) }} — по поясу из шапки
-        _tzv = session.get("tz") or os.getenv("ADMIN_TZ", "")
+        # локальное время для шаблонов: {{ fmtdt(...) }} — по поясу из шапки;
+        # без пояса — формат ДД.ММ.ГГГГ ЧЧ:ММ:СС в UTC (не сырая строка БД)
+        _tzv = session.get("tz") or os.getenv("ADMIN_TZ", "") or "UTC"
         ctx.setdefault("fmtdt", lambda v: to_local(v, _tzv))
         return render_template(
             "admin/layout.html",
@@ -872,7 +880,7 @@ def create_app(database_url: str) -> Flask:
         table = safe_ident(table)
         if table not in tables():
             abort(404)
-        _tzsel = session.get("tz") or os.getenv("ADMIN_TZ", "")  # пояс отображения
+        _tzsel = session.get("tz") or os.getenv("ADMIN_TZ", "") or "UTC"  # пояс отображения
         pk_col = pk_of(table)
         sa_tbl = Table(table, MetaData(), autoload_with=engine)
         fields = editable_fields(sa_tbl)
@@ -1199,7 +1207,8 @@ def create_app(database_url: str) -> Flask:
         # (пояс из шапки), иначе после live-обновления строка возвращается к UTC.
         if isinstance(state.get("dm_synced_at"), datetime):
             state["dm_synced_at"] = to_local(
-                state["dm_synced_at"], session.get("tz") or os.getenv("ADMIN_TZ", ""))
+                state["dm_synced_at"],
+                session.get("tz") or os.getenv("ADMIN_TZ", "") or "UTC")
         return state
 
     @app.get("/dm/status/<int:user_id>")
