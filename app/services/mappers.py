@@ -273,6 +273,13 @@ def message_data(
         rid = _safe(lambda: int(ref.resolved.author.id))
         if rid is not None and rid != msg.author.id:
             data["reply_to_author_id"] = rid
+    # корень треда: пост первого уровня дерева (анкеты в чатах с галкой
+    # «анкеты» определяются именно по нему; миграция a00000000007)
+    tid = _safe(lambda: int(msg.thread.id))
+    if tid is None and ref is not None:
+        tid = _safe(lambda: int(ref.thread_id))
+    if tid is not None:
+        data["thread_root_id"] = tid
     # сырой дамп — на случай полей, которые мы ещё не маппим.
     # По умолчанию НЕ сохраняется (STORE_RAW_JSON=0): полный to_dict() каждого
     # сообщения раздувал SQLite в разы; все нужные поля уже смаплены выше.

@@ -321,6 +321,12 @@ class Message(Base):
     type: Mapped[int] = mapped_column(Integer, default=0)
     flags: Mapped[int] = mapped_column(Integer, default=0)
     reference_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)  # reply-to
+    # Корень треда (пост первого уровня дерева чата). Анкета в чате с галкой
+    # «анкеты» = сообщение с thread_root_id IS NULL; ответы на анкету —
+    # сообщения с thread_root_id = id поста. Заполняется из msg.thread.id /
+    # reference.thread_id при сборе (миграция a00000000007).
+    thread_root_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True)
     # Автор сообщения, на которое дан ответ (reply_to_author_id). Заполняется
     # из БД-графа ответов (Repository.link_reply_references) — даёт связи
     # «кто кому отвечает» даже когда само родительское сообщение не сохранено.

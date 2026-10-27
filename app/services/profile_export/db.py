@@ -220,6 +220,19 @@ def fetch_all_messages_flat(conn) -> list[dict]:
     rows = list(conn.execute(q))
     for d in rows:
         d.setdefault("reply_to_author_id", None)
+    # thread_root_id появляется только с миграцией a00000000007 — на старых
+    # схемах добавляем колонку виртуально (NULL = не в треде)
+    if rows and "thread_root_id" not in rows[0]:
+        try:
+            extra = conn.execute(
+                "SELECT id, thread_root_id FROM messages WHERE "
+                "thread_root_id IS NOT NULL")
+            tr_map = {e["id"]: e["thread_root_id"] for e in extra}
+            for d in rows:
+                d["thread_root_id"] = tr_map.get(d["id"])
+        except Exception:  # noqa: BLE001 — колонки ещё нет
+            for d in rows:
+                d["thread_root_id"] = None
     return rows
 
 

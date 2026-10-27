@@ -26,6 +26,7 @@ from flask import (
 )
 from sqlalchemy import Boolean, MetaData, Table, Text, cast as sa_cast, create_engine, func, inspect, select as sa_select, text
 from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update, insert as sa_insert
+from sqlalchemy import text as sa_text
 from sqlalchemy import String
 from sqlalchemy.dialects.postgresql import CHAR, VARCHAR
 from markupsafe import Markup
@@ -1887,6 +1888,109 @@ def create_app(database_url: str) -> Flask:
                 .order_by(g.columns.guild_id.desc())).mappings().all()
         return render("guilds", page="guilds", rows=rows)
 
+    def _qa_autofill(conn, channel_id: int | None = None) -> int:
+        """Привязка постов-анкет к участникам чата (см. questionnaire.py).
+
+        Анкета = первый пост автора в чате (thread_root_id IS NULL); с ним
+        связываются комментарии из треда. Идемпотентно, ошибки старых схем
+        проглатываются."""
+        try:
+            lvl_cols = {r[0] for r in conn.execute(sa_text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='messages'"))}
+        except Exception:  # noqa: BLE001
+            return 0
+        lvl = ("AND (m.thread_root_id IS NULL AND m.reference_id IS NULL)"
+               if {"thread_root_id", "reference_id"} <= lvl_cols else "")
+        where_ch = f" AND cm.channel_id = {int(channel_id)}" \
+            if channel_id is not None else ""
+        sql = sa_text(
+            "UPDATE chat_members cm SET message_id = sub.pid, "
+            "updated_at = now() FROM ("
+            "  SELECT DISTINCT ON (cm2.channel_id, cm2.author_id)"
+            "         cm2.channel_id AS ch, cm2.author_id AS au, m.id AS pid"
+            "    FROM chat_members cm2"
+            "    JOIN chats c ON c.channel_id = cm2.channel_id"
+            "             AND c.collects_qa"
+            "    JOIN messages m ON m.channel_id = cm2.channel_id"
+            "             AND m.author_id = cm2.author_id"
+            "   WHERE cm2.questionnaire IS NOT NULL"
+            "     AND btrim(cm2.questionnaire) <> ''"
+            "     AND cm2.message_id IS NULL"
+            f"     {lvl}{where_ch}"
+            "   ORDER BY cm2.channel_id, cm2.author_id, m.timestamp DESC"
+            ") sub WHERE cm.channel_id = sub.ch AND cm.author_id = sub.au")
+        try:
+            return conn.execute(sql).rowcount
+        except Exception:  # noqa: BLE001 — старые схемы
+            return 0
+
+    def _fetch_guild_channels(gid: int) -> list:
+        """Один короткий коннект к Discord ради списка каналов сервера.
+
+        Возвращает [(channel_id, name), ...]. Исключения — на совести
+        вызывающего (страница чатов показывает предупреждение, не 500).
+        """
+        import asyncio
+
+        from app.services.discord_gateway import UserbotClient
+
+        async def _run():
+            got: list = []
+            err: list = []
+
+            async def ready(_cl):
+                try:
+                    chs = await _cl.fetch_guild_channels(gid)
+                except TypeError:
+                    # discord.py (или py-self без user-метода) — через guild
+                    g = _cl.get_guild(gid)
+                    if g is None:
+                        err.append(f"сервер {gid} не виден аккаунту")
+                        return
+                    chs = list(g.channels)
+                got.extend((int(getattr(ch, "id", 0)),
+                            getattr(ch, "name", "?")) for ch in chs)
+
+            token = os.environ["DISCORD_TOKEN"]
+            cl = UserbotClient(token,
+                               gateway_callback=None, ready_callback=ready)
+            try:
+                # Адаптер start() сам выбирает сигнатуру родительского метода
+                # (discord.py-self: start(self); старые форки: start(self,token))
+                # — это лечит TypeError "start() takes 1 positional argument
+                # but 2 were given".
+                await asyncio.wait_for(cl.start(), timeout=30)
+            finally:
+                try:
+                    await cl.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            if not got and err:
+                raise RuntimeError(err[0])
+            return got
+
+        try:
+            return asyncio.run(_run())      # чистый цикл для Flask-потока
+        except RuntimeError:                # цикл уже крутится — новый поток
+            import threading
+
+            box: dict = {}
+
+            def worker():
+                try:
+                    box["v"] = asyncio.run(_run())
+                except Exception as exc:    # noqa: BLE001
+                    box["e"] = exc
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
+            t.join(45)
+            if t.is_alive():
+                raise TimeoutError("Discord не ответил за 45 с")
+            if "e" in box:
+                raise box["e"]
+            return box.get("v", [])
+
     def _sync_guild_channels(conn, gid: int, c, m) -> tuple[int, str]:
         """Подтянуть список каналов сервера из Discord в таблицу chats.
 
@@ -1898,46 +2002,25 @@ def create_app(database_url: str) -> Flask:
         if not token:
             return 0, "DISCORD_TOKEN не задан в .env — список каналов из Discord недоступен."
         try:
-            import asyncio
-
-            from app.services.discord_gateway import UserbotClient
-
-            async def _fetch():
-                got: list = []
-
-                async def ready(_cl):
-                    got.extend(await _cl.fetch_guild_channels(gid))
-
-                cl = UserbotClient(token, gateway_callback=None,
-                                   ready_callback=ready)
-                try:
-                    await asyncio.wait_for(cl.start(token), timeout=25)
-                finally:
-                    try:
-                        await cl.close()
-                    except Exception:  # noqa: BLE001
-                        pass
-                return got
-
-            try:
-                channels = asyncio.run(_fetch())
-            except RuntimeError:          # свой event loop уже крутится
-                loop = asyncio.new_event_loop()
-                try:
-                    channels = loop.run_until_complete(asyncio.wait_for(
-                        _fetch(), timeout=30))
-                finally:
-                    loop.close()
+            channels = _fetch_guild_channels(gid)
             if not channels:
-                return 0, "Каналы не получены (сервер недоступен или нет доступа)."
+                return 0, ("Каналы не получены: проверьте, что аккаунт user-токена "
+                           "состоит на сервере и видит его каналы.")
             existing = {r[0] for r in conn.execute(
                 sa_select(c.columns.channel_id).where(c.columns.guild_id == gid))}
             msg_counts = dict(conn.execute(
                 sa_select(m.columns.channel_id, func.count())
                 .where(m.columns.guild_id == gid).group_by(m.columns.channel_id)))
-            new_n = 0
+            new_n = upd_n = 0
             for cid, cname in channels:
+                if not cid:
+                    continue
                 if cid in existing:
+                    # подтянуть название, если раньше было заглушкой из БД
+                    upd_n += conn.execute(sa_update(c).where(
+                        c.columns.channel_id == cid,
+                        c.columns.name.is_(None)).values(
+                        name=str(cname)[:256])).rowcount
                     continue
                 conn.execute(sa_insert(c).values(
                     channel_id=cid, guild_id=gid, name=str(cname)[:256],
@@ -1946,8 +2029,12 @@ def create_app(database_url: str) -> Flask:
                 new_n += 1
             conn.commit()
             audit("chats_sync", target=f"guild={gid}",
-                  details=f"new={new_n} total={len(channels)}", result="ok")
-            return new_n, f"Синхронизировано: каналов {len(channels)}, новых {new_n}."
+                  details=f"new={new_n} total={len(channels)} renamed={upd_n}",
+                  result="ok")
+            extra = f", названий обновлено {upd_n}" if upd_n else ""
+            return new_n, (f"Синхронизировано: каналов {len(channels)}, "
+                           f"новых {new_n}{extra}. Отметьте галками чаты, "
+                           f"которые нужно обрабатывать.")
         except Exception as exc:  # noqa: BLE001
             return 0, f"Не удалось получить каналы из Discord: {exc}"
 
@@ -1990,9 +2077,13 @@ def create_app(database_url: str) -> Flask:
                       can_sync=(guild_id is not None
                                 and bool(os.getenv("DISCORD_TOKEN"))))
 
-    @app.route("/chats/qa/<int:channel_id>", methods=["POST"])
-    def chat_toggle_qa(channel_id: int):
-        """Галка «анкеты»: чаты с collects_qa=TRUE отдают анкеты в промпт LLM."""
+    @app.route("/chats/toggle/<int:channel_id>", methods=["POST"])
+    def chat_toggle_collect(channel_id: int):
+        """Галка «обрабатывать»: чат в список обработки (история + presence).
+
+        Отдельно от галки «анкеты»: обрабатываемые чаты собираются коллектором,
+        анкеты из них попадают в промпт LLM только при collects_qa=TRUE.
+        """
         if not _qa_tables_ok("chats"):
             abort(404)
         c = Table("chats", MetaData(), autoload_with=engine)
@@ -2000,9 +2091,46 @@ def create_app(database_url: str) -> Flask:
         with engine.connect() as conn:
             conn.execute(sa_update(c).where(
                 c.columns.channel_id == channel_id).values(collects_qa=on))
+            # включение анкет сразу привязывает посты-анкеты этого чата
+            if on:
+                _qa_autofill(conn, channel_id)
             conn.commit()
         audit("chat_collects_qa", target=f"channel={channel_id}",
               details="on" if on else "off", result="ok")
+        return redirect(request.referrer or url_for("chats_page"))
+
+    @app.route("/chats/qa/<int:channel_id>", methods=["POST"])
+    def chat_toggle_qa(channel_id: int):
+        """Галка «анкеты»: чаты с collects_qa=TRUE отдают анкеты в промпт LLM."""
+        if not _qa_tables_ok("chats"):
+            abort(404)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        m = Table("messages", MetaData(), autoload_with=engine)
+        on = request.form.get("on") == "1"
+        linked = 0
+        with engine.connect() as conn:
+            conn.execute(sa_update(c).where(
+                c.columns.channel_id == channel_id).values(collects_qa=on))
+            # «все привязанные должны обрабатываться»: галка анкет привязывает
+            # чат к серверу, если ID ещё не проставлен (из истории сообщений)
+            if on and c.columns.guild_id is not None:
+                row = conn.execute(sa_select(m.columns.guild_id).where(
+                    m.columns.channel_id == channel_id,
+                    m.columns.guild_id.isnot(None)).limit(1)).first()
+                if row is not None:
+                    linked = conn.execute(sa_update(c).where(
+                        c.columns.channel_id == channel_id,
+                        c.columns.guild_id.is_(None)).values(
+                        guild_id=int(row[0]))).rowcount
+            if on:
+                # сразу привязать посты-анкеты (первые посты авторов в чате),
+                # чтобы комментарии собирались без ожидания пересчёта LLM
+                _qa_autofill(conn, channel_id)
+            conn.commit()
+        audit("chat_collects_qa", target=f"channel={channel_id}",
+              details=("on" if on else "off")
+                      + (f" guild_linked={linked}" if linked else ""),
+              result="ok")
         return redirect(request.referrer or url_for("chats_page"))
 
     @app.route("/chats/members/<int:channel_id>")

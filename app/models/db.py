@@ -58,7 +58,7 @@ def create_db_engine(url: str):
 #   a00000000002 — уточнение типов dm-колонок.
 ALEMBIC_INI = os.path.join(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))), "alembic.ini")
-ALEMBIC_HEAD = "a00000000006"
+ALEMBIC_HEAD = "a00000000007"
 
 
 def _alembic_config():

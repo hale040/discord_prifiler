@@ -90,7 +90,8 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
                   psych: dict | None = None,
                   behavior: dict | None = None,
                   role_names: dict | None = None,
-                  questionnaire_block: str | None = None) -> dict:
+                  questionnaire_block: str | None = None,
+                  qa_replies_block: str | None = None) -> dict:
     uname = user["global_name"] or user["username"] or str(user["user_id"])
     stats = analyze_messages(msgs, all_user_ids)
     max_bytes = _kb_to_bytes(getattr(args, "prompt_max_kb", None))
@@ -224,6 +225,9 @@ def build_dossier(user, guild_profiles, roles, msgs, att_by_msg,
         # анкета от оператора (questionnaire.py): текст + пометка, что это НЕ
         # наблюдения; попадает в промпт отдельным блоком до транскрипта
         "questionnaire": questionnaire_block or "",
+        # комментарии к постам-анкетам (треда первого уровня): помечены, что
+        # это ответы на анкету ДРУГОГО пользователя, а не обычная реплика
+        "qa_replies": qa_replies_block or "",
         "transcript": transcript,
         # служебное: исходные сообщения транскрипта для точной подгонки веса
         # промпта (fit_prompt_size); в dataset.jsonl не сериализуется (main)
@@ -481,6 +485,9 @@ def _render_prompt_text(dossier: dict) -> str:
     qa = (dossier.get("questionnaire") or "").strip()
     if qa:
         lines += ["", qa, ""]
+    qr = (dossier.get("qa_replies") or "").strip()
+    if qr:
+        lines += ["", qr, ""]
     lines.append("Верни ТОЛЬКО валидный JSON по схеме выше.")
     return "\n".join(lines)
 

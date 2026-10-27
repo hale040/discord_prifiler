@@ -48,9 +48,29 @@ class UserbotClient(discord.Client):
         self._ready_fired = False
 
     # ------------------------------------------------------------- lifecycle
-    async def start(self) -> None:
-        # В discord.py-self метод start() принимает только токен (bot= уже не нужен)
-        await super().start(self._token)
+    async def start(self, token: str | None = None) -> None:
+        """Подключение. Токен можно передать и в конструктор, и сюда.
+
+        Совместимость версий библиотек:
+          * discord.py-self / discord.py 2.x: Client.start(token) — токен
+            АРГУМЕНТОМ (в 2.x ещё и bot=...);
+          * некоторые сборки/форки: Client.start() без аргументов.
+        Поэтому сигнатура допускает вызов и start(), и start(token), а внутри
+        выбирается вариант по интроспекции родительского метода — это исключает
+        TypeError "start() takes 1 positional argument but 2 were given".
+        """
+        import inspect
+
+        tok = token or self._token
+        try:
+            n_params = len(inspect.signature(
+                discord.Client.start).parameters)
+        except (TypeError, ValueError):      # builtin/C-обёртка без сигнатуры
+            n_params = 1
+        if n_params >= 2:                    # start(self, token, ...)
+            await super().start(tok)
+        else:                                # start(self) — токен где-то ещё
+            await super().start()
 
     # ---------------------------------------------------------------- events
     async def on_message(self, message: discord.Message) -> None:

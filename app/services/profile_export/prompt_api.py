@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -17,7 +18,55 @@ from .dialog import CONTEXT_WINDOW_SEC, build_dialog, rebuild_links
 from .transcript import DEFAULT_PROMPT_MAX_KB
 from .dossier import _date_only, build_dossier, render_prompt_md
 from .behavior import build_behavior_block
-from .questionnaire import fetch_questionnaires, inject_into_dialog, render_block
+from .questionnaire import (fetch_qa_replies, fetch_questionnaires,
+                           inject_into_dialog, qa_posts_autofill,
+                           render_replies_block)
+
+
+def inject_qa_replies(dialog_msgs: list[dict], replies: list[dict]) -> tuple[list[dict], int]:
+    """Комментарии из анкет — служебные строки ленты «[коммент из анкеты @X]."""
+    if not replies or dialog_msgs is None:
+        return dialog_msgs, 0
+    used = {m["id"] for m in dialog_msgs}
+    inserted = []
+    n = 0
+    for rp in replies:
+        txt = re.sub(r"\s+", " ", str(rp.get("content") or "").strip())[:400]
+        if not txt:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(rp["timestamp"]))
+        except Exception:
+            continue
+        fid = int(rp.get("id") or 0)
+        probe, guard = fid, 0
+        while probe in used and guard < 1000:
+            probe += 1
+            guard += 1
+        if probe in used:
+            continue
+        used.add(probe)
+        who = rp.get("author_name") or rp.get("author_id")
+        qa_who = rp.get("qa_author_name") or rp.get("qa_author_id")
+        row = dict(rp)
+        row.update({
+            "id": probe,
+            "content": f"[коммент из анкеты @{qa_who}] {txt}",
+            "clean_content": f"[коммент из анкеты @{qa_who}] {txt}",
+            "type": 0, "reference_id": None, "reply_to_author_id": None,
+            "edited_at": None, "deleted_at": None, "pinned": False,
+            "word_count": 0, "char_count": len(txt), "has_attachment": False,
+            "embed_count": 0, "mention_count": 0, "hashtag_count": 0,
+            "reaction_total": 0, "reactions_json": None,
+            "mention_users_json": None, "stickers_json": None,
+        })
+        inserted.append(row)
+        n += 1
+    if not inserted:
+        return dialog_msgs, 0
+    merged = sorted(dialog_msgs + inserted,
+                    key=lambda m: (str(m.get("timestamp")), int(m["id"])))
+    return merged, n
 
 
 def build_prompt_for_user(db_url: str, user_id: int, *,
@@ -66,13 +115,21 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
             window_sec=(context_window if context_window is not None
                         else _env_int("EXPORT_CONTEXT_WINDOW", CONTEXT_WINDOW_SEC)))
 
-        # анкеты (админка «Серверы → чаты с галкой „анкеты“»): вставляются в
-        # ленту служебными строками «[анкета] ...» + отдельный блок в промпте.
-        qa_items = fetch_questionnaires(conn)
+        # анкеты (админка «Серверы → чаты с галкой „анкеты“»): пост первого
+        # уровня чата = анкета автора; ответы треда — комментарии из анкет.
+        # Вставляются в ленту служебными строками «[анкета]/[коммент из
+        # анкеты] ...» + отдельные блоки в промпте. Берём только тот канал,
+        # по которому строится лента (привязка анкет к обработанным чатам).
+        qa_posts_autofill(conn)
+        qa_items = fetch_questionnaires(conn, channel_ids={ch})
+        qa_replies = fetch_qa_replies(conn, channel_ids={ch})
         qa_injected = 0
         if qa_items:
             dialog_msgs, qa_injected = inject_into_dialog(
                 dialog_msgs, names, qa_items, user_id)
+        if qa_replies:
+            dialog_msgs, _n = inject_qa_replies(dialog_msgs, qa_replies)
+            qa_injected += _n
 
         ns = argparse.Namespace(
             max_lines=None,
@@ -98,6 +155,8 @@ def build_prompt_for_user(db_url: str, user_id: int, *,
                 presence_snaps=presence_map.get(user_id)),
             questionnaire_block=(render_block(qa_items, user_id)
                                  if qa_items else None),
+            qa_replies_block=(render_replies_block(qa_replies, user_id)
+                              if qa_replies else None),
         )
         st = dossier["statistics"]
         bh = dossier.get("behavior") or {}
