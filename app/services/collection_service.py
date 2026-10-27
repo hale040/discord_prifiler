@@ -155,6 +155,7 @@ class CollectionService:
             asyncio.create_task(self._attachment_worker(), name="attachment-worker"),
             asyncio.create_task(self._refresh_loop(), name="profile-refresh-loop"),
             asyncio.create_task(self._dm_loop(), name="dm-loop"),
+            asyncio.create_task(self._channels_sync_loop(), name="channels-sync"),
         ]
 
     async def stop(self) -> None:
@@ -941,6 +942,52 @@ class CollectionService:
                 fields.get("username") or str(user_id),
                 len(roles or []),
             )
+
+    # ------------------------------------------- отложенная синхронизация чатов
+    async def _channels_sync_loop(self) -> None:
+        """Цикл «получить каналы сервера» по сигналу из админки.
+
+        Кнопка в UI не ждёт Discord до 45 секунд (как было при синхронном
+        asyncio.run внутри HTTP-запроса): она лишь ставит sync_requested=True,
+        а здесь мы раз в ~20 сек опрашиваем сигнал, берём список каналов у
+        уже подключённого клиента и пишем статус — «получено» (synced_at) или
+        «ошибка» (sync_error). Тот же паттерн, что у pending_dm.
+        """
+        await asyncio.sleep(15)  # дать on_ready/основным циклам стартовать
+        while self._running:
+            try:
+                gids = await asyncio.to_thread(self.repo.pending_sync_guild_ids)
+            except Exception:  # noqa: BLE001 — старые схемы без новых колонок
+                log.debug("channels-sync: signal read failed", exc_info=True)
+                gids = []
+            for gid in gids:
+                if not self._running:
+                    return
+                # атомарно забираем сигнал (защита от двойного выполнения)
+                if not await asyncio.to_thread(self.repo.claim_pending_sync, gid):
+                    continue
+                try:
+                    channels = await self.client.fetch_guild_channels(gid)
+                    if not channels:
+                        raise RuntimeError(
+                            f"сервер {gid} не виден аккаунту "
+                            "(нет доступа / не состоит)")
+                    new_n = await asyncio.to_thread(
+                        self.repo.apply_channels_snapshot, gid, channels)
+                    log.info("channels-sync guild=%s: каналов %s, новых %s",
+                             gid, len(channels), new_n)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("channels-sync guild=%s failed: %s", gid, exc)
+                    try:
+                        await asyncio.to_thread(
+                            self.repo.mark_sync_error, gid, str(exc))
+                    except Exception:  # noqa: BLE001
+                        log.debug("channels-sync: mark_sync_error failed",
+                                  exc_info=True)
+                await human_delay(1.0, 2.0)
+            await asyncio.sleep(20)  # частота опроса сигнала из админки
 
     # ---------------------------------------------------- attachment worker
     async def _attachment_worker(self) -> None:

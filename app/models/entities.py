@@ -697,6 +697,14 @@ class Chat(Base):
     messages_total: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    # --- отложенная синхронизация каналов из Discord (статусы запроса) ---
+    # админка ставит sync_requested=True; сборщик в своём цикле подключается
+    # к Discord, подтягивает каналы и пишет итог: synced_at (успех, ошибка
+    # очищается) либо sync_error (текст). UI показывает статус по этим полям.
+    sync_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ChatMember(Base):

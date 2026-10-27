@@ -18,6 +18,7 @@ from app.models.entities import (
     RoleDefinition,
     Attachment,
     ChannelState,
+    Chat,
     GuildMemberProfile,
     Message,
     MessageRevision,
@@ -390,6 +391,100 @@ class Repository:
             )
             s.commit()
             return res.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Отложенная синхронизация каналов сервера из Discord (статусы запроса).
+    # Паттерн тот же, что у pending_dm: админка только ставит сигнал,
+    # тяжёлую работу (коннект к Discord) выполняет сборщик и пишет статус.
+    # ------------------------------------------------------------------
+    def request_channels_sync(self, guild_id: int) -> int:
+        """Поставить сигнал «получить каналы сервера gid» всем чатам сервера.
+
+        Сбрасывает прошлую ошибку, чтобы UI не показывал старый красный
+        статус во время нового запроса. Возвращает число отмеченных строк;
+        0 — чатов этого сервера в таблице ещё нет (создаст сборщик после
+        успешного запроса через apply_channels_snapshot).
+        """
+        with self._sf() as s:
+            res = s.execute(
+                update(Chat)
+                .where(Chat.guild_id == guild_id)
+                .values(sync_requested=True, sync_error=None)
+            )
+            s.commit()
+            return res.rowcount
+
+    def pending_sync_guild_ids(self) -> list[int]:
+        """Серверы с необработанным сигналом синхронизации каналов."""
+        with self._sf() as s:
+            return list(s.scalars(
+                select(Chat.guild_id)
+                .where(Chat.sync_requested.is_(True),
+                       Chat.guild_id.isnot(None))
+                .distinct()
+            ))
+
+    def claim_pending_sync(self, guild_id: int) -> bool:
+        """Атомарно забрать сигнал синхронизации: True->False по всему серверу.
+
+        Возвращает True, если забор удался (rowcount>0) — защита от двойного
+        выполнения двумя тиками/процессами сборщика.
+        """
+        with self._sf() as s:
+            res = s.execute(
+                update(Chat)
+                .where(Chat.guild_id == guild_id,
+                       Chat.sync_requested.is_(True))
+                .values(sync_requested=False)
+            )
+            s.commit()
+            return res.rowcount > 0
+
+    def mark_sync_error(self, guild_id: int, error: str) -> None:
+        """Записать ошибку синхронизации всем чатам сервера (для статуса UI)."""
+        with self._sf() as s:
+            s.execute(
+                update(Chat)
+                .where(Chat.guild_id == guild_id)
+                .values(sync_error=str(error)[:500])
+            )
+            s.commit()
+
+    def apply_channels_snapshot(self, guild_id: int,
+                                channels: list[tuple[int, str]]) -> int:
+        """Сохранить полученный список каналов в chats + снять флаги статуса.
+
+        Идемпотентно: существующие чаты получают имя (если было пустым),
+        новые создаются с выключенной галкой анкет (галки расставляет
+        оператор). Успех очищает sync_error и проставляет synced_at ВСЕМ
+        чатам сервера — даже тем, кого нет в ответе Discord (например, ЛС-
+        строки): их статус тоже «получено». Возвращает число новых каналов.
+        """
+        now = utcnow()
+        new_n = 0
+        with self._sf() as s:
+            existing = {c.channel_id: c for c in s.scalars(
+                select(Chat).where(Chat.guild_id == guild_id))}
+            for cid, cname in channels:
+                cid = int(cid or 0)
+                if not cid:
+                    continue
+                name = str(cname or "")[:256]
+                row = existing.get(cid)
+                if row is None:
+                    s.add(Chat(channel_id=cid, guild_id=guild_id, name=name,
+                               collects_qa=False, messages_total=0,
+                               created_at=now))
+                    new_n += 1
+                elif not row.name and name:
+                    row.name = name
+            s.execute(
+                update(Chat)
+                .where(Chat.guild_id == guild_id)
+                .values(synced_at=now, sync_error=None, sync_requested=False)
+            )
+            s.commit()
+        return new_n
 
     def claim_dm_run(self, user_id: int) -> bool:
         """Атомарно занять пользователя для немедленного прохода («выполнить сейчас»).

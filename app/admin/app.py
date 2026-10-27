@@ -2050,9 +2050,29 @@ def create_app(database_url: str) -> Flask:
         pred = (c.columns.guild_id == guild_id) if guild_id is not None else None
         with engine.connect() as conn:
             if request.method == "POST" and guild_id is not None:
-                m = Table("messages", MetaData(), autoload_with=engine)
-                _new, msg = _sync_guild_channels(conn, guild_id, c, m)
-                flash(msg, "ok" if "Синхронизировано" in msg else "warn")
+                # Отложенный запрос: НЕ вешаем HTTP-цикл на коннект к Discord.
+                # Ставим сигнал sync_requested — сборщик (channels-sync loop)
+                # выполнит получение и напишет статус «получено/ошибка».
+                if "sync_requested" in set(c.columns.keys()):
+                    n = conn.execute(sa_update(c).where(
+                        c.columns.guild_id == guild_id).values(
+                        sync_requested=True, sync_error=None)).rowcount
+                    conn.commit()
+                    audit("chats_sync_request",
+                          target=f"guild={guild_id}",
+                          details=f"rows={n}", result="ok")
+                    if n:
+                        flash("Запрошено: каналы сервера будут обновлены "
+                              "сборщиком в течение ~30 секунд. Статус — "
+                              "в колонке «синхронизация».", "ok")
+                    else:
+                        flash("Запрошено: чатов этого сервера в списке ещё нет "
+                              "— после получения сборщик создаст их сам "
+                              "(галки анкет расставьте потом).", "warn")
+                else:  # старая схема без колонок статуса — прежний путь
+                    m = Table("messages", MetaData(), autoload_with=engine)
+                    _new, msg = _sync_guild_channels(conn, guild_id, c, m)
+                    flash(msg, "ok" if "Синхронизировано" in msg else "warn")
                 return redirect(url_for("chats_page", guild_id=guild_id))
             sel = (sa_select(
                 c,

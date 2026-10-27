@@ -11,9 +11,9 @@
 </form>
 {% endif %}
 
-<div class='tbl-wrap' style='--cols: 6'>
-<table class='lenta'><colgroup><col><col class='wide'><col style='width:90px'><col style='width:100px'><col style='width:110px'><col style='width:170px'></colgroup>
-<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>анкеты (галка)</th></tr></thead>
+<div class='tbl-wrap' style='--cols: 7'>
+<table class='lenta'><colgroup><col><col class='wide'><col style='width:80px'><col style='width:70px'><col style='width:100px'><col style='width:150px'><col style='width:160px'></colgroup>
+<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>анкеты (галка)</th></tr></thead>
 <tbody>
 {% for r in rows %}<tr>
   <td><a href="{{ url_for('chat_members_page', channel_id=r.channel_id) }}" title="участники и анкеты">{{ r.channel_id }}</a></td>
@@ -21,6 +21,15 @@
   <td style='text-align:right'>{{ r.members_n }}</td>
   <td style='text-align:right'>{% if r.qa_n %}<span class='pill ok'>{{ r.qa_n }}</span>{% else %}0{% endif %}</td>
   <td style='text-align:right'>{{ r.messages_total }}</td>
+  <td>
+    {# статус отложенного запроса каналов: запрошено → сборщик → получено/ошибка #}
+    {% if 'sync_requested' in r %}
+      {% if r.sync_requested %}<span class='pill warn' title="сборщик подтянет каналы в течение ~30 сек">⏳ запрошено</span>
+      {% elif r.sync_error %}<span class='pill err' title='{{ r.sync_error }}'>❌ ошибка</span>
+      {% elif r.synced_at %}<span class='muted' title="последнее получение списка каналов">✓ {{ fmtdt(r.synced_at) }}</span>
+      {% else %}<span class='muted'>—</span>{% endif %}
+    {% else %}<span class='muted'>—</span>{% endif %}
+  </td>
   <td>
     {# галка «анкеты»: только отмеченные чаты отдают анкеты участников в промпт LLM #}
     <form method='post' action="{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
@@ -31,6 +40,6 @@
     </form>
   </td>
 </tr>{% else %}
-<tr><td colspan='6' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
+<tr><td colspan='7' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
 {% endfor %}
 </tbody></table></div>
