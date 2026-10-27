@@ -92,57 +92,41 @@ def to_local(v, tzname: str | None):
 #   ADMIN_EXTRA_COLUMNS=messages:reactions_json,...  — добавить в ленту       #
 #   ADMIN_HIDE_COLUMNS=user_profiles:username,...    — убрать из ленты        #
 # --------------------------------------------------------------------------- #
+# Ленты админки — UI-контракт: НЕ больше 6 видимых колонок на таблицу.
+# Всё остальное видно в карточке записи («открыть ▸»). Надстройка/скрытие —
+# ENV ADMIN_EXTRA_COLUMNS / ADMIN_HIDE_COLUMNS ('таблица:колонка,...').
 VIEW_COLUMNS: dict[str, list[str]] = {
-    "messages": [
-        "id", "timestamp", "author_id", "clean_content", "reply_to_author_id",
-        "edited_at", "deleted_at", "word_count", "has_attachment",
-        "reaction_total",
-    ],
-    "user_profiles": [
-        "id", "user_id", "username", "global_name", "priority",
-        "created_at_discord", "bot", "about", "premium_type", "last_updated",
-    ],
-    "guild_member_profiles": [
-        "id", "user_id", "guild_id", "nick", "joined_at", "timeout_until",
-        "top_role", "mute", "deaf",
-    ],
-    "user_roles": [
-        "id", "user_id", "role_id", "guild_id", "position",
-    ],
-    "attachments": [
-        "id", "message_id", "filename", "content_type", "size",
-        "is_image", "downloaded",
-    ],
-    "channel_states": [
-        "channel_id", "guild_id", "last_message_id", "oldest_message_id",
-        "last_poll_at", "messages_total",
-    ],
-    "audit_log": [
-        "id", "created_at", "action", "target", "result",
-    ],
+    "messages": ["id", "timestamp", "author_id", "clean_content"],
+    "user_profiles": ["id", "user_id", "username", "last_updated"],
+    "guild_member_profiles": ["id", "user_id", "nick", "joined_at"],
+    "user_roles": ["id", "user_id", "role_id"],
+    "attachments": ["id", "message_id", "filename", "size"],
+    "channel_states": ["channel_id", "messages_total", "last_poll_at"],
+    "audit_log": ["id", "created_at", "action", "target", "result"],
     # --- новый функционал (миграции v5..v8) ---------------------------------
-    "user_games": [
-        "id", "user_id", "name", "kind", "details", "state",
-        "first_seen", "last_seen",
-    ],
-    "profile_snapshots": [
-        "id", "user_id", "taken_at", "about", "status_text",
-        "avatar_hash", "banner_hash", "changed",
-    ],
-    "psych_profiles": [
-        "id", "user_id", "model", "mbti_type", "mbti_confidence",
-        "enneagram_type", "confidence_overall", "severity_max",
-        "messages_analyzed", "period_from", "period_to",
-        "is_current", "created_at",
-    ],
-    "psych_signals": [
-        "id", "user_id", "signal_key", "quote", "message_id",
-        "severity", "created_at",
-    ],
-    "user_interests": [
-        "id", "user_id", "topic", "evidence_count", "evidence",
-        "first_seen_at", "last_seen_at",
-    ],
+    "user_games": ["id", "user_id", "name", "last_seen"],
+    "profile_snapshots": ["id", "user_id", "taken_at", "status_text"],
+    "psych_profiles": ["id", "user_id", "mbti_type", "severity_max",
+                       "created_at"],
+    "psych_signals": ["id", "user_id", "signal_key", "severity"],
+    "user_interests": ["id", "user_id", "topic", "evidence_count"],
+}
+
+# Человекочитаемые заголовки колонок в лентах (сырые имена — в title-th).
+COL_LABELS: dict[str, str] = {
+    "id": "#", "pk": "#",
+    "user_id": "user", "author_id": "автор", "message_id": "msg",
+    "role_id": "роль", "guild_id": "гильдия", "channel_id": "канал",
+    "username": "ник", "nick": "ник", "global_name": "имя",
+    "clean_content": "сообщение", "content": "текст", "filename": "файл",
+    "name": "название", "topic": "топик", "title": "заголовок",
+    "size": "размер", "kind": "тип", "action": "действие", "target": "объект",
+    "result": "результат", "severity": "sev", "severity_max": "max sev",
+    "signal_key": "сигнал", "mbti_type": "MBTI", "status_text": "статус",
+    "messages_total": "всего", "evidence_count": "evid",
+    "timestamp": "время", "created_at": "создано", "last_updated": "обновлён",
+    "joined_at": "вступил", "last_seen": "виден", "taken_at": "снимок",
+    "last_poll_at": "поллинг",
 }
 
 # Ссылки «кто это?» — колонки, по которым строится ссылка на user_profiles.
@@ -337,10 +321,11 @@ def create_app(database_url: str) -> Flask:
                 chosen.append(c)
         hidden = ENV_HIDE.get(table, set())
         chosen = [c for c in chosen if c not in hidden]
-        # unknown-таблица без VIEW_COLUMNS может дать 20+ колонок — «каша»,
-        # которую fixed-раскладка не спасает: режем до читаемых 12 (PK первый)
-        if table not in VIEW_COLUMNS and len(chosen) > 12:
-            chosen = chosen[:12]
+        # UI-контракт: максимум 6 видимых колонок (PK + 5). unknown-таблица
+        # без VIEW_COLUMNS дала бы 20+ колонок — «каша», которую никакая
+        # раскладка не спасает. ADMIN_EXTRA_COLUMNS тоже под этим лимитом.
+        if len(chosen) > 6:
+            chosen = chosen[:6]
         return chosen
 
     # --- ссылки на пользователя и связанные записи ---------------------------
@@ -570,6 +555,22 @@ def create_app(database_url: str) -> Flask:
         # безопасный рендер значения в ячейку: None -> '—' (иначе Jinja печатает
         # 'None', и колонки с разными «пустыми» выглядят разъехавшимися)
         ctx.setdefault("v_or", lambda v: v if v not in (None, "") else "—")
+
+        # снегфлейк Discord -> дата создания объекта (snowflake epoch 2015-01-01).
+        # Экономит колонку created_at_discord в ленте user_profiles: никнейм/id
+        # остаются, а возраст аккаунта виден прямо в id по наведению.
+        _SNOW_EPOCH_MS = 1_420_070_400_000
+
+        def snow_dt(v):
+            try:
+                ms = (int(v) >> 22) + _SNOW_EPOCH_MS
+                return to_local(
+                    datetime.fromtimestamp(ms / 1000, tz=timezone.utc), _tzv
+                )[:10]
+            except Exception:
+                return ""
+
+        ctx.setdefault("snowdt", snow_dt)
         return render_template(
             "admin/layout.html",
             content=Markup(render_template(f"admin/{tpl}.html", **ctx)),
@@ -811,8 +812,10 @@ def create_app(database_url: str) -> Flask:
         if table == "user_profiles" and "user_id" in cols:
             psych_map = psych_map_for([r["user_id"] for r in rows_raw])
         # Подписи user_id -> @username для колонок-ссылок (одним запросом).
-        uids = {r["cells"][cols.index("user_id")][0] for r in rows} \
-            if "user_id" in cols else set()
+        uids = set()
+        for _c in ("user_id", "author_id"):
+            if _c in cols:
+                uids |= {r["cells"][cols.index(_c)][0] for r in rows}
         uid_map = {}
         if uids:
             try:
@@ -838,29 +841,33 @@ def create_app(database_url: str) -> Flask:
         WIDE = {"about", "content", "clean_content", "prev_content", "new_content",
                 "quote", "evidence", "status_text", "raw_json", "details",
                 "context", "filename", "activity_name", "top_role", "target",
-                "result", "action"}
-        NARROW = {pk: "70px"}
+                "result"}
+        NARROW = {pk: "64px"}
         for c in cols:
             if c == pk:
                 continue
             if c in ("user_id", "author_id", "message_id", "channel_id", "guild_id",
                      "reply_to_author_id", "msg_author_id", "source_user_id",
                      "target_user_id"):
-                NARROW[c] = "128px"
+                NARROW[c] = "150px"   # snowflake 19-значный + ссылка/бейдж
             elif c in ("timestamp", "created_at", "last_updated", "edited_at",
                        "occurred_at", "observed_at", "dm_synced_at", "joined_at",
                        "created_at_discord", "period_from", "period_to",
                        "first_seen", "last_seen", "updated_at", "taken_at",
                        "recorded_at", "last_poll_at"):
-                NARROW[c] = "132px"
+                NARROW[c] = "148px"   # фикс. формат ДД.ММ.ГГГГ ЧЧ:ММ:СС
             elif c in ("priority", "bot", "is_system", "mute", "deaf", "emoji",
-                       "action", "kind", "status", "mbti_type", "severity",
+                       "kind", "status", "mbti_type", "severity",
                        "severity_max", "confidence_overall", "mbti_confidence",
                        "enneagram_type", "premium_type", "dm_fetch",
-                       "dm_messages_total", "word_count", "has_attachment",
-                       "reaction_total", "is_current", "downloaded", "is_image",
-                       "size", "position", "edit_number", "changed"):
-                NARROW[c] = "64px"
+                       "word_count", "has_attachment", "reaction_total",
+                       "is_current", "downloaded", "is_image",
+                       "size", "position", "edit_number", "changed",
+                       "messages_total", "evidence_count"):
+                NARROW[c] = "72px"
+            elif c in ("username", "nick", "name", "topic", "action",
+                       "signal_key"):
+                NARROW[c] = "110px"
         widths = [{"name": c, "w": NARROW.get(c),
                    "wide": (c in WIDE and c not in NARROW)} for c in cols]
         # карта «резиновых» колонок для td.clamp (подрезка в 2 строки): шаблон
@@ -872,9 +879,12 @@ def create_app(database_url: str) -> Flask:
             total=total, q=q, col=col, val=val, cur_page=page,
             pages=max(1, -(-total // per)), href=href,
             hidden_count=len(all_cols) - len(cols),
-            prio=prio, has_priority="priority" in all_cols, pk_col=pk,
+            prio=prio, has_priority=("priority" in all_cols
+                                     and "priority" not in cols),
+            pk_col=pk,
             cur=cur, is_psych_profiles=(table == "psych_profiles"),
             uid_map=uid_map, psych_map=psych_map, widths=widths, w_wide=w_wide,
+            labels=COL_LABELS,
         )
 
     # --- карточка записи: просмотр + редактирование -------------------------

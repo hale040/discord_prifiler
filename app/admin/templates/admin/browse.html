@@ -6,7 +6,7 @@
       <input type='search' name='q' value='{{ q }}' placeholder='подстрока в любом столбце'></div>
     <div><label>Фильтр: столбец</label>
       <select name='col'><option value=''>—</option>
-      {% for c in cols %}<option {{ 'selected' if col==c }}>{{ c }}</option>{% endfor %}</select></div>
+      {% for c in cols %}<option value='{{ c }}' {{ 'selected' if col==c }}>{{ labels.get(c, c) }}</option>{% endfor %}</select></div>
     <div><label>= значение</label>
       <input type='text' name='val' value='{{ val }}'></div>
     <div style='flex:0;min-width:auto;display:flex;gap:.5rem;align-items:end;padding-bottom:1px'>
@@ -20,22 +20,23 @@
       <a class='btn gray' href='{{ url_for('browse', table=table) }}'>сброс</a>
     </div>
   </div>
-  <p class='muted' style='margin:.6rem 0 0'>Клик по id — открыть карточку.
+  <p class='muted' style='margin:.6rem 0 0'>Клик по # — открыть карточку (там все поля).
     {% if has_priority %}★ — приоритет одним кликом. {% endif %}
     {% if is_psych_profiles %}👁 — читаемый вид результата LLM. {% endif %}
-    Все действия — внутри карточки записи.</p>
+    {% if hidden_count %}Скрыто колонок: {{ hidden_count }} — в карточке видно всё; вернуть: ADMIN_EXTRA_COLUMNS={{ table }}:колонка.{% endif %}
+  </p>
 </form>
 
 {# --cols = фактическое число <col>: ★ + данные + кнопка «открыть».
    min-width в CSS считает по этому числу — колонки не спрессовываются. #}
 <div class='tbl-wrap' style='--cols: {{ (1 if has_priority else 0) + cols|length + 1 }}'>
-<table><colgroup>
-  {% if has_priority %}<col style='width:40px'>{% endif %}
+<table class='lenta'><colgroup>
+  {% if has_priority %}<col style='width:36px'>{% endif %}
   {% for w in widths %}<col{% if w.w %} style='width:{{ w.w }}'{% endif %}{% if w.wide %} class='wide'{% endif %}>{% endfor %}
-  <col style='width:96px'></colgroup>
+  <col style='width:84px'></colgroup>
 <thead><tr>
   {% if has_priority %}<th title='приоритетный пользователь'>★</th>{% endif %}
-  {% for c in cols %}<th>{{ c }}</th>{% endfor %}<th></th></tr></thead>
+  {% for c in cols %}<th title='{{ c }}'>{{ labels.get(c, c) }}</th>{% endfor %}<th></th></tr></thead>
 <tbody>
   {% for row in rows %}<tr>
 {% if has_priority and 'priority' in cols %}<td style='text-align:center;white-space:nowrap'>
@@ -43,7 +44,7 @@
      href='/browse/{{ table|e }}?star={{ row.pk }}&page={{ cur_page }}'
      {%- if q %}&q={{ q|urlencode }}{% endif -%}
      {%- if prio %}&prio=1{% endif %}}>{{ '★' if row.cells[cols.index('priority')][0] not in ('None','—','0','False','false') else '☆' }}</a></td>{% endif %}
-{% for cell in row.cells %}<td class='{{ 'json' if cell[1] else ('clamp' if w_wide.get(cols[loop.index0])) }}'{% if cell[0] not in ('—','') %} title='{{ cell[0]|e }}'{% endif %}>
+{% for cell in row.cells %}<td class='{{ 'json' if cell[1] else ('clamp' if w_wide.get(cols[loop.index0])) }}'{% if cell[0] not in ('—','') %} title='{{ cell[0]|e }}{% if cols[loop.index0] == 'user_id' and snowdt(cell[0]) %} · аккаунт с {{ snowdt(cell[0]) }}{% endif %}'{% endif %}>
   {% if loop.index0 == 0 %}<a href="{{ url_for('record', table=table, pk=row.pk) }}">{{ cell[0] }}</a>
   {% elif has_priority and cols[loop.index0] == 'priority' %}{# колонка priority не дублируется — показ через ★ #}
   {% elif cols[loop.index0] == 'user_id' and psych_map.get(cell[0]) %}
@@ -54,7 +55,8 @@
     {% set p = psych_map.get(cell[0]) %}
     <a class='pill ok' style='text-decoration:none' title='актуальный психопрофиль #{{ p.id }}'
        href="{{ url_for('profile_view', pid=p.id) }}">🧠{{ ' ' + p.mbti_type if p.mbti_type }}</a>
-  {% elif cols[loop.index0] == 'user_id' and uid_map.get(cell[0]) %}<a href="/browse/user_profiles?col=user_id&val={{ cell[0] }}" title="профиль пользователя">{{ cell[0] }}</a> <span class='muted'>@{{ uid_map.get(cell[0]) }}</span>
+  {% elif cols[loop.index0] == 'user_id' and uid_map.get(cell[0]) %}<a href="/browse/user_profiles?col=user_id&val={{ cell[0] }}" title="профиль пользователя">@{{ uid_map.get(cell[0]) }}</a>
+  {% elif cols[loop.index0] == 'author_id' and uid_map.get(cell[0]) %}<a href="/browse/user_profiles?col=user_id&val={{ cell[0] }}" title="автор сообщения">@{{ uid_map.get(cell[0]) }}</a>
   {% elif cols[loop.index0] == 'dm_fetch' %}
     {# ЛС-сбор одним символом вместо True/False #}
     {% if cell[0] in ('True','true','1') %}<span title='ЛС-сбор включён' style='color:var(--ok);font-weight:700'>💬✓</span>{% else %}<span class='muted' title='ЛС-сбор выключен'>—</span>{% endif %}

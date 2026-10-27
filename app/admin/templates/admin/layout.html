@@ -81,13 +81,16 @@
       table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;
             font-size:.85rem;background:transparent}
       .tbl-wrap > table{min-width:calc(var(--cols, 8) * 110px)}
+      /* Ленты browse: колонок ≤6, ширины заданы <colgroup> — считаем min-width
+         по фактическим ширинам, а не по усреднённым 110px. */
+      .tbl-wrap > table.lenta{min-width:calc(var(--cols, 7) * 96px)}
       th,td{border-bottom:1px solid var(--line);padding:.5rem .65rem;vertical-align:top;
             overflow-wrap:anywhere;text-align:left}
       th{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       tr:last-child td{border-bottom:0}
       tbody tr:hover{background:var(--hover)}
       thead th{background:var(--elev);color:var(--muted);font-weight:600;font-size:.75rem;
-         text-transform:uppercase;letter-spacing:.02em}
+         text-transform:uppercase;letter-spacing:.02em;position:sticky;top:0;z-index:1}
       td.nowrap{white-space:nowrap}
       td a, .stat a{color:var(--link);text-decoration:none}
       td a:hover{text-decoration:underline}
@@ -95,6 +98,10 @@
          id/статусы узкие, текстовые колонки забирают остаток. 'wide' —
          резиновые колонки с гарантированным минимумом. */
       col.wide{min-width:180px}
+      /* Снефлейк-id: длинное число режем многоточием в середине при нехватке
+         места (полное — по title и в карточке), чтобы колонка не ломала сетку. */
+      td a{display:inline-block;max-width:100%;overflow:hidden;
+           text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
       /* Подрезка ячеек: 2 строки для текста, 3 для JSON — длинный raw_json или
          about не растягивают высоту строки; полный текст виден по title.
          display:-webkit-box совместим со всеми Chromium/WebKit/Firefox(≥68). */
