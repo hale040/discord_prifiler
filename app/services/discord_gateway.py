@@ -25,10 +25,19 @@ import discord
 log = logging.getLogger("discord_gateway")
 
 
+async def _noop_callback(*_args, **_kwargs) -> None:
+    """Заглушка для клиентов «только для чтения» (админка: fetch каналов)."""
+
+
 class UserbotClient(discord.Client):
     """Тонкая обёртка над discord.py-self Client с user-oriented настройками."""
 
-    def __init__(self, token: str, *, gateway_callback, ready_callback) -> None:
+    def __init__(self, token: str, *, gateway_callback=None,
+                 ready_callback=None) -> None:
+        # gateway_callback/ready_callback теперь опциональны: админка может
+        # создавать клиента «только для чтения» (fetch каналов) без live-
+        # обработки — раньше там передавался None напрямую и live-события
+        # падали с TypeError: 'NoneType' object is not callable.
         # discord.py-self сам формирует корректные gateway properties по
         # user-token'у (client_type web/desktop/mobile), поэтому трафик
         # выглядит как обычный клиент Discord, а не как бот-либария.
@@ -43,8 +52,8 @@ class UserbotClient(discord.Client):
             status=discord.Status.online,
         )
         self._token = token
-        self._gateway_callback = gateway_callback
-        self._ready_callback = ready_callback
+        self._gateway_callback = gateway_callback or _noop_callback
+        self._ready_callback = ready_callback or _noop_callback
         self._ready_fired = False
 
     # ------------------------------------------------------------- lifecycle
