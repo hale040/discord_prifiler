@@ -166,8 +166,10 @@ a { color: inherit; text-decoration: none; }
 #catalog .section__title, #pricing .section__title, #about .section__title { text-align: left; }
 #catalog .section__subtitle, #pricing .section__subtitle { text-align: left; }
 
-/* Light sections (catalog, pricing, about) */
+/* Light sections */
 main > .section:not(.section--dark) { background: #f2f4f7; color: var(--text-dark); }
+main > .section:not(.section--dark) .section__title { color: var(--text-dark); }
+.slider .slide__title { color: #fff; }
 main > .section:not(.section--dark) .section__subtitle,
 main > .section:not(.section--dark) .card__desc,
 main > .section:not(.section--dark) .price__note { color: #5b6672; }
@@ -272,39 +274,43 @@ main > .section:not(.section--dark) .price__timer { color: #9a5b1f; }
 }
 .btn--order:hover { background: var(--accent-dark); transform: translateY(-1px); }
 
-/* ===== Calculator ===== */
+/* ===== Calculator (white module on dark section) ===== */
 .calc {
-  background: rgba(255,255,255,.04); border: 1px solid var(--line);
+  background: #fff; border: 1px solid #e3e7ec;
   border-radius: var(--radius); padding: 2rem; margin-top: 2rem;
   display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem;
+  box-shadow: 0 12px 32px rgba(0,0,0,.25);
 }
-.calc__field label { display: block; margin-bottom: .4rem; font-size: .9rem; color: var(--muted); }
+.calc__field label { display: block; margin-bottom: .4rem; font-size: .9rem; color: #5b6672; }
 .calc__field select, .calc__field input[type="number"] {
   width: 100%; padding: .75rem 1rem; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 1rem;
+  border: 1px solid #d4dae1; background: #f6f8fa; color: #232a31; font-size: 1rem;
 }
+.calc__field select:focus, .calc__field input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .calc__checks { grid-column: 1 / -1; display: flex; gap: 1.5rem; flex-wrap: wrap; }
-.calc__checks label { display: flex; align-items: center; gap: .5rem; color: var(--text); font-size: .95rem; cursor: pointer; }
+.calc__checks label { display: flex; align-items: center; gap: .5rem; color: #232a31; font-size: .95rem; cursor: pointer; }
 .calc__result {
   grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
-  gap: 1rem; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 1.2rem;
-  font-size: 1.2rem;
+  gap: 1rem; flex-wrap: wrap; border-top: 1px solid #e3e7ec; padding-top: 1.2rem;
+  font-size: 1.2rem; color: #232a31;
 }
-.calc__result span { color: var(--accent); font-weight: 800; font-size: 1.6rem; }
-.calc__hint { display: block; font-size: .85rem; color: #4ade80; min-height: 1.2em; }
+.calc__result span { color: var(--accent-dark); font-weight: 800; font-size: 1.6rem; }
+.calc__hint { display: block; font-size: .85rem; color: #158a3f; min-height: 1.2em; }
 
 /* ===== Reviews ===== */
-.rev__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.4rem; }
-.rev {
+.reviews__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.4rem; }
+.review {
   background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius);
   padding: 1.6rem; box-shadow: 0 4px 16px rgba(0,0,0,.06);
   display: flex; flex-direction: column; gap: .8rem;
 }
-.rev__stars { color: #f5a623; letter-spacing: .15em; font-size: 1.05rem; }
-.rev p { color: #3d4650; font-size: .95rem; font-style: italic; flex: 1; }
-.rev footer { display: flex; flex-direction: column; border-top: 1px solid #eceff3; padding-top: .8rem; }
-.rev footer b { color: var(--text-dark); }
-.rev footer span { color: #5b6672; font-size: .85rem; }
+.review__stars { color: #f5a623; letter-spacing: .15em; font-size: 1.05rem; }
+.review p { color: #3d4650; font-size: .95rem; font-style: italic; flex: 1; margin: 0; }
+.review footer { display: flex; flex-direction: column; border-top: 1px solid #eceff3; padding-top: .8rem; font-style: normal; }
+.review footer b { color: var(--text-dark); }
+.review footer span, .review > footer:not(:has(b)) { color: #5b6672; font-size: .85rem; }
+#reviews .section__subtitle { color: var(--muted); }
+.review > footer { color: #5b6672; font-size: .85rem; }
 
 /* ===== FAQ ===== */
 .faq__list { margin-top: 1.5rem; display: flex; flex-direction: column; gap: .8rem; max-width: 860px; }
@@ -316,6 +322,7 @@ main > .section:not(.section--dark) .price__timer { color: #9a5b1f; }
 .faq__item summary {
   cursor: pointer; list-style: none; padding: 1.1rem 1.4rem;
   font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+  color: var(--text);
 }
 .faq__item summary::-webkit-details-marker { display: none; }
 .faq__item summary::after { content: "+"; color: var(--accent); font-size: 1.5rem; line-height: 1; transition: transform .25s; }
@@ -681,12 +688,13 @@ main > .section:not(.section--dark) .price__timer { color: #9a5b1f; }
 main > .section:not(.section--dark) .step__num { color: #fff; }
 /* ===== «Почему выбирают нас» — светлый акцентный блок (как на металлостал.рф) ===== */
 .section--accent { background: #eef1f5; color: var(--text-dark); }
-#advantages.section--accent .section__title { color: var(--text-dark); }
-#advantages.section--accent .adv { background: #fff; border: 1px solid #e3e7ec; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
-#advantages.section--accent .adv:hover { border-color: var(--accent); box-shadow: 0 14px 30px rgba(0,0,0,.12); }
-#advantages.section--accent .adv__body h3 { color: var(--text-dark); }
-#advantages.section--accent .adv__body p { color: #5b6672; }
-#advantages.section--accent .adv__icon { color: var(--accent); }
+#advantages.section--dark .section__title { color: var(--text); }
+#advantages.section--dark .section__subtitle, #advantages.section--dark .adv__lead { color: var(--muted); }
+#advantages.section--dark .adv { background: #fff; border: 1px solid #e3e7ec; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+#advantages.section--dark .adv:hover { border-color: var(--accent); box-shadow: 0 14px 30px rgba(0,0,0,.35); }
+#advantages.section--dark .adv__body h3 { color: var(--text-dark); }
+#advantages.section--dark .adv__body p { color: #5b6672; }
+#advantages.section--dark .adv__icon { color: var(--accent); }
 
 /* ===== «Как проходит поставка» — тёмный фон, карточки остаются светлыми ===== */
 #how.section--dark .section__subtitle { color: var(--muted); }
@@ -732,7 +740,8 @@ main > .section:not(.section--dark) .step__num { color: #fff; }
 .gcard__title { font-size: .95rem; margin-top: .15rem; line-height: 1.25; }
 
 .offers__head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
-.offers__updated { color: var(--muted); font-size: .85rem; }
+.offers__updated { color: #7a8794; font-size: .85rem; }
+#catalog .offers__head .section__title { color: var(--text-dark); }
 .offers__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1.2rem; margin-top: 1.2rem; }
 .offer { background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius); padding: 1rem; display: flex; flex-direction: column; gap: .5rem; transition: box-shadow .2s, transform .2s; }
 .offer:hover { box-shadow: 0 10px 26px rgba(0,0,0,.12); transform: translateY(-4px); }
@@ -746,7 +755,7 @@ main > .section:not(.section--dark) .step__num { color: #fff; }
 .adv--icon .adv__pic { width: 76px; height: 76px; object-fit: contain; }
 .adv--icon h3 { font-size: 1rem; }
 .adv__lead { max-width: 900px; margin: 2rem auto 0; text-align: center; color: #4a5560; font-size: .98rem; line-height: 1.65; }
-#advantages.section--accent .adv--icon { background: #fff; border: 1px solid #e3e7ec; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+#advantages.section--dark .adv--icon { background: #fff; border: 1px solid #e3e7ec; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 
 /* ===== НОВЫЕ СЕКЦИИ: услуги, СРО, этапы, доставка-оплата ===== */
 /* Услуги металлообработки */
@@ -760,42 +769,47 @@ main > .section:not(.section--dark) .step__num { color: #fff; }
 @media (max-width: 900px) { .srv__wrap { grid-template-columns: 1fr; } }
 
 /* Вступление в СРО */
-#sro { background: #fff; color: var(--text-dark); }
-#sro .section__title { color: var(--text-dark); }
-#sro .section__subtitle { color: #5b6672; }
-#sro .section__subtitle b { color: var(--accent-dark); }
+/* SRO — dark section */
+#sro .section__title { color: var(--text); }
+#sro .section__subtitle { color: var(--muted); }
+#sro .section__subtitle b { color: var(--accent); }
 .sro__grid { display: grid; grid-template-columns: 320px 1fr; gap: 2rem; margin-top: 1.6rem; align-items: start; }
-.sro__card { background: #f2f4f7; border: 1px solid #e3e7ec; border-radius: var(--radius); padding: 1.5rem; }
-.sro__card h3 { font-size: 1.05rem; margin-bottom: .8rem; color: var(--text-dark); }
+.sro__card { background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.5rem; }
+.sro__card h3 { font-size: 1.05rem; margin-bottom: .8rem; color: var(--text); }
 .sro__list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: .4rem .8rem; }
-.sro__list li { background: #fff; border: 1px solid #e3e7ec; border-radius: 8px; padding: .5rem .7rem; font-size: .9rem; font-weight: 600; }
-.sro__main h3 { font-size: 1.15rem; margin-bottom: 1rem; color: var(--text-dark); }
+.sro__list li { background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; font-size: .9rem; font-weight: 600; color: var(--text); }
+.sro__main h3 { font-size: 1.15rem; margin-bottom: 1rem; color: var(--text); }
 .sro__logos { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
-.sro__logo { display: flex; flex-direction: column; justify-content: center; gap: .3rem; min-height: 96px; padding: 1rem; background: #f7f8fa; border: 1px solid #e3e7ec; border-radius: var(--radius); text-align: center; transition: border-color .2s, transform .2s; }
+.sro__logo { display: flex; flex-direction: column; justify-content: center; gap: .3rem; min-height: 96px; padding: 1rem; background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius); text-align: center; transition: border-color .2s, transform .2s; }
 .sro__logo:hover { border-color: var(--accent); transform: translateY(-3px); }
 .sro__logo span { font-family: 'Oswald', sans-serif; font-weight: 600; font-size: .86rem; text-transform: uppercase; letter-spacing: .02em; color: var(--text-dark); }
 .sro__logo small { color: #7a8794; font-size: .74rem; }
-.sro__logo--dashed { border-style: dashed; background: repeating-linear-gradient(45deg, #fafbfc, #fafbfc 8px, #f4f5f7 8px, #f4f5f7 16px); }
-.sro__note { margin-top: 1.2rem; font-size: .92rem; color: #5b6672; }
-.sro__note a { color: var(--accent-dark); font-weight: 600; }
+.sro__logo--dashed { border-style: dashed; background: rgba(255,255,255,.03); }
+.sro__logo--dashed span { color: var(--muted); }
+.sro__logo--dashed small { color: var(--muted); }
+.sro__note { margin-top: 1.2rem; font-size: .92rem; color: var(--muted); }
+.sro__note a { color: var(--accent); font-weight: 600; }
 @media (max-width: 900px) { .sro__grid { grid-template-columns: 1fr; } }
 
-/* Этапы обработки металла (тёмная секция) */
+/* Этапы обработки металла (светлая секция) */
+#stages .section__title { color: var(--text-dark); }
+#stages .section__subtitle { color: #5b6672; }
 .stages__list { list-style: none; counter-reset: st; margin: 1.6rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.2rem; }
-.stage { position: relative; background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.4rem; transition: border-color .2s, transform .2s; }
-.stage:hover { border-color: var(--accent); transform: translateY(-4px); }
+.stage { position: relative; background: #fff; border: 1px solid #dfe4ea; border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.4rem; box-shadow: 0 2px 10px rgba(0,0,0,.04); transition: transform .2s, box-shadow .2s; }
+.stage:hover { transform: translateY(-4px); box-shadow: 0 12px 26px rgba(0,0,0,.1); }
 .stage__num { display: block; font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 2rem; color: var(--accent); opacity: .9; margin-bottom: .5rem; }
-.stage h3 { font-size: 1.02rem; margin-bottom: .45rem; color: var(--text); }
-.stage p { font-size: .88rem; color: var(--muted); line-height: 1.55; }
-.stages__adv-title { margin-top: 2.4rem; font-size: 1.25rem; color: var(--text); }
+.stage h3 { font-size: 1.02rem; margin-bottom: .45rem; color: var(--text-dark); }
+.stage p { font-size: .88rem; color: #5b6672; line-height: 1.55; margin: 0; }
+.stages__adv-title { margin-top: 2.4rem; font-size: 1.25rem; color: var(--text-dark); }
 .stages__adv { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: .8rem 1.6rem; }
-.stages__adv li { position: relative; padding-left: 1.8rem; font-size: .95rem; color: var(--text); }
-.stages__adv li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--accent); font-weight: 700; }
+.stages__adv li { position: relative; padding-left: 1.8rem; font-size: .95rem; color: #3c454e; }
+.stages__adv li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--accent-dark); font-weight: 700; }
 @media (max-width: 1024px) { .stages__list { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .stages__list { grid-template-columns: 1fr; } }
 
-/* Доставка и оплата */
-.dlv__subtitle { margin: 2.2rem 0 1rem; font-size: 1.3rem; color: var(--text-dark); border-left: 4px solid var(--accent); padding-left: .8rem; }
+#delivery .section__title { color: var(--text); }
+.dlv__subtitle { margin: 2.2rem 0 1rem; font-size: 1.3rem; color: var(--text); border-left: 4px solid var(--accent); padding-left: .8rem; }
+#delivery .serv h3 { color: var(--text-dark); }
 .dlv__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4rem; }
 .dlv__grid--4 { grid-template-columns: repeat(4, 1fr); }
 .dlv__link { display: inline-block; margin-top: .3rem; color: var(--accent-dark); font-weight: 600; font-size: .9rem; }

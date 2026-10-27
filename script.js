@@ -431,8 +431,17 @@ function closeModal() {
   modalStatus.textContent = "";
 }
 document.getElementById("callBtn").addEventListener("click", () => openModal());
-// Кнопки «узнать цену» теперь ведут на tel:-ссылку (блок прайса удалён),
-// обработчики heroPriceBtn/stickyFormBtn больше не нужны.
+
+// ===== Кнопки «Заказать» в блоке «Наши предложения» =====
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".js-order");
+  if (!btn) return;
+  const name = btn.dataset.name || "позиция";
+  openModal(
+    `Позиция: <b>${name}</b>. Оставьте телефон — менеджер перезвонит и назовёт актуальную цену и срок отгрузки.`,
+    "Заказать: " + name
+  );
+});
 modalClose.addEventListener("click", closeModal);
 modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
@@ -581,4 +590,13 @@ leadForm.addEventListener("submit", e => {
 
   render();
   restart();
+})();
+
+// ===== Дата обновления прайса (авто) =====
+(function () {
+  const el = document.getElementById("priceDate");
+  if (el) {
+    const d = new Date();
+    el.textContent = String(d.getDate()).padStart(2, "0") + "." + String(d.getMonth() + 1).padStart(2, "0") + "." + d.getFullYear();
+  }
 })();
