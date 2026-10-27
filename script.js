@@ -191,6 +191,16 @@ modal.addEventListener("keydown", e => {
 
 document.getElementById("callBtn").addEventListener("click", () => openModal());
 
+// «Оставить заявку» в hero и других местах — открывает форму заявки в модалке
+document.addEventListener("click", e => {
+  const btn = e.target.closest(".js-lead");
+  if (!btn) return;
+  openModal(
+    "Заполните форму — менеджер свяжется с вами в течение 15 минут, посчитает цену под объём и подготовит счёт.",
+    "Оставить заявку"
+  );
+});
+
 // ===== Кнопки «Узнать цену» в каталоге и модалка заказа =====
 document.addEventListener("click", (e) => {
   const btn = e.target.closest(".js-order");
@@ -213,13 +223,28 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal()
 
 modalForm.addEventListener("submit", async e => {
   e.preventDefault();
+  const name = document.getElementById("modalName").value.trim();
   const phone = document.getElementById("modalPhone").value;
+  const msg = document.getElementById("modalMsg").value.trim();
+  const agree = document.getElementById("modalAgree").checked;
+  if (name.length < 2) {
+    modalStatus.textContent = "Укажите имя";
+    modalStatus.className = "form__status err";
+    document.getElementById("modalName").focus();
+    return;
+  }
   if (phone.replace(/\D/g, "").length < 11) {
     modalStatus.textContent = "Введите полный номер телефона";
     modalStatus.className = "form__status err";
     return;
   }
-  const sent = await sendLead({ type: "callback", phone, page: location.href, ts: new Date().toISOString() });
+  if (!agree) {
+    modalStatus.textContent = "Нужно согласие на обработку персональных данных";
+    modalStatus.className = "form__status err";
+    return;
+  }
+  const isLead = modalTitle.textContent.toLowerCase().includes("заявк");
+  const sent = await sendLead({ type: isLead ? "lead-modal" : "callback", name, phone, message: msg, page: location.href, ts: new Date().toISOString() });
   modalStatus.textContent = sent
     ? "Заявка принята! Перезвоним в течение 15 минут."
     : "Не удалось отправить. Позвоните сами: " + CONTACTS.phoneDisplay;

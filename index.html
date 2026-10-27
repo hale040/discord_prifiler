@@ -78,23 +78,35 @@
   <main>
     <!-- ===== HERO ===== -->
     <section class="hero" id="hero">
+      <div class="hero__decor" aria-hidden="true"></div>
       <div class="container hero__inner">
         <div class="hero__content">
           <span class="hero__badge reveal">Продукция с отметкой РТ-Техприёмка — Авиатехприёмка АТП</span>
           <h1 class="reveal"><span class="hero__eyebrow">Металлопрокат и металлообработка · Екатеринбург</span><span class="hero__lead">Отечественная и импортная <b>металлопродукция</b></span></h1>
           <p class="hero__subtitle reveal">Более 10&nbsp;000 уникальных позиций. Полный спектр металлообработки: <b>гибка, резка, изготовление по чертежам</b>. Доставка металла по всей России.</p>
           <div class="hero__buttons reveal">
-            <a href="#contacts" class="btn btn--accent btn--lg pulse">Оставить заявку</a>
+            <button type="button" class="btn btn--accent btn--lg pulse js-lead">Оставить заявку</button>
             <a href="tel:+73432020001" class="btn btn--ghost btn--lg">+7 (343) 202-00-01</a>
           </div>
-          <p class="hero__trust reveal">Склады: <b>Екатеринбург</b> · <b>Москва</b> · <b>Санкт-Петербург</b> · <b>Казань</b> · <b>Новосибирск</b> · <b>Челябинск</b> · <b>Сургут</b> · <b>Владивосток</b></p>
+          <ul class="hero__trust reveal">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 21s-7-5.5-7-11a7 7 0 1 1 14 0c0 5.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Склады: <b>Екатеринбург</b> · <b>Москва</b> · <b>Санкт-Петербург</b> · <b>Казань</b> · <b>Новосибирск</b> · <b>Челябинск</b> · <b>Сургут</b> · <b>Владивосток</b></span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2l7 4v6c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-4z"/><path d="m9 12 2 2 4-4"/></svg><span>Сертификаты качества на каждую партию, <b>паспорт и УПД</b> в комплекте</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="1" y="6" width="13" height="10" rx="1"/><path d="M14 9h4l3 3v4h-7"/><circle cx="6" cy="18" r="1.8"/><circle cx="18" cy="18" r="1.8"/></svg><span>Отгрузка <b>в день оплаты</b>, доставка по всей России и СНГ</span></li>
+          </ul>
         </div>
-        <div class="hero__stats reveal">
-          <div class="stat"><div class="stat__num" data-count="10000">0</div><div class="stat__label">уникальных позиций</div></div>
-          <div class="stat"><div class="stat__num" data-count="8">0</div><div class="stat__label">городов со складами</div></div>
-          <div class="stat"><div class="stat__num" data-count="24">0</div><div class="stat__label">часа — работа офиса</div></div>
-          <div class="stat"><div class="stat__num" data-count="100">0</div><div class="stat__label">% сертифицированная продукция</div></div>
-        </div>
+        <aside class="hero__panel reveal" aria-label="МЕТАЛЛОСТАЛЬ в цифрах">
+          <div class="hero__panel-head">
+            <span class="hero__panel-title">МЕТАЛЛОСТАЛЬ в цифрах</span>
+            <span class="hero__panel-note">с 2008 года</span>
+          </div>
+          <div class="hero__stats">
+            <div class="stat"><div class="stat__num" data-count="10000">0</div><div class="stat__label">уникальных позиций</div></div>
+            <div class="stat"><div class="stat__num" data-count="8">0</div><div class="stat__label">городов со складами</div></div>
+            <div class="stat"><div class="stat__num" data-count="24">0</div><div class="stat__label">часа — работа офиса</div></div>
+            <div class="stat"><div class="stat__num" data-count="100">0</div><div class="stat__label">% сертифицированная продукция</div></div>
+          </div>
+          <a href="#catalog" class="hero__panel-link">Смотреть каталог <span aria-hidden="true">&rarr;</span></a>
+        </aside>
       </div>
     </section>
 
@@ -509,7 +521,10 @@
       <h3 id="modalTitle">Заказать звонок</h3>
       <p id="modalText">Оставьте телефон — перезвоним в течение 15 минут.</p>
       <form id="modalForm">
+        <input type="text" placeholder="Ваше имя *" id="modalName" required minlength="2" autocomplete="name" aria-describedby="modalStatus">
         <input type="tel" placeholder="+7 (___) ___-__-__" id="modalPhone" required inputmode="tel" autocomplete="tel" aria-describedby="modalStatus">
+        <textarea name="message" rows="2" placeholder="Что нужно? (позиция, объём, сроки)" id="modalMsg"></textarea>
+        <label class="form__agree"><input type="checkbox" id="modalAgree" required> Согласен на обработку персональных данных</label>
         <button type="submit" class="btn btn--accent btn--block">Жду звонка</button>
       </form>
       <p class="form__status" id="modalStatus" role="status" aria-live="polite"></p>
