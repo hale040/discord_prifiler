@@ -11,7 +11,9 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+import sqlalchemy as sa
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.entities import (
@@ -19,6 +21,7 @@ from app.models.entities import (
     Attachment,
     ChannelState,
     Chat,
+    ChatMember,
     GuildMemberProfile,
     Message,
     MessageRevision,
@@ -436,6 +439,98 @@ class Repository:
             s.execute(update(Chat).where(Chat.channel_id == channel_id)
                       .values(tracked=bool(on)))
             s.commit()
+
+    def set_chat_download_files(self, channel_id: int, on: bool) -> None:
+        """Галка «скачивать файлы» (chats.download_files) для одного чата."""
+        with self._sf() as s:
+            s.execute(update(Chat).where(Chat.channel_id == channel_id)
+                      .values(download_files=bool(on)))
+            s.commit()
+
+    def qa_channel_ids(self) -> list[int]:
+        """Каналы с галкой «анкеты» (для live-привязки участников)."""
+        with self._sf() as s:
+            return list(s.scalars(
+                select(Chat.channel_id).where(Chat.collects_qa.is_(True))))
+
+    def download_files_channel_ids(self) -> list[int]:
+        """Каналы с галкой «скачивать файлы» (для attachment-worker)."""
+        with self._sf() as s:
+            return list(s.scalars(
+                select(Chat.channel_id).where(Chat.download_files.is_(True))))
+
+    def ensure_chat_members(self, channel_id: int, author_ids: Iterable[int],
+                            ) -> int:
+        """Привязать авторов к чату как участников (идемпотентно).
+
+        Анкета — пост первого уровня дерева чата; без строки участника её
+        некуда сохранить. Новые записи получают questionnaire='' (участник
+        «под наблюдением»); уже заполненные анкеты НЕ перезаписываются
+        (ON CONFLICT DO NOTHING). Возвращает число новых участников.
+        """
+        ids = [int(a) for a in author_ids if a]
+        if not ids:
+            return 0
+        with self._sf() as s:
+            have = set(s.scalars(
+                select(ChatMember.author_id)
+                .where(ChatMember.channel_id == channel_id,
+                       ChatMember.author_id.in_(ids))))
+            new = [a for a in ids if a not in have]
+            if not new:
+                return 0
+            stmt = pg_insert(ChatMember).values(
+                [{"channel_id": channel_id, "author_id": a,
+                  "questionnaire": ""} for a in new])
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["channel_id", "author_id"])
+            s.execute(stmt)
+            s.commit()
+            return len(new)
+
+    def sync_chat_members_from_messages(self) -> int:
+        """Перенос авторов сообщений в chat_members для чатов с галкой
+        «анкеты» (SELECT DISTINCT ... ON CONFLICT DO NOTHING).
+
+        Лечит «галку анкет не включить», когда участники появились до
+        отметки или вовсе не были созданы старой миграцией. Идемпотентно;
+        возвращает число новых участников. На старых схемах без chats — 0.
+        """
+        with self._sf() as s:
+            try:
+                res = s.execute(sa.text(
+                    "INSERT INTO chat_members (channel_id, author_id, "
+                    "questionnaire) "
+                    "SELECT DISTINCT m.channel_id, m.author_id, '' "
+                    "  FROM messages m "
+                    "  JOIN chats c ON c.channel_id = m.channel_id "
+                    " WHERE c.collects_qa AND m.author_id IS NOT NULL "
+                    " ON CONFLICT (channel_id, author_id) DO NOTHING"))
+                s.commit()
+                return res.rowcount or 0
+            except Exception:  # noqa: BLE001 — старые схемы без колонок
+                s.rollback()
+                return 0
+
+    def recount_chats_totals(self) -> int:
+        """Пересчёт chats.messages_total из фактических строк messages.
+
+        Лента чатов остаётся честной даже если live-инкремент потерялся
+        (перезапуски, дедупы). Возвращает число изменённых строк.
+        """
+        with self._sf() as s:
+            try:
+                res = s.execute(sa.text(
+                    "UPDATE chats c SET messages_total = sub.n "
+                    "  FROM (SELECT channel_id, count(*)::int AS n "
+                    "          FROM messages GROUP BY channel_id) sub "
+                    " WHERE sub.channel_id = c.channel_id "
+                    "   AND c.messages_total <> sub.n"))
+                s.commit()
+                return res.rowcount or 0
+            except Exception:  # noqa: BLE001
+                s.rollback()
+                return 0
 
     def delete_chat(self, channel_id: int) -> bool:
         """Удалить чат из списка сервера (само множество сообщений НЕ трогает).
@@ -864,16 +959,32 @@ class Repository:
                 att.sha256 = sha256
                 s.commit()
 
-    def pending_image_attachments(self, limit: int = 50) -> list[Attachment]:
-        """Не скачанные картинки для фоновой загрузки."""
+    def pending_attachments(self, limit: int = 50, *, channel_ids=None,
+                            max_size: int | None = None) -> list[Attachment]:
+        """Не скачанные вложения для фоновой загрузки.
+
+        channel_ids=None — все (режим DOWNLOAD_ATTACHMENTS=1: картинки);
+        список каналов — только вложения этих чатов (галка «скачивать файлы»,
+        тогда берём и не-картинки тоже). max_size — верхняя граница размера
+        файла в байтах (NULL-размер считаем проходящим).
+        """
         with self._sf() as s:
-            return list(
-                s.scalars(
-                    select(Attachment)
-                    .where(Attachment.is_image == True, Attachment.downloaded == False)  # noqa: E712
-                    .limit(limit)
-                )
-            )
+            q = select(Attachment).where(Attachment.downloaded == False)  # noqa: E712
+            if channel_ids is not None:
+                if not channel_ids:
+                    return []
+                q = q.join(Message, Message.id == Attachment.message_id).where(
+                    Message.channel_id.in_(list(channel_ids)))
+            else:
+                q = q.where(Attachment.is_image == True)  # noqa: E712
+            if max_size is not None:
+                q = q.where((Attachment.size <= max_size)
+                            | (Attachment.size.is_(None)))
+            return list(s.scalars(q.limit(limit)))
+
+    def pending_image_attachments(self, limit: int = 50) -> list[Attachment]:
+        """Не скачанные картинки для глобального режима DOWNLOAD_ATTACHMENTS."""
+        return self.pending_attachments(limit=limit)
 
     # ------------------------------------------------------------------ state
     def get_state(self, channel_id: int) -> ChannelState:

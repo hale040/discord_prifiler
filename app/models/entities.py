@@ -697,6 +697,9 @@ class Chat(Base):
     # галка «отслеживать»: коллектор собирает сообщения этого канала
     # (live-фильтр в контроллере + future backfill по отмеченным чатам)
     tracked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # галка «скачивать файлы»: attachment-worker скачивает ВСЕ вложения
+    # сообщений этого канала (размер <= 5 МБ), не только картинки
+    download_files: Mapped[bool] = mapped_column(Boolean, default=False)
     messages_total: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)

@@ -2161,9 +2161,27 @@ def create_app(database_url: str) -> Flask:
         m = Table("messages", MetaData(), autoload_with=engine)
         on = request.form.get("on") == "1"
         linked = 0
+        added_members = 0
         with engine.connect() as conn:
             conn.execute(sa_update(c).where(
                 c.columns.channel_id == channel_id).values(collects_qa=on))
+            if on:
+                # «галка анкет не включается»: без участников чата анкету
+                # привязывать некому — сразу заводим авторов сообщений чата
+                try:
+                    added_members = conn.execute(sa_text(
+                        "INSERT INTO chat_members (channel_id, author_id, "
+                        "questionnaire) "
+                        "SELECT DISTINCT m.channel_id, m.author_id, '' "
+                        "  FROM messages m WHERE m.channel_id = :cid "
+                        "   AND m.author_id IS NOT NULL "
+                        " ON CONFLICT (channel_id, author_id) DO NOTHING"),
+                        {"cid": channel_id}).rowcount or 0
+                except Exception:  # noqa: BLE001 — старые схемы
+                    conn.rollback()
+                    conn.execute(sa_update(c).where(
+                        c.columns.channel_id == channel_id).values(
+                        collects_qa=on))
             # «все привязанные должны обрабатываться»: галка анкет привязывает
             # чат к серверу, если ID ещё не проставлен (из истории сообщений)
             if on and c.columns.guild_id is not None:
@@ -2182,8 +2200,38 @@ def create_app(database_url: str) -> Flask:
             conn.commit()
         audit("chat_collects_qa", target=f"channel={channel_id}",
               details=("on" if on else "off")
-                      + (f" guild_linked={linked}" if linked else ""),
+                      + (f" guild_linked={linked}" if linked else "")
+                      + (f" members+{added_members}" if added_members else ""),
               result="ok")
+        if on:
+            flash(f"Анкеты включены для чата {channel_id}: участников "
+                  f"{added_members or 'уже были'} — посты-анкеты привязаны."
+                  if added_members else
+                  f"Анкеты включены для чата {channel_id} "
+                  "(новых участников не найдено — они появятся, когда в чате "
+                  "напишут сообщения).", "ok")
+        return redirect(request.referrer or url_for("chats_page"))
+
+    @app.route("/chats/dl/<int:channel_id>", methods=["POST"])
+    def chat_toggle_dl(channel_id: int):
+        """Галка «скачивать файлы»: чат выгружает все вложения <= 5 МБ.
+
+        Работает без глобального DOWNLOAD_ATTACHMENTS — worker берёт список
+        отмеченных чатов из chats.download_files (см. collection_service).
+        """
+        if not _qa_tables_ok("chats"):
+            abort(404)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        if "download_files" not in set(c.columns.keys()):
+            abort(404)  # миграция a00000000010 не применена
+        on = request.form.get("on") == "1"
+        with engine.connect() as conn:
+            conn.execute(sa_update(c).where(
+                c.columns.channel_id == channel_id).values(
+                download_files=on))
+            conn.commit()
+        audit("chat_download_files", target=f"channel={channel_id}",
+              details="on" if on else "off", result="ok")
         return redirect(request.referrer or url_for("chats_page"))
 
     @app.route("/chats/members/<int:channel_id>")

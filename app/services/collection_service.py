@@ -156,6 +156,7 @@ class CollectionService:
             asyncio.create_task(self._refresh_loop(), name="profile-refresh-loop"),
             asyncio.create_task(self._dm_loop(), name="dm-loop"),
             asyncio.create_task(self._channels_sync_loop(), name="channels-sync"),
+            asyncio.create_task(self._chats_refresh_loop(), name="chats-refresh"),
         ]
 
     async def stop(self) -> None:
@@ -423,6 +424,13 @@ class CollectionService:
         data = mappers.message_data(msg, guild_id, store_raw=self.s.store_raw_json)
         atts = mappers.attachments_data(msg)
         saved = self.repo.insert_message(data, atts)
+        # --- анкеты: чат под галкой «анкеты» — автор становится участником,
+        # иначе привязывать пост-анкету некому (галка выглядела «не включаемой»)
+        if guild_id is not None and data.get("author_id"):
+            try:
+                self._ensure_qa_member(int(msg.channel.id), int(data["author_id"]))
+            except Exception:  # noqa: BLE001 — старые схемы без chats
+                log.debug("qa: ensure_chat_member failed", exc_info=True)
         if not saved:
             # сообщение уже есть — обновим только факт редактирования
             if data.get("edited_at"):
@@ -450,6 +458,30 @@ class CollectionService:
                     except Exception:  # noqa: BLE001
                         log.debug("Не удалось сохранить server-данные из payload: %s", u.id)
         return True
+
+    # --------------------------------------------------- анкеты: участники чата
+    def _ensure_qa_member(self, channel_id: int, author_id: int) -> None:
+        """Автор сообщения в чате с галкой «анкеты» -> участник chat_members.
+
+        Кэш отмеченных чатов обновляем раз в 30 сек (как tracked-фильтр),
+        чтобы не дёргать БД на каждое сообщение. questionnaire='' у новых
+        записей = участник под наблюдением; уже заполненные анкеты не
+        трогаются (ON CONFLICT DO NOTHING).
+        """
+        now = time.monotonic()
+        cache = getattr(self, "_qa_ch_cache", None)
+        if cache is None or now - cache[0] > 30:
+            try:
+                ids = set(self.repo.qa_channel_ids())
+            except Exception:  # noqa: BLE001 — старая схема без chats
+                ids = set()
+            self._qa_ch_cache = (now, ids)
+            cache = self._qa_ch_cache
+        if channel_id not in cache[1]:
+            return
+        if self.repo.ensure_chat_members(channel_id, [author_id]):
+            log.info("qa: чат %s — новый участник %s привязан",
+                     channel_id, author_id)
 
     async def _handle_message(self, msg: discord.Message, guild_id: int | None) -> bool:
         return self._handle_message_sync(msg, guild_id)
@@ -943,6 +975,45 @@ class CollectionService:
                 len(roles or []),
             )
 
+    # ------------------------------------------------- анкеты: периодический чат-рефреш
+    async def _chats_refresh_loop(self) -> None:
+        """Периодически перечитывать таблицу chats и догонять данные по ней.
+
+        По запросу оператора («нужно периодически таблицу перечитывать
+        сборщиком»): раз в 5 минут —
+          * перенос авторов сообщений в chat_members для чатов с галкой
+            «анкеты» (заодно лечит «галку анкет не включить», если участники
+            появились до отметки или в старой схеме);
+          * привязка постов-анкет к участникам (message_id);
+          * пересчёт messages_total из messages (лента чатов всегда честная,
+            даже если live-инкремент потерялся).
+        Идемпотентно; ошибки старых схем — debug-лог, цикл не падает.
+        """
+        await asyncio.sleep(45)  # дать миграциям/онбордингу завершиться
+        while self._running:
+            try:
+                moved = await asyncio.to_thread(
+                    self.repo.sync_chat_members_from_messages)
+                linked = 0
+                try:
+                    from app.services.profile_export.db import open_db
+                    from app.services.profile_export.questionnaire import \
+                        qa_posts_autofill
+                    with open_db(str(self.s.database_url)) as conn:
+                        linked = qa_posts_autofill(conn)
+                except Exception:  # noqa: BLE001 — старые схемы без колонок
+                    log.debug("chats-refresh: qa_posts_autofill failed",
+                              exc_info=True)
+                rec = await asyncio.to_thread(self.repo.recount_chats_totals)
+                if moved or linked or rec:
+                    log.info("chats-refresh: участников +%s, анкет +%s, "
+                             "totals Обновлено %s", moved, linked, rec)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.debug("chats-refresh loop error", exc_info=True)
+            await asyncio.sleep(300)
+
     # ------------------------------------------- отложенная синхронизация чатов
     async def _channels_sync_loop(self) -> None:
         """Цикл «получить каналы сервера» по сигналу из админки.
@@ -990,20 +1061,51 @@ class CollectionService:
             await asyncio.sleep(20)  # частота опроса сигнала из админки
 
     # ---------------------------------------------------- attachment worker
+    MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024  # 5 МБ — лимит галки «скачивать файлы»
+
     async def _attachment_worker(self) -> None:
-        """Фоновое скачивание картинок на диск (data/attachments/...)."""
-        if not self.s.download_attachments:
+        """Фоновое скачивание вложений на диск (data/attachments/...).
+
+        Два режима (работают одновременно):
+          * DOWNLOAD_ATTACHMENTS=1 в .env — глобально качаем КАРТИНКИ;
+          * галка «скачивать файлы» (chats.download_files) у конкретного чата —
+            качаем ВСЕ вложения этого чата (файлы и изображения), если размер
+            не превышает 5 МБ. Галки действуют без глобального флага.
+        """
+        global_on = bool(self.s.download_attachments)
+        if not global_on:
             log.info(
-                "Скачивание картинок ОТКЛЮЧЕНО (по умолчанию). Включается явным "
-                "DOWNLOAD_ATTACHMENTS=1 в .env; сейчас сохраняются только метаданные вложений."
+                "Глобальное скачивание картинок ОТКЛЮЧЕНО (DOWNLOAD_ATTACHMENTS"
+                "=не задан). Работает режим по галкам «скачивать файлы»: чаты с"
+                " отмеченной галкой выгружают все вложения <= 5 МБ."
             )
-            return
+        dl_cache: tuple[float, list[int]] | None = None
         while self._running:
-            pending = self.repo.pending_image_attachments(limit=5)
-            if not pending:
+            try:
+                now = time.monotonic()
+                if dl_cache is None or now - dl_cache[0] > 60:
+                    ids = await asyncio.to_thread(
+                        self.repo.download_files_channel_ids)
+                    dl_cache = (now, ids)
+            except Exception:  # noqa: BLE001 — старые схемы без колонки
+                dl_cache = (time.monotonic(), [])
+            pending: list = []
+            if global_on:
+                pending += self.repo.pending_image_attachments(limit=5)
+            if dl_cache[1]:
+                pending += self.repo.pending_attachments(
+                    limit=20, channel_ids=dl_cache[1],
+                    max_size=self.MAX_DOWNLOAD_SIZE)
+            # дедуп по id (аттач может попасть из обоих режимов)
+            uniq, seen = [], set()
+            for att in pending:
+                if att.id not in seen:
+                    seen.add(att.id)
+                    uniq.append(att)
+            if not uniq:
                 await asyncio.sleep(10)
                 continue
-            for att in pending:
+            for att in uniq:
                 if not self._running:
                     return
                 try:
