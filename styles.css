@@ -549,21 +549,41 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 }
 
 /* ===== МЕТАЛЛОСТАЛЬ: каталог продукции, преимущества с иконками ===== */
-.catalog__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1.2rem; margin-top: 1.6rem; }
+.catalog__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.4rem; margin-top: 1.8rem; }
 @media (min-width: 1400px) { .catalog__grid { grid-template-columns: repeat(5, 1fr); } }
-.gcard {
-  width: 100%; font: inherit; cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; text-align: center;
-  background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius);
-  padding: 1.2rem .8rem; gap: .35rem;
-  transition: transform .2s, box-shadow .2s, border-color .2s;
-}
-.gcard:hover { transform: translateY(-4px); box-shadow: 0 10px 26px rgba(0,0,0,.12); border-color: var(--accent); }
-.gcard__pic { width: 96px; height: 96px; object-fit: contain; margin-bottom: .6rem; }
-.gcard__title { font-size: 1rem; margin-top: .3rem; line-height: 1.25; }
-.gcard .btn--sm { margin-top: auto; }
 
-.btn--sm { padding: .5rem 1rem; font-size: .85rem; }
+/* Карточка категории: фото на всю ширину + нижняя зона с названием и CTA */
+.gcard {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column;
+  background: #fff; border: 1px solid #e3e7ec; border-radius: calc(var(--radius) + 2px);
+  box-shadow: 0 1px 3px rgba(16,24,32,.06);
+  transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+}
+.gcard::after { /* тонкая акцентная линия снизу, появляется при наведении */
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  background: linear-gradient(90deg, var(--accent), #ffb37a);
+  transform: scaleX(0); transform-origin: left; transition: transform .3s ease;
+}
+.gcard:hover, .gcard:focus-within { transform: translateY(-5px); box-shadow: 0 16px 34px rgba(16,24,32,.14); border-color: transparent; }
+.gcard:hover::after, .gcard:focus-within::after { transform: scaleX(1); }
+
+.gcard__media {
+  display: block; width: 100%; aspect-ratio: 4 / 3; overflow: hidden;
+  background: radial-gradient(120% 120% at 50% 0%, #f4f7fa 0%, #e8edf2 60%, #dfe6ec 100%);
+  border-bottom: 1px solid #e3e7ec;
+}
+.gcard__pic { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .45s ease; }
+.gcard:hover .gcard__pic { transform: scale(1.05); }
+
+.gcard__body { display: flex; flex-direction: column; align-items: flex-start; gap: .7rem; padding: 1.1rem 1.2rem 1.3rem; flex: 1; }
+.gcard__title {
+  font-family: 'Oswald', sans-serif; font-weight: 600; font-size: 1.05rem;
+  text-transform: uppercase; letter-spacing: .02em; line-height: 1.25; color: var(--text-dark);
+}
+.gcard__btn { margin-top: auto; align-self: stretch; text-align: center; }
+
+.btn--sm { padding: .55rem 1rem; font-size: .85rem; }
 
 .adv__grid--icons { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .adv--icon { display: flex; flex-direction: column; align-items: flex-start; gap: .7rem; }
@@ -634,3 +654,10 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .dlv__docs li::before { content: ""; position: absolute; left: 0; top: .4rem; width: 12px; height: 12px; border: 2px solid var(--accent); border-radius: 3px; }
 @media (max-width: 1024px) { .dlv__grid, .dlv__grid--4 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 640px) { .dlv__grid, .dlv__grid--4 { grid-template-columns: 1fr; } }
+
+/* Карточки «Мы предлагаем»: уважение к prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .gcard, .gcard:hover, .gcard:focus-within { transition: none; transform: none; }
+  .gcard__pic, .gcard:hover .gcard__pic { transition: none; transform: none; }
+  .gcard::after { transition: none; }
+}
