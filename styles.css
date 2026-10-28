@@ -614,14 +614,20 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .sro__list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: .4rem .8rem; }
 .sro__list li { background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; font-size: .9rem; font-weight: 600; color: var(--text); }
 .sro__main h3 { font-size: 1.15rem; margin-bottom: 1rem; color: var(--text); }
-.sro__logos { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
-.sro__logo { display: flex; flex-direction: column; justify-content: center; gap: .3rem; min-height: 96px; padding: 1rem; background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius); text-align: center; transition: border-color .2s, transform .2s; }
-.sro__logo:hover { border-color: var(--accent); transform: translateY(-3px); }
-.sro__logo span { font-family: 'Oswald', sans-serif; font-weight: 600; font-size: .86rem; text-transform: uppercase; letter-spacing: .02em; color: var(--text-dark); }
-.sro__logo small { color: #7a8794; font-size: .74rem; }
-.sro__logo--dashed { border-style: dashed; background: rgba(255,255,255,.03); }
-.sro__logo--dashed span { color: var(--muted); }
-.sro__logo--dashed small { color: var(--muted); }
+/* Карточки СРО-организаций */
+.sro__orgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; }
+.sro__org { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: .55rem; padding: 1.1rem 1.15rem; background: linear-gradient(180deg, #fff, #f6f8fa); border: 1px solid #e3e7ec; border-radius: var(--radius); box-shadow: 0 1px 2px rgba(16,21,26,.06); transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+.sro__org::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: linear-gradient(180deg, var(--accent), #ffb35c); opacity: .85; }
+.sro__org:hover { transform: translateY(-3px); border-color: rgba(255,122,26,.55); box-shadow: 0 10px 24px -12px rgba(16,21,26,.35), 0 2px 6px rgba(16,21,26,.08); }
+.sro__org-head { display: flex; align-items: center; gap: .65rem; }
+.sro__org-mark { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: #1c2229; color: #fff; font-family: 'Oswald', sans-serif; font-weight: 600; font-size: .82rem; letter-spacing: .04em; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+.sro__org h4 { margin: 0; font-family: 'Oswald', sans-serif; font-weight: 600; font-size: .95rem; line-height: 1.25; text-transform: uppercase; letter-spacing: .02em; color: var(--text-dark); }
+.sro__org-type { margin: 0; font-size: .8rem; line-height: 1.45; color: #5b6672; }
+.sro__org-type b { color: #2c3440; }
+.sro__org-facts { list-style: none; margin: auto 0 0; padding: .55rem 0 0; border-top: 1px dashed #d7dde4; display: flex; flex-direction: column; gap: .3rem; }
+.sro__org-facts li { position: relative; padding-left: 1.05rem; font-size: .78rem; line-height: 1.4; color: #4a5560; }
+.sro__org-facts li::before { content: ""; position: absolute; left: 0; top: .42rem; width: .5rem; height: .5rem; border-radius: 2px; background: var(--accent); transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { .sro__org { transition: none; } .sro__org:hover { transform: none; } }
 .sro__note { margin-top: 1.2rem; font-size: .92rem; color: var(--muted); }
 .sro__note a { color: var(--accent); font-weight: 600; }
 @media (max-width: 900px) { .sro__grid { grid-template-columns: 1fr; } }
