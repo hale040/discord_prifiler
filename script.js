@@ -281,6 +281,49 @@ document.addEventListener("click", e => {
   if (goal && window.ym) { try { ym(METRIKA_ID, "reachGoal", "click_contact"); } catch (_) {} }
 });
 
+/* =========================================================
+   Документы: «Отправить на почту» — КП (PDF) и реквизиты (DOCX).
+   Скачивание — прямыми ссылками; отправка — заявкой через sendLead
+   (webhook/очередь), без webhook — письмо через почтовый клиент.
+   ========================================================= */
+const DOCS = [
+  { title: "Коммерческое предложение", file: "assets/docs/kommercheskoe-predlozhenie.pdf" },
+  { title: "Реквизиты компании", file: "assets/docs/rekvizity.docx" },
+];
+
+document.addEventListener("click", async e => {
+  const btn = e.target.closest(".js-docs-email");
+  if (!btn) return;
+  const email = prompt("На какую почту отправить документы?\nКП (PDF) и реквизиты (DOCX):", "");
+  if (email === null) return;
+  const value = email.trim();
+  if (!/^[^@\s]+@[^@\s]+\.[a-zA-Zа-яА-Я]{2,}$/.test(value)) {
+    alert("Похоже, адрес указан неверно. Пример: name@company.ru");
+    return;
+  }
+  const sent = await sendLead({
+    type: "docs_request",
+    email: value,
+    docs: DOCS.map(d => d.file),
+    page: location.href,
+    ts: new Date().toISOString(),
+  });
+  if (sent && LEAD_WEBHOOK) {
+    btn.textContent = "Отправлено ✓";
+    setTimeout(() => { btn.innerHTML = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/><path d=\"m2 7 10 6L22 7\"/></svg>Отправить на почту"; }, 4000);
+  } else {
+    // Без настроенного webhook — открываем письмо с запросом на наш адрес
+    const subject = encodeURIComponent("Запрос документов с сайта: КП и реквизиты");
+    const body = encodeURIComponent(
+      "Здравствуйте! Прошу выслать на адрес " + value + ":\n" +
+      DOCS.map(d => "- " + d.title).join("\n") + "\n\nСтраница: " + location.href
+    );
+    window.location.href = "mailto:" + CONTACTS.email + "?subject=" + subject + "&body=" + body;
+    btn.textContent = "Письмо открыто ✓";
+    setTimeout(() => { btn.innerHTML = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/><path d=\"m2 7 10 6L22 7\"/></svg>Отправить на почту"; }, 4000);
+  }
+});
+
 const leadForm = document.getElementById("leadForm");
 const formStatus = document.getElementById("formStatus");
 

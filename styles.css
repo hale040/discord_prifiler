@@ -198,6 +198,22 @@ a { color: inherit; text-decoration: none; }
 .hero__panel-link span { color: var(--accent); }
 .hero__panel-link:hover { color: var(--accent); gap: .7rem; }
 
+/* Документы в первом блоке: скачать сразу или отправить на почту */
+.hero__docs { margin-top: 1.4rem; padding-top: 1.2rem; border-top: 1px solid rgba(255,255,255,.08); }
+.hero__docs-label { display: block; font-size: .82rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: .7rem; }
+.hero__docs-actions { display: flex; flex-wrap: wrap; gap: .7rem 1.1rem; align-items: center; }
+.hero__doc-link {
+  display: inline-flex; align-items: center; gap: .5rem;
+  color: var(--text); font-weight: 600; font-size: .95rem;
+  text-decoration: none; border-bottom: 1px dashed rgba(255,255,255,.3);
+  padding-bottom: 2px; transition: color .2s, border-color .2s;
+}
+.hero__doc-link svg { width: 18px; height: 18px; color: var(--accent); flex: none; }
+.hero__doc-link em { font-style: normal; font-size: .75rem; font-weight: 700; letter-spacing: .05em; color: var(--accent); }
+.hero__doc-link:hover { color: var(--accent); border-color: var(--accent); }
+.hero__docs-btn { padding: .55rem 1.1rem; font-size: .9rem; }
+.hero__docs-btn svg { width: 17px; height: 17px; }
+
 /* ===== Sections ===== */
 .section { padding: 2.8rem 0; }
 .section--dark { background: var(--bg-2); }
@@ -483,12 +499,8 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .adv--icon .adv__pic { width: 76px; height: 76px; object-fit: contain; }
 .adv--icon h3 { font-size: 1rem; }
 .adv__lead { max-width: 900px; margin: 2rem auto 0; text-align: center; color: var(--muted); font-size: 1rem; line-height: 1.7; }
-.adv__cert {
-  display: inline-block; padding: .12rem .6rem; border-radius: 6px;
-  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.22);
-  box-shadow: inset 0 0 0 1px rgba(255,122,26,.35), 0 0 14px rgba(255,122,26,.18);
-}
-.adv__cert b { color: #fff; font-weight: 700; letter-spacing: .01em; }
+/* Белое жирное выделение — как города в первом блоке (без чипа/подложки) */
+.adv__cert { color: #fff; font-weight: 700; letter-spacing: .01em; }
 #advantages.section--dark .adv--icon { background: #fff; border: 1px solid #e3e7ec; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 
 /* ===== НОВЫЕ СЕКЦИИ: услуги, СРО, этапы, доставка-оплата ===== */
