@@ -165,10 +165,28 @@ const modalText = document.getElementById("modalText");
 const DEFAULT_MODAL_TEXT = "Оставьте телефон — перезвоним в течение 15 минут.";
 let lastFocused = null;
 
-function openModal(html, title) {
+// ===== Единый комплект документов: КП (PDF) + Реквизиты (DOCX) =====
+const DOCS = [
+  { title: "Коммерческое предложение", short: "КП", file: "assets/docs/kommercheskoe-predlozhenie.pdf", type: "PDF" },
+  { title: "Реквизиты компании", short: "Реквизиты", file: "assets/docs/rekvizity.docx", type: "DOCX" },
+];
+const DOC_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></svg>';
+
+// Блок «скачать сразу + отправить на почту» для модалки
+const modalDocs = document.getElementById("modalDocs");
+modalDocs.innerHTML =
+  '<div class="modal__docs-label">Нужны документы? Скачайте сразу или менеджер вышлет на почту:</div>' +
+  '<div class="modal__docs-actions">' +
+  DOCS.map(d => `<a class="hero__doc-link" href="${d.file}" download>${DOC_ICON}${d.title}&nbsp;<em>${d.type}</em></a>`).join("") +
+  '<button type="button" class="btn btn--outline btn--sm js-docs-email">Отправить на почту</button>' +
+  "</div>";
+
+// Все точки входа модалки несут документы с собой (data-docs="1")
+function openModal(html, title, withDocs) {
   lastFocused = document.activeElement;
   modalText.innerHTML = html || DEFAULT_MODAL_TEXT;
   modalTitle.textContent = title || "Заказать звонок";
+  modalDocs.hidden = !withDocs;
   modal.classList.add("open");
   const input = document.getElementById("modalPhone");
   setTimeout(() => input && input.focus(), 60);
@@ -189,15 +207,17 @@ modal.addEventListener("keydown", e => {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
-document.getElementById("callBtn").addEventListener("click", () => openModal());
+document.getElementById("callBtn").addEventListener("click", () => openModal(null, null, true));
 
 // «Оставить заявку» в hero и других местах — открывает форму заявки в модалке
+// (с комплектом документов: скачать сразу или выслать на почту)
 document.addEventListener("click", e => {
   const btn = e.target.closest(".js-lead");
   if (!btn) return;
   openModal(
     "Заполните форму — менеджер свяжется с вами в течение 15 минут, посчитает цену под объём и подготовит счёт.",
-    "Оставить заявку"
+    "Оставить заявку",
+    true
   );
 });
 
@@ -214,7 +234,8 @@ document.addEventListener("click", (e) => {
     : "";
   openModal(
     `Категория: <b>${name}</b>. Оставьте телефон — менеджер перезвонит в течение 15 минут и назовёт актуальную цену и срок отгрузки.${priceNote}`,
-    "Узнать цену: " + name
+    "Узнать цену: " + name,
+    true
   );
 });
 modalClose.addEventListener("click", closeModal);
@@ -285,15 +306,12 @@ document.addEventListener("click", e => {
    Документы: «Отправить на почту» — КП (PDF) и реквизиты (DOCX).
    Скачивание — прямыми ссылками; отправка — заявкой через sendLead
    (webhook/очередь), без webhook — письмо через почтовый клиент.
+   Работает во всех точках: hero, модалки (через .js-docs-email).
    ========================================================= */
-const DOCS = [
-  { title: "Коммерческое предложение", file: "assets/docs/kommercheskoe-predlozhenie.pdf" },
-  { title: "Реквизиты компании", file: "assets/docs/rekvizity.docx" },
-];
-
 document.addEventListener("click", async e => {
   const btn = e.target.closest(".js-docs-email");
   if (!btn) return;
+  const savedLabel = btn.innerHTML;
   const email = prompt("На какую почту отправить документы?\nКП (PDF) и реквизиты (DOCX):", "");
   if (email === null) return;
   const value = email.trim();
@@ -301,6 +319,7 @@ document.addEventListener("click", async e => {
     alert("Похоже, адрес указан неверно. Пример: name@company.ru");
     return;
   }
+  const restore = () => { btn.innerHTML = savedLabel; };
   const sent = await sendLead({
     type: "docs_request",
     email: value,
@@ -310,7 +329,7 @@ document.addEventListener("click", async e => {
   });
   if (sent && LEAD_WEBHOOK) {
     btn.textContent = "Отправлено ✓";
-    setTimeout(() => { btn.innerHTML = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/><path d=\"m2 7 10 6L22 7\"/></svg>Отправить на почту"; }, 4000);
+    setTimeout(restore, 4000);
   } else {
     // Без настроенного webhook — открываем письмо с запросом на наш адрес
     const subject = encodeURIComponent("Запрос документов с сайта: КП и реквизиты");
@@ -320,7 +339,7 @@ document.addEventListener("click", async e => {
     );
     window.location.href = "mailto:" + CONTACTS.email + "?subject=" + subject + "&body=" + body;
     btn.textContent = "Письмо открыто ✓";
-    setTimeout(() => { btn.innerHTML = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/><path d=\"m2 7 10 6L22 7\"/></svg>Отправить на почту"; }, 4000);
+    setTimeout(restore, 4000);
   }
 });
 

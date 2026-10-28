@@ -211,8 +211,23 @@ a { color: inherit; text-decoration: none; }
 .hero__doc-link svg { width: 18px; height: 18px; color: var(--accent); flex: none; }
 .hero__doc-link em { font-style: normal; font-size: .75rem; font-weight: 700; letter-spacing: .05em; color: var(--accent); }
 .hero__doc-link:hover { color: var(--accent); border-color: var(--accent); }
+/* вариант для светлого фона (форма заявки, модалка) */
+.hero__doc-link--light { background: #fff; border-color: rgba(20,26,32,.14); color: var(--text); }
 .hero__docs-btn { padding: .55rem 1.1rem; font-size: .9rem; }
 .hero__docs-btn svg { width: 17px; height: 17px; }
+
+/* документы внутри модалки — «прогоняем» КП и реквизиты через все точки входа */
+.modal__docs { margin: -0.2rem 0 1rem; padding: .8rem .9rem; border: 1px solid rgba(20,26,32,.1); border-radius: 12px; background: rgba(255,122,26,.06); }
+.modal__docs-label { display: block; font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; color: #5b6672; margin-bottom: .6rem; }
+.modal__docs-actions { display: flex; flex-wrap: wrap; gap: .55rem .7rem; align-items: center; }
+.modal__docs .hero__doc-link { font-size: .82rem; padding: .4rem .7rem; background: #fff; border-color: rgba(20,26,32,.14); color: var(--text); }
+.modal__docs .hero__doc-link svg { width: 15px; height: 15px; }
+
+/* документы в форме контактов (светлая карточка) */
+.form__docs { margin-top: .4rem; padding-top: .9rem; border-top: 1px solid rgba(20,26,32,.1); }
+.form__docs-label { display: block; font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; color: #5b6672; margin-bottom: .6rem; }
+.form__docs-actions { display: flex; flex-wrap: wrap; gap: .55rem .7rem; align-items: center; }
+.form__docs .hero__doc-link { font-size: .82rem; padding: .4rem .7rem; }
 
 /* ===== Sections ===== */
 .section { padding: 2.8rem 0; }

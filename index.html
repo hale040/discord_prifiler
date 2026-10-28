@@ -397,6 +397,8 @@
             <h3>Банковский перевод</h3>
             <p>При оплате переводом электронной (банковской) картой рекомендуем воспользоваться переводом через онлайн сервис, также возможна оплата на расчётный счёт компании в отделении банка (предоставляется счёт на e-mail клиента).</p>
             <p><a class="dlv__link" href="assets/docs/rekvizity.docx" download>Скачать реквизиты компании (DOCX) ↓</a></p>
+            <p><a class="dlv__link" href="assets/docs/kommercheskoe-predlozhenie.pdf" download>Скачать коммерческое предложение (PDF) ↓</a></p>
+            <p><button type="button" class="btn btn--outline btn--sm js-docs-email"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6L22 7"/></svg>Отправить документы на почту</button></p>
           </div>
         </div>
 
@@ -502,6 +504,14 @@
           <label class="form__agree"><input type="checkbox" id="agree" required> Согласен на обработку персональных данных</label>
           <button type="submit" class="btn btn--accent btn--block">Отправить заявку</button>
           <p class="form__status" id="formStatus"></p>
+          <div class="form__docs">
+            <span class="form__docs-label">Документы — скачать сразу или выслать на почту:</span>
+            <div class="form__docs-actions">
+              <a class="hero__doc-link hero__doc-link--light" href="assets/docs/kommercheskoe-predlozhenie.pdf" download>Коммерческое предложение&nbsp;<em>PDF</em></a>
+              <a class="hero__doc-link hero__doc-link--light" href="assets/docs/rekvizity.docx" download>Реквизиты компании&nbsp;<em>DOCX</em></a>
+              <button type="button" class="btn btn--outline btn--sm js-docs-email">Отправить на почту</button>
+            </div>
+          </div>
         </form>
       </div>
     </section>
@@ -517,6 +527,8 @@
         <a href="#sro">СРО · Этапы</a>
         <a href="#delivery">Доставка</a>
         <a href="#contacts">Контакты</a>
+        <a href="assets/docs/kommercheskoe-predlozhenie.pdf" download>КП (PDF)</a>
+        <a href="assets/docs/rekvizity.docx" download>Реквизиты (DOCX)</a>
       </div>
       <div class="footer__test">Тестовая страница — данные вымышлены</div>
     </div>
@@ -546,6 +558,7 @@
       <button class="modal__close" id="modalClose" aria-label="Закрыть">×</button>
       <h3 id="modalTitle">Заказать звонок</h3>
       <p id="modalText">Оставьте телефон — перезвоним в течение 15 минут.</p>
+      <div class="modal__docs" id="modalDocs" hidden></div>
       <form id="modalForm">
         <input type="text" placeholder="Ваше имя *" id="modalName" required minlength="2" autocomplete="name" aria-describedby="modalStatus">
         <input type="tel" placeholder="+7 (___) ___-__-__" id="modalPhone" required inputmode="tel" autocomplete="tel" aria-describedby="modalStatus">
