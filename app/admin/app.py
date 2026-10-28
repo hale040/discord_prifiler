@@ -1888,10 +1888,31 @@ def create_app(database_url: str) -> Flask:
                 .order_by(g.columns.guild_id.desc())).mappings().all()
         return render("guilds", page="guilds", rows=rows)
 
+    def _qa_add_members(conn, channel_id: int) -> int:
+        """Завести участников чата из авторов его сообщений (идемпотентно).
+
+        Вставка с '' вместо NULL: иначе ON CONFLICT DO NOTHING не засчитывает
+        уже существующих участников (rowcount=0 выглядело как «галка не
+        включается»), а пустая анкета при включении заполняется ниже по
+        правилу «первый пост автора = анкета».
+        """
+        try:
+            return conn.execute(sa_text(
+                "INSERT INTO chat_members (channel_id, author_id, "
+                "questionnaire) "
+                "SELECT DISTINCT m.channel_id, m.author_id, '' "
+                "  FROM messages m WHERE m.channel_id = :cid "
+                "   AND m.author_id IS NOT NULL "
+                " ON CONFLICT (channel_id, author_id) DO NOTHING"),
+                {"cid": channel_id}).rowcount or 0
+        except Exception:  # noqa: BLE001 — старые схемы без таблицы участников
+            conn.rollback()
+            return -1
+
     def _qa_autofill(conn, channel_id: int | None = None) -> int:
         """Привязка постов-анкет к участникам чата (см. questionnaire.py).
 
-        Анкета = первый пост автора в чате (thread_root_id IS NULL); с ним
+        Анкета = ПЕРВЫЙ пост автора в чате (thread_root_id IS NULL); с ним
         связываются комментарии из треда. Идемпотентно, ошибки старых схем
         проглатываются."""
         try:
@@ -1906,19 +1927,19 @@ def create_app(database_url: str) -> Flask:
             if channel_id is not None else ""
         sql = sa_text(
             "UPDATE chat_members cm SET message_id = sub.pid, "
-            "updated_at = now() FROM ("
+            "questionnaire = sub.pcontent, updated_at = now() FROM ("
             "  SELECT DISTINCT ON (cm2.channel_id, cm2.author_id)"
-            "         cm2.channel_id AS ch, cm2.author_id AS au, m.id AS pid"
+            "         cm2.channel_id AS ch, cm2.author_id AS au,"
+            "         m.id AS pid, COALESCE(m.content, '') AS pcontent"
             "    FROM chat_members cm2"
             "    JOIN chats c ON c.channel_id = cm2.channel_id"
             "             AND c.collects_qa"
             "    JOIN messages m ON m.channel_id = cm2.channel_id"
             "             AND m.author_id = cm2.author_id"
-            "   WHERE cm2.questionnaire IS NOT NULL"
-            "     AND btrim(cm2.questionnaire) <> ''"
+            "   WHERE (cm2.questionnaire IS NULL OR btrim(cm2.questionnaire) = '')"
             "     AND cm2.message_id IS NULL"
             f"     {lvl}{where_ch}"
-            "   ORDER BY cm2.channel_id, cm2.author_id, m.timestamp DESC"
+            "   ORDER BY cm2.channel_id, cm2.author_id, m.timestamp ASC"
             ") sub WHERE cm.channel_id = sub.ch AND cm.author_id = sub.au")
         try:
             return conn.execute(sql).rowcount
@@ -2154,62 +2175,72 @@ def create_app(database_url: str) -> Flask:
 
     @app.route("/chats/qa/<int:channel_id>", methods=["POST"])
     def chat_toggle_qa(channel_id: int):
-        """Галка «анкеты»: чаты с collects_qa=TRUE отдают анкеты в промпт LLM."""
-        if not _qa_tables_ok("chats"):
+        """Галка «анкеты»: чаты с collects_qa=TRUE отдают анкеты в промпт LLM.
+
+        Включение — мгновенная полная обработка канала (по требованию):
+        участники из авторов сообщений + посты-анкеты + привязка тредов.
+        Быстрые повторные клики идемпотентны (ON CONFLICT / WHERE message_id
+        IS NULL), так что гонка двух запросов не роняет маршрут.
+        """
+        if not _qa_tables_ok("chats", "chat_members"):
             abort(404)
         c = Table("chats", MetaData(), autoload_with=engine)
         m = Table("messages", MetaData(), autoload_with=engine)
         on = request.form.get("on") == "1"
         linked = 0
         added_members = 0
-        with engine.connect() as conn:
-            conn.execute(sa_update(c).where(
-                c.columns.channel_id == channel_id).values(collects_qa=on))
-            if on:
-                # «галка анкет не включается»: без участников чата анкету
-                # привязывать некому — сразу заводим авторов сообщений чата
-                try:
-                    added_members = conn.execute(sa_text(
-                        "INSERT INTO chat_members (channel_id, author_id, "
-                        "questionnaire) "
-                        "SELECT DISTINCT m.channel_id, m.author_id, '' "
-                        "  FROM messages m WHERE m.channel_id = :cid "
-                        "   AND m.author_id IS NOT NULL "
-                        " ON CONFLICT (channel_id, author_id) DO NOTHING"),
-                        {"cid": channel_id}).rowcount or 0
-                except Exception:  # noqa: BLE001 — старые схемы
-                    conn.rollback()
-                    conn.execute(sa_update(c).where(
-                        c.columns.channel_id == channel_id).values(
-                        collects_qa=on))
-            # «все привязанные должны обрабатываться»: галка анкет привязывает
-            # чат к серверу, если ID ещё не проставлен (из истории сообщений)
-            if on and c.columns.guild_id is not None:
-                row = conn.execute(sa_select(m.columns.guild_id).where(
-                    m.columns.channel_id == channel_id,
-                    m.columns.guild_id.isnot(None)).limit(1)).first()
-                if row is not None:
-                    linked = conn.execute(sa_update(c).where(
-                        c.columns.channel_id == channel_id,
-                        c.columns.guild_id.is_(None)).values(
-                        guild_id=int(row[0]))).rowcount
-            if on:
-                # сразу привязать посты-анкеты (первые посты авторов в чате),
-                # чтобы комментарии собирались без ожидания пересчёта LLM
-                _qa_autofill(conn, channel_id)
-            conn.commit()
+        filled = 0
+        try:
+            with engine.connect() as conn:
+                conn.execute(sa_update(c).where(
+                    c.columns.channel_id == channel_id).values(collects_qa=on))
+                if on:
+                    # «галка анкет не включается»: без участников чата анкету
+                    # привязывать некому — сразу заводим авторов сообщений чата
+                    added_members = _qa_add_members(conn, channel_id)
+                    # «все привязанные должны обрабатываться»: галка анкет
+                    # привязывает чат к серверу, если ID ещё не проставлен
+                    if "guild_id" in set(m.columns.keys()) and \
+                            "guild_id" in set(c.columns.keys()):
+                        row = conn.execute(sa_select(m.columns.guild_id).where(
+                            m.columns.channel_id == channel_id,
+                            m.columns.guild_id.isnot(None)).limit(1)).first()
+                        if row is not None:
+                            linked = conn.execute(sa_update(c).where(
+                                c.columns.channel_id == channel_id,
+                                c.columns.guild_id.is_(None)).values(
+                                guild_id=int(row[0]))).rowcount
+                    # сразу парсить весь канал: посты-анкеты (первые посты
+                    # авторов), чтобы комментарии собирались без ожидания
+                    # пересчёта LLM
+                    filled = _qa_autofill(conn, channel_id)
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001 — показываем причину во flash
+            audit("chat_collects_qa", target=f"channel={channel_id}",
+                  details=f"error: {type(exc).__name__}: {exc}"[:400],
+                  result="fail")
+            flash(f"Не удалось переключить анкеты: {type(exc).__name__}: "
+                  f"{str(exc)[:200]}", "warn")
+            return redirect(request.referrer or url_for("chats_page"))
         audit("chat_collects_qa", target=f"channel={channel_id}",
               details=("on" if on else "off")
                       + (f" guild_linked={linked}" if linked else "")
-                      + (f" members+{added_members}" if added_members else ""),
+                      + (f" members+{added_members}" if added_members >= 0 else "")
+                      + (f" anket={filled}" if filled else ""),
               result="ok")
         if on:
-            flash(f"Анкеты включены для чата {channel_id}: участников "
-                  f"{added_members or 'уже были'} — посты-анкеты привязаны."
-                  if added_members else
-                  f"Анкеты включены для чата {channel_id} "
-                  "(новых участников не найдено — они появятся, когда в чате "
-                  "напишут сообщения).", "ok")
+            parts = []
+            if added_members > 0:
+                parts.append(f"участников добавлено: {added_members}")
+            elif added_members < 0:
+                parts.append("таблица участников недоступна (старая схема?)")
+            if filled:
+                parts.append(f"анкет собрано из первых постов: {filled}")
+            if not parts:
+                parts.append("новых участников/анкет нет — сообщения появятся"
+                             " позже и будут обработаны сборщиком автоматически")
+            flash(f"Анкеты включены для чата {channel_id}: "
+                  + "; ".join(parts) + ".", "ok")
         return redirect(request.referrer or url_for("chats_page"))
 
     @app.route("/chats/dl/<int:channel_id>", methods=["POST"])
