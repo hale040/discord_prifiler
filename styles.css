@@ -198,10 +198,60 @@ a { color: inherit; text-decoration: none; }
 .hero__panel-link span { color: var(--accent); }
 .hero__panel-link:hover { color: var(--accent); gap: .7rem; }
 
-/* Документы в первом блоке: скачать сразу или отправить на почту */
-.hero__docs { margin-top: 1.4rem; padding-top: 1.2rem; border-top: 1px solid rgba(255,255,255,.08); }
-.hero__docs-label { display: block; font-size: .82rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: .7rem; }
-.hero__docs-actions { display: flex; flex-wrap: wrap; gap: .7rem 1.1rem; align-items: center; }
+/* Документы в первом блоке: карточка-панель с рамкой (в тон панели «в цифрах») */
+.hero__docs {
+  margin-top: 1.6rem;
+  background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: calc(var(--radius) + 4px);
+  padding: 1.2rem 1.3rem 1.3rem;
+  box-shadow:
+    0 30px 70px -25px rgba(0,0,0,.55),
+    inset 0 1px 0 rgba(255,255,255,.12);
+  backdrop-filter: blur(6px);
+}
+.hero__docs-head {
+  display: flex; align-items: center; gap: .55rem;
+  padding-bottom: .8rem; margin-bottom: .9rem;
+  border-bottom: 1px dashed rgba(255,255,255,.16);
+}
+.hero__docs-head svg { width: 19px; height: 19px; color: var(--accent); flex: none; }
+.hero__docs-label { font-weight: 800; letter-spacing: .06em; text-transform: uppercase; font-size: .88rem; color: var(--text); }
+.hero__docs-list { display: grid; gap: .6rem; }
+.hero__doc-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  background: rgba(0,0,0,.28); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .8rem 1rem; text-decoration: none; color: var(--text);
+  transition: transform .2s, border-color .2s, background .2s;
+}
+.hero__doc-card:hover { transform: translateY(-2px); border-color: rgba(255,122,26,.45); background: rgba(0,0,0,.36); }
+.hero__doc-name { font-weight: 700; font-size: .98rem; }
+.hero__doc-meta { display: inline-flex; align-items: center; gap: .7rem; flex: none; }
+.hero__doc-ext {
+  font-style: normal; font-size: .68rem; font-weight: 800; letter-spacing: .08em;
+  padding: .22rem .5rem; border-radius: 6px; line-height: 1;
+}
+.hero__doc-ext--pdf { background: rgba(255,122,26,.16); color: var(--accent); border: 1px solid rgba(255,122,26,.4); }
+.hero__doc-ext--docx { background: rgba(96,160,255,.14); color: #7fb0ff; border: 1px solid rgba(96,160,255,.35); }
+.hero__doc-dl {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .82rem; font-weight: 600; color: var(--muted); transition: color .2s;
+}
+.hero__doc-dl svg { width: 15px; height: 15px; }
+.hero__doc-card:hover .hero__doc-dl { color: var(--accent); }
+.hero__docs-mail {
+  display: flex; align-items: center; justify-content: center; gap: .5rem; width: 100%;
+  margin-top: .9rem; padding: .75rem 1rem; cursor: pointer;
+  font: inherit; font-weight: 700; font-size: .92rem;
+  color: var(--text); background: transparent;
+  border: 1px solid rgba(255,255,255,.22); border-radius: var(--radius);
+  transition: border-color .2s, color .2s, background .2s;
+}
+.hero__docs-mail svg { width: 17px; height: 17px; color: var(--accent); }
+.hero__docs-mail:hover { border-color: var(--accent); color: var(--accent); background: rgba(255,122,26,.07); }
+.hero__docs-mail:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .hero__doc-card:hover { transform: none; } }
+/* ссылки документов в модалках/формах (светлый фон) */
 .hero__doc-link {
   display: inline-flex; align-items: center; gap: .5rem;
   color: var(--text); font-weight: 600; font-size: .95rem;
@@ -211,10 +261,7 @@ a { color: inherit; text-decoration: none; }
 .hero__doc-link svg { width: 18px; height: 18px; color: var(--accent); flex: none; }
 .hero__doc-link em { font-style: normal; font-size: .75rem; font-weight: 700; letter-spacing: .05em; color: var(--accent); }
 .hero__doc-link:hover { color: var(--accent); border-color: var(--accent); }
-/* вариант для светлого фона (форма заявки, модалка) */
 .hero__doc-link--light { background: #fff; border-color: rgba(20,26,32,.14); color: var(--text); }
-.hero__docs-btn { padding: .55rem 1.1rem; font-size: .9rem; }
-.hero__docs-btn svg { width: 17px; height: 17px; }
 
 /* документы внутри модалки — «прогоняем» КП и реквизиты через все точки входа */
 .modal__docs { margin: -0.2rem 0 1rem; padding: .8rem .9rem; border: 1px solid rgba(20,26,32,.1); border-radius: 12px; background: rgba(255,122,26,.06); }
