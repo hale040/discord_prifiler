@@ -325,22 +325,24 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .adv h3 { margin-bottom: .4rem; font-size: 1.05rem; }
 .adv p { color: var(--muted); font-size: .9rem; }
 
-/* ===== FAQ ===== */
+/* ===== FAQ (светлая секция — стили переопределены ниже, у тёмной базовой версии) ===== */
 .faq__list { margin-top: 1.5rem; display: flex; flex-direction: column; gap: .8rem; max-width: 860px; }
 .faq__item {
-  background: rgba(255,255,255,.04); border: 1px solid var(--line);
-  border-radius: var(--radius); overflow: hidden; transition: border-color .2s;
+  background: #fff; border: 1px solid #e3e7ec;
+  border-radius: var(--radius); overflow: hidden; transition: border-color .2s, box-shadow .2s;
 }
-.faq__item[open] { border-color: var(--accent); }
+.faq__item:hover { border-color: rgba(255,122,26,.5); }
+.faq__item[open] { border-color: var(--accent); box-shadow: 0 8px 22px rgba(0,0,0,.08); }
 .faq__item summary {
   cursor: pointer; list-style: none; padding: 1.1rem 1.4rem;
   font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: 1rem;
-  color: var(--text);
+  color: var(--text-dark);
 }
 .faq__item summary::-webkit-details-marker { display: none; }
-.faq__item summary::after { content: "+"; color: var(--accent); font-size: 1.5rem; line-height: 1; transition: transform .25s; }
+.faq__item summary::after { content: "+"; color: var(--accent); font-size: 1.5rem; line-height: 1; transition: transform .25s; flex: none; }
 .faq__item[open] summary::after { transform: rotate(45deg); }
-.faq__item p { padding: 0 1.4rem 1.2rem; color: var(--muted); font-size: .95rem; }
+.faq__item p { padding: 0 1.4rem 1.2rem; color: #5b6672; font-size: .95rem; }
+.faq__item p b { color: var(--text-dark); }
 
 /* ===== About (редакционная двухколоночная сетка, тёмная секция) ===== */
 .about { position: relative; overflow: hidden; }
@@ -771,3 +773,11 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .stage__arrow { position: absolute; top: 50%; right: -1.9rem; width: 1.6rem; height: 2px; background: linear-gradient(90deg, var(--accent), transparent); }
 .stage__arrow::after { content: ""; position: absolute; right: -.15rem; top: 50%; transform: translateY(-50%); border-left: 7px solid var(--accent); border-top: 5px solid transparent; border-bottom: 5px solid transparent; opacity: .9; }
 @media (max-width: 900px) { .stage__arrow { display: none; } }
+
+/* ===== Проход 1/3 · Дизайнер: единый акцентный маркер заголовков секций ===== */
+.section__title--accent { position: relative; padding-left: 1rem; }
+.section__title--accent::before { content: ""; position: absolute; left: 0; top: .18em; bottom: .18em; width: 4px; border-radius: 2px; background: linear-gradient(180deg, var(--accent), rgba(255,122,26,.25)); }
+#faq .faq__item summary { font-family: "Oswald", "PT Sans", sans-serif; letter-spacing: .01em; }
+.faq__cta { margin-top: 1.4rem; font-size: .95rem; color: #5b6672; }
+.faq__cta a { color: var(--accent-dark); font-weight: 700; border-bottom: 1px dashed rgba(229,103,12,.5); transition: color .2s, border-color .2s; }
+.faq__cta a:hover { color: var(--accent); border-color: var(--accent); }
