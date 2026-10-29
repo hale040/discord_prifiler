@@ -17,6 +17,33 @@ def _q(conn, sql):
     return conn.execute(sql)[0]
 
 
+def _sf(iso: str, internal: int = 100) -> int:
+    """Настоящий Discord snowflake из ISO-даты (id в тестовом канале)."""
+    from datetime import datetime, timezone
+    ms = int(datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
+    return ((ms - 1_420_070_400_000) << 22) + internal
+
+
+# условные номера сообщений в SQL-строках ниже -> реальные snowflake
+IDS = {n: _sf(f"2026-01-01T10:{m:02d}:00", 100 + n)
+       for n, m in [(1000, 0), (1001, 1), (1002, 2), (1003, 3), (1004, 4), (1005, 5)]}
+
+
+def _real_ids(sql: str) -> str:
+    """Замена условных id сиддинга на snowflake (только в тестовом хелпере).
+
+    Порядок важен: сначала «(NNNN, 100,» (объявление сообщения), потом ссылки
+    на корень треда/реплай «, NNNN)» и «, NNNN, NULL)».
+    """
+    for n in sorted(IDS, reverse=True):
+        sql = sql.replace(f"({n}, 100,", f"({IDS[n]}, 100,")
+    # ссылки reference_id/thread_root_id на пост-анкету (литерал 1000 в конце строк)
+    sql = sql.replace(", 1000, 1000)", f", {IDS[1000]}, {IDS[1000]})")
+    sql = sql.replace(", 1000, NULL)", f", {IDS[1000]}, NULL)")
+    sql = sql.replace(", NULL, 1000)", f", NULL, {IDS[1000]})")
+    return sql
+
+
 def _seed(conn):
     """Один канал с галкой «анкеты» + контрольный канал без галки.
 
@@ -66,7 +93,7 @@ def _seed(conn):
         "INSERT INTO user_profiles (user_id, username, global_name)"
         " VALUES (33, 'side', NULL)",
     ]:
-        conn.execute_write(sql)
+        conn.execute_write(_real_ids(sql))
 
 
 # ---------------------------------------------------------------- autofill
@@ -76,7 +103,7 @@ def test_autofill_binds_first_post_and_copies_text(conn):
     n = q.qa_posts_autofill(conn)
     assert n == 2, "привязать нужно посты участников 11 и 22"
     row = _q(conn, "SELECT * FROM chat_members WHERE author_id=11")
-    assert row["message_id"] == 1000
+    assert row["message_id"] == IDS[1000]
     assert row["questionnaire"] == "Я Вася, мне 30, люблю рыбу"
 
 
@@ -132,7 +159,10 @@ def test_replies_cover_reference_and_thread_branches(conn):
     q.qa_posts_autofill(conn)
     rep = q.fetch_qa_replies(conn, channel_ids=[100])
     ids = {r["id"] for r in rep}
-    assert ids == {1001, 1003}, "реплаи и сообщения ветки треда, без дублей"
+    assert ids == {IDS[1003], IDS[1004]}, \
+        "чужие реплаи на пост-анкету; своё дополнение автора не считается"
+    assert IDS[1001] not in ids, \
+        "дополнение автора к собственному посту — часть его анкеты, а не комментарий"
     r33 = next(r for r in rep if r["author_id"] == 33)
     assert r33["qa_author_id"] == 11
     assert r33["qa_author_name"] == "Вася"
@@ -168,7 +198,7 @@ def test_inject_places_anchor_row_and_keeps_limit_honest(conn):
     items = q.fetch_questionnaires(conn)
     dialog = conn.execute(
         "SELECT id, channel_id, guild_id, author_id, content, clean_content,"
-        " timestamp FROM messages WHERE channel_id=100 AND id <> 1004")
+        " timestamp FROM messages WHERE channel_id=100 AND id <> %d" % IDS[1004])
     merged, n = q.inject_into_dialog(dialog, {}, items, target_uid=11)
     assert n == len(items) > 0
     qa_rows = [m for m in merged if str(m["content"]).startswith("[анкета]")]
@@ -177,7 +207,7 @@ def test_inject_places_anchor_row_and_keeps_limit_honest(conn):
     ts = [str(m["timestamp"]) for m in merged]
     assert ts == sorted(ts)
     # исходник не мутируется
-    assert len(dialog) == 6
+    assert len(dialog) == 4
 
 
 def test_inject_noop_on_empty_inputs(conn):

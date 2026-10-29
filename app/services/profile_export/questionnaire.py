@@ -220,7 +220,11 @@ def fetch_qa_replies(conn, channel_ids=None) -> list[dict]:
     where_ch = ""
     if channel_ids:
         ids = ", ".join(str(int(x)) for x in channel_ids)
-        where_ch = f" AND q.channel_id IN ({ids})"
+        # aliast «q» существует только внутри веток UNION; в наружном
+        # SELECT обращаемся к колонке результата (раньше было `q.channel_id`
+        # — Postgres падал с «missing FROM-clause entry», и сборщик молча
+        # терял все комментарии к анкетам)
+        where_ch = f" WHERE channel_id IN ({ids})"
     # ветки UNION собираются по фактическим колонкам messages: thread_root_id
     # появляется только с новой ревизией маппера, reference_id есть всегда
     cols = _message_columns(conn) or {"reference_id"}
@@ -232,14 +236,14 @@ def fetch_qa_replies(conn, channel_ids=None) -> list[dict]:
         "                  CAST(m.author_id AS TEXT)) AS author_name,"
         "         q.qa_author_id, q.qa_author_name"
         "  FROM messages m")
+    # m.author_id <> q.qa_author_id: собственное дополнение автора к своему
+    # посту — это часть его анкеты (она уже в ленте), а не «мнение окружающих»
+    on_tpl = "  JOIN qa_posts q ON q.post_id = {col} AND m.author_id <> q.qa_author_id"
+    join_tail = ("  LEFT JOIN user_profiles ump ON ump.user_id = m.author_id")
     if "thread_root_id" in cols:
-        branches.append(head +
-                        "  JOIN qa_posts q ON q.post_id = m.thread_root_id"
-                        "  LEFT JOIN user_profiles ump ON ump.user_id = m.author_id")
+        branches.append(head + on_tpl.format(col="m.thread_root_id") + join_tail)
     if "reference_id" in cols:
-        branches.append(head +
-                        "  JOIN qa_posts q ON q.post_id = m.reference_id"
-                        "  LEFT JOIN user_profiles ump ON ump.user_id = m.author_id")
+        branches.append(head + on_tpl.format(col="m.reference_id") + join_tail)
     if not branches:
         return []
     sql = (
@@ -257,7 +261,7 @@ def fetch_qa_replies(conn, channel_ids=None) -> list[dict]:
         "), replies AS ("
         + "  UNION".join(branches) +
         ") "
-        "SELECT * FROM replies"
+        "SELECT * FROM replies "
         f"{where_ch}"
         " ORDER BY timestamp"
     )
@@ -317,14 +321,24 @@ def inject_into_dialog(dialog_msgs: list[dict], names: dict[int, str],
         if base is None:
             lst = by_author.get(aid) or []
             base = lst[-1] if lst else None
-        ts_src = base or {"id": int(aid)}
+        # якоря нет ни в ленте, ни у владельца — строку не вставляем: id
+        # пользователя превращался в snowflake 2015 года и утаскивал анкету
+        # в начало ленты, ломая хронологию (и лимит промпта)
+        if base is None:
+            continue
+        ts_src = base
         dt = _snowflake_dt(ts_src["id"])
         if dt is None:
             continue
         ms = int(dt.timestamp() * 1000) - 1_420_070_400_000
         # служебный snowflake: та же дата/время, что у якоря; младшие биты —
         # детерминированный микс id владельца анкеты (уникальность вставок)
+        # младшие биты = микс владельца; если такой id меньше id якоря,
+        # берём id якоря+1 (детерминированно), чтобы анкета стояла СРАЗУ
+        # после своего сообщения, а не где-то раньше в той же минуте
         fid = (ms << 22) + (int(aid) % (1 << 20)) + 1
+        if base is not None and fid <= int(base["id"]):
+            fid = int(base["id"]) + 1
         while fid in used_fids or fid in anchor_ids:
             fid += 1
         used_fids.add(fid)
