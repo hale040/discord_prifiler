@@ -41,48 +41,80 @@ def _sqlite_compatible(sql: str) -> str:
       * `updated_at = now()` — функция now() регистрируется ниже на коннекте.
     Всё остальное (btrim, JOIN'ы, CTE в fetch_qa_replies) выполняется как есть.
     """
+    # нормализуем только пробельные вставки (перенос строк + выравнивание);
+    # \s+ НЕ схлопывает одиночные пробелы внутри строки — на них держится
+    # регэксп ниже, который обязан совпасть со всем UPDATE целиком
+    # «= ''» в исходном SQL прод набран с выравнивающим пробелом внутри
+    # строки («CASE WHEN ... = '' THEN»), поэтому сначала канонизируем все
+    # runs пробелов до одного — иначе склейка строк Python даёт «=''» и
+    # регэксп не совпадает (трансляция молча пропускалась, SQLite падал на
+    # алиасе UPDATE, а qa_posts_autofill глотал ошибку и возвращал 0).
     s = " ".join(sql.split())
-    m = re.match(
+    m = re.search(
         r"UPDATE chat_members cm SET message_id = sub\.pid,"
         r" questionnaire = CASE WHEN btrim\(COALESCE\(cm\.questionnaire, ''\)\)"
         r" = '' THEN COALESCE\(sub\.pcontent, ''\) ELSE cm\.questionnaire END,"
         r" updated_at = now\(\)"
-        r" FROM \(SELECT DISTINCT ON \(cm2\.channel_id, cm2\.author_id\)"
+        r" FROM \( ?SELECT DISTINCT ON \(cm2\.channel_id, cm2\.author_id\)"
         r" cm2\.channel_id AS ch, cm2\.author_id AS au, m\.id AS pid,"
         r" COALESCE\(m\.content, ''\) AS pcontent"
         r" FROM (.*?)"
-        r" WHERE \(cm2\.questionnaire IS NULL OR btrim\(cm2\.questionnaire\) = ''\)"
+        r" WHERE \( ?cm2\.questionnaire IS NULL"
+        r" OR btrim\(cm2\.questionnaire\) = '' ?\)"
         r" AND cm2\.message_id IS NULL"
         r"(.*?) ORDER BY cm2\.channel_id, cm2\.author_id, m\.timestamp ASC"
-        r"\) sub WHERE cm\.channel_id = sub\.ch AND cm\.author_id = sub\.au$",
+        r" ?\) sub WHERE cm\.channel_id = sub\.ch AND cm\.author_id = sub\.au",
         s)
     if m:
         joins, extra = m.group(1), m.group(2)
-        # уровень «пост первого уровня» прод строит по алиасу m в подзапросе;
-        # в наружном correlated-подзапросе тот же алиас занят таблицей
-        # chat_members — переименовываем сообщение в cpm синхронно везде
+        # group(1) — это «chat_members cm2 JOIN ...» (слово FROM регэксп уже
+        # съел); наружный алиас участников переименовываем в cm, а сообщения
+        # m — в cpm: в correlated-подзапросе внешнего UPDATE имена
+        # chat_members/m заняты
+        am = re.match(r"chat_members (\w+)", joins)
+        if not am:
+            return s
+        alias_m = am.group(1)
+
         def _renjoin(frag: str) -> str:
-            return re.sub(r"\bm\.", "cpm.", frag.replace("cm2", "cm"))
+            frag = re.sub(rf"\b{alias_m}\b", "cm", frag)
+            # переименовывается и ОБЪЯВЛЕНИЕ алиаса («JOIN messages m»), и все
+            # ссылки на него — иначе в FROM появляется m, а в условиях cpm
+            frag = re.sub(r"\bm\b(?![\w])", "cpm", frag)
+            return frag
         joins = _renjoin(joins)
         extra = _renjoin(extra)
-        cand = (f"FROM chat_members cm {joins} {extra}"
+        cand = (f"FROM {joins} {extra}"
                 "AND cm.channel_id = chat_members.channel_id "
-                "AND cm.author_id = chat_members.author_id "
-                "AND (cm.questionnaire IS NULL OR btrim(cm.questionnaire) = '') "
-                "AND cm.message_id IS NULL ")
+                "AND cm.author_id = chat_members.author_id ")
         pick = f"(SELECT cpm.id {cand}ORDER BY cpm.timestamp ASC, cpm.id ASC LIMIT 1)"
         pick_txt = (f"(SELECT COALESCE(cpm.content, '') {cand}"
                     "ORDER BY cpm.timestamp ASC, cpm.id ASC LIMIT 1)")
-        return ("UPDATE chat_members SET message_id = " + pick +
-                ", questionnaire = CASE WHEN btrim(COALESCE(questionnaire, ''))"
-                " = '' THEN COALESCE(" + pick_txt + ", '')"
-                " ELSE questionnaire END, updated_at = now()"
-                " WHERE EXISTS (SELECT 1 FROM chat_members qm"
+        # «эта строка — кандидат на привязку»: те же фильтры, что в WHERE
+        # прод-подзапроса (пустая/NULL анкета, нет якоря, чат с галкой),
+        # плюс перенос фильтров guild_id/channel_id из прод-SQL
+        cond = ("EXISTS (SELECT 1 FROM chat_members qm"
+                " JOIN chats qc ON qc.channel_id = qm.channel_id AND qc.collects_qa"
                 " WHERE qm.channel_id = chat_members.channel_id"
                 " AND qm.author_id = chat_members.author_id"
                 " AND (qm.questionnaire IS NULL"
                 " OR btrim(qm.questionnaire) = '')"
-                " AND qm.message_id IS NULL)")
+                " AND qm.message_id IS NULL")
+        gm = re.search(r"AND c\.guild_id = (\d+)", extra)
+        if gm:
+            cond += f" AND qc.guild_id = {gm.group(1)}"
+        cmch = re.search(r"AND cm2\.channel_id = (\d+)", extra)
+        if cmch:
+            cond += f" AND qm.channel_id = {cmch.group(1)}"
+        cond += ")"
+        return ("UPDATE chat_members SET message_id = CASE WHEN " + cond +
+                " THEN " + pick + " ELSE message_id END"
+                ", questionnaire = CASE WHEN " + cond +
+                " AND btrim(COALESCE(questionnaire, '')) = ''"
+                " THEN COALESCE(" + pick_txt + ", '')"
+                " ELSE questionnaire END"
+                ", updated_at = CASE WHEN " + cond +
+                " THEN now() ELSE updated_at END WHERE " + cond)
     return s
 
 
@@ -92,20 +124,45 @@ class WritableDb(ReadOnlyDb):
     execute()/write() сохраняют контракты прода (список dict-строк и
     rowcount соответственно) — значит проверяется реальный SQL модуля
     анкеты, а не его заглушка.
+
+    Отдельно лечится расхождение диалектов «по-честному». Postgres пишет
+    `CAST(x AS TEXT)` — в SQLite такого нет (запрос молча падал, и
+    fetch_qa_replies деградировал до []). Имя типа меняется на CHAR —
+    полный синоним TEXT в SQLite. Алиасы колонок (`cm.questionnaire AS
+    text`) переписывать нельзя: это изменило бы имена ключей, которые
+    видит прод-код, поэтому вместо этого колонки, набранные типом вместо
+    алиаса (`CHAR`), нормализуются ниже к тому имени, которое вернул бы
+    Postgres. Прод-SQL модуля questionnaire при этом не трогается вовсе.
     """
 
+    def _sql(self, sql: str) -> str:
+        s = _sqlite_compatible(sql)
+        return re.sub(r"(?i)\bAS\s+TEXT\b", "AS CHAR", s)
+
     def execute(self, sql: str) -> list[dict]:
+        rows = self._rows(sql)
+        # Postgres назвал бы столбец «text» (алиас из запроса), SQLite —
+        # «CHAR» (подставленный тип). Ключи приводятся к Postgres-именам:
+        # текст значения тот же, контракт dict для прод-кода соблюдён
+        for r in rows:
+            if "CHAR" in r:
+                v = r.pop("CHAR")
+                if isinstance(v, str):
+                    r["text"] = v
+        return rows
+
+    def _rows(self, sql: str) -> list[dict]:
         with self._engine.connect() as conn:
             return [dict(r._mapping)
-                    for r in conn.execute(text(_sqlite_compatible(sql)))]
+                    for r in conn.execute(text(self._sql(sql)))]
 
     def write(self, sql: str) -> int:
         with self._engine.begin() as conn:
-            return conn.execute(text(_sqlite_compatible(sql))).rowcount or 0
+            return conn.execute(text(self._sql(sql))).rowcount or 0
 
     def execute_write(self, sql: str) -> int:
         with self._engine.begin() as conn:
-            return conn.execute(text(_sqlite_compatible(sql))).rowcount
+            return conn.execute(text(self._sql(sql))).rowcount
 
     def commit(self) -> None:  # совместимость с raw-API sqlite в тестах
         pass
