@@ -53,36 +53,55 @@ a { color: inherit; text-decoration: none; }
 /* ===== Header ===== */
 .header {
   position: sticky; top: 0; z-index: 100;
-  background: rgba(20,24,29,.92);
-  backdrop-filter: blur(8px);
+  background: rgba(16,21,26,.94);
+  backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
-  transition: box-shadow .3s;
+  transition: box-shadow .3s, background .3s;
 }
-.header.scrolled { box-shadow: 0 4px 20px rgba(0,0,0,.4); }
+.header::after { /* тонкая акцентная линия — «крышка» шапки, фирменный акцент */
+  content: ""; position: absolute; left: 0; bottom: -1px; width: 72px; height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+.header.scrolled { box-shadow: 0 6px 24px rgba(0,0,0,.45); background: rgba(16,21,26,.97); }
 .header__inner {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 1.2rem; padding: .65rem 0;
-  flex-wrap: nowrap; min-height: 56px;
+  gap: clamp(.8rem, 2vw, 1.6rem); padding: .7rem 0;
+  flex-wrap: nowrap; min-height: 64px;
 }
-.logo { display: flex; align-items: center; gap: .55rem; flex-shrink: 0; min-width: 0; }
-.logo__icon { width: 34px; height: 34px; display: block; flex-shrink: 0; }
-.logo__text { font-size: 1.15rem; font-weight: 300; line-height: 1.1; white-space: nowrap; }
-.logo__text b { color: var(--accent); font-weight: 800; }
-.logo__text small { display: block; font-size: .62rem; color: var(--muted); letter-spacing: .04em; }
-@media (max-width: 480px) {
+.logo { display: flex; align-items: center; gap: .6rem; flex-shrink: 0; min-width: 0; transition: opacity .2s; }
+.logo:hover { opacity: .85; }
+.logo__icon { width: 34px; height: 38px; display: block; flex-shrink: 0; }
+.logo__text { font-family: "Oswald", sans-serif; font-size: 1.2rem; font-weight: 400; letter-spacing: .02em; line-height: 1.1; white-space: nowrap; }
+.logo__text b { color: var(--accent); font-weight: 700; }
+.logo__text small { display: block; font-family: "PT Sans", sans-serif; font-size: .62rem; color: var(--muted); letter-spacing: .04em; }
+@media (max-width: 1360px) {
   .logo__text small { display: none; }
 }
 
-.nav { display: flex; gap: 1rem; flex-shrink: 1; min-width: 0; }
+.nav { display: flex; gap: clamp(.6rem, 1.2vw, 1.15rem); flex-shrink: 1; min-width: 0; }
 .nav__link {
-  color: var(--muted); font-size: .85rem; transition: color .2s;
+  position: relative;
+  color: #c3ccd5; font-size: .86rem; font-weight: 400;
+  padding: .35rem 0; transition: color .2s;
   white-space: nowrap; letter-spacing: .01em;
 }
-.nav__link:hover, .nav__link.active { color: var(--accent); }
+.nav__link::after { /* подчёркивание-индикатор активного раздела */
+  content: ""; position: absolute; left: 0; right: 100%; bottom: 0; height: 2px;
+  background: var(--accent); transition: right .25s ease;
+}
+.nav__link:hover { color: #fff; }
+.nav__link:hover::after { right: 0; }
+.nav__link.active { color: var(--accent); }
+.nav__link.active::after { right: 0; }
 
-.header__actions { display: flex; align-items: center; gap: .8rem; flex-shrink: 0; }
-.header__phone { text-align: right; font-weight: 700; line-height: 1.2; font-size: .9rem; white-space: nowrap; }
+.header__actions { display: flex; align-items: center; gap: .9rem; flex-shrink: 0; }
+.header__phone {
+  text-align: right; font-weight: 700; line-height: 1.15; font-size: .95rem;
+  white-space: nowrap; color: #fff; transition: color .2s;
+}
+.header__phone:hover { color: var(--accent); }
 .header__phone small { display: block; font-weight: 400; color: var(--muted); font-size: .68rem; }
+.header__actions .btn--accent { font-size: .85rem; padding: .6rem 1.15rem; }
 
 .burger { display: none; background: none; border: none; cursor: pointer; width: 30px; height: 24px; position: relative; }
 .burger span { position: absolute; left: 0; width: 100%; height: 3px; background: var(--text); border-radius: 2px; transition: .3s; }
@@ -452,8 +471,9 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 
 /* ===== Responsive ===== */
 .header__phone small { white-space: nowrap; }
-/* ниже 1240px навигация уходит в бургер (совпадает с двухрядным режимом шапки выше) */
+/* ниже 1240px навигация уходит в бургер */
 @media (max-width: 1240px) {
+  html { scroll-padding-top: 76px; }
   .burger { display: block; }
   .nav {
     position: fixed; inset: 100% 0 auto 0; flex-direction: column;
@@ -462,6 +482,10 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
     border-bottom: 1px solid var(--line); box-shadow: 0 16px 30px rgba(0,0,0,.35);
   }
   .nav.open { transform: none; }
+  .nav__link { font-size: 1rem; padding: .3rem 0; }
+}
+@media (max-width: 1100px) {
+  .header__actions .btn--accent { display: none; } /* звонок — через sticky-bar и бургер-меню */
 }
 @media (max-width: 480px) {
   .header__inner { gap: .5rem; }
