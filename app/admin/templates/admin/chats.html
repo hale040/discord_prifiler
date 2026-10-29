@@ -35,7 +35,7 @@
     <form method='post' action="{{ url_for('chat_toggle_collect', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
       <input type='hidden' name='on' value="{{ 0 if r.tracked else 1 }}">
       <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'>
-        <input type='checkbox' onchange='this.form.submit()' {{ 'checked' if r.tracked }} style='width:auto'>
+        <input type='checkbox' onclick="return toggleChat(this,'{{ url_for('chat_toggle_collect', channel_id=r.channel_id) }}')" {{ 'checked' if r.tracked }} style='width:auto'>
         <span>{{ 'да' if r.tracked else 'нет' }}</span></label>
     </form>
   </td>
@@ -44,7 +44,7 @@
     <form method='post' action="{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
       <input type='hidden' name='on' value="{{ 0 if r.collects_qa else 1 }}">
       <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'>
-        <input type='checkbox' onchange='this.form.submit()' {{ 'checked' if r.collects_qa }} style='width:auto'>
+        <input type='checkbox' onclick="return toggleChat(this,'{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}')" {{ 'checked' if r.collects_qa }} style='width:auto'>
         <span>{{ 'вкл' if r.collects_qa else 'выкл' }}</span></label>
     </form>
   </td>
@@ -55,7 +55,7 @@
       <input type='hidden' name='on' value="{{ 0 if r.download_files else 1 }}">
       <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'
              title='Скачивать все вложения этого чата (файлы и изображения) размером до 5 МБ'>
-        <input type='checkbox' onchange='this.form.submit()' {{ 'checked' if r.download_files }} style='width:auto'>
+        <input type='checkbox' onclick="return toggleChat(this,'{{ url_for('chat_toggle_dl', channel_id=r.channel_id) }}')" {{ 'checked' if r.download_files }} style='width:auto'>
         <span>{{ 'вкл' if r.download_files else 'выкл' }}</span></label>
     </form>
     {% else %}<span class='muted' title="колонка появится после миграции a00000000010">—</span>{% endif %}
@@ -71,4 +71,16 @@
 </tr>{% else %}
 <tr><td colspan='10' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
 {% endfor %}
-</tbody></table></div>
+</tbody></table>
+<script>
+// Тихий POST для галок чатов: страница не перезагружается, поэтому
+// состояние чекбокса живёт в браузере, а сортировка строк не сбивается.
+async function toggleChat(cb, url){
+  var on = cb.checked ? '1' : '0';
+  try{
+    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'on='+on, credentials:'same-origin'});
+    if(!r.ok && r.status!==204){ cb.checked = !cb.checked; alert('Не удалось сохранить ('+r.status+')'); }
+  }catch(e){ cb.checked = !cb.checked; alert('Ошибка сети: '+e); }
+  return false; // отменяем submit формы
+}
+</script></div>

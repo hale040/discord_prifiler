@@ -2118,6 +2118,31 @@ def create_app(database_url: str) -> Flask:
                       can_sync=(guild_id is not None
                                 and bool(os.getenv("DISCORD_TOKEN"))))
 
+    def _chats_return(channel_id: int | None = None):
+        """Возврат после toggle/удаления БЕЗ редиректов и без перерендера.
+
+        Корень бага «галка всё равно снимается / сбивается сортировка»:
+        раньше обработчик делал redirect(referrer или url_for('chats_page')).
+        При заходе в чаты по /chats/<ID> (ID сервера) url_for подставлял в
+        путь НОМЕР КАНАЛА; маршрут /chats/<int:guild_id> принимал любой целый
+        ID → страница фильтровала чаты по guild_id==channel_id → пустой/
+        неверный список, визуально «галка снялась», порядок строк другой.
+
+        Теперь POST-обработчики toggles возвращают 204: чекбокс в UI живёт
+        только в браузере (state sync при загрузке страницы), БД обновляется
+        напрямую, страница не перезагружается → галка остаётся, сортировка
+        (порядок строк серверного SELECT messages_total DESC) не меняется.
+        """
+        try:
+            c = Table("chats", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                gid = conn.execute(sa_select(c.columns.guild_id).where(
+                    c.columns.channel_id == channel_id)).scalar() \
+                    if channel_id is not None else None
+        except Exception:  # noqa: BLE001
+            gid = None
+        return ("", 204) if gid or channel_id is None else ("", 204)
+
     @app.route("/chats/toggle/<int:channel_id>", methods=["POST"])
     def chat_toggle_collect(channel_id: int):
         """Галка «отслеживать»: коллектор собирает live-сообщения этого чата.
@@ -2140,7 +2165,7 @@ def create_app(database_url: str) -> Flask:
             conn.commit()
         audit("chat_tracked", target=f"channel={channel_id}",
               details="on" if on else "off", result="ok")
-        return redirect(request.referrer or url_for("chats_page"))
+        return _chats_return(channel_id)
 
     @app.route("/chats/delete/<int:channel_id>", methods=["POST"])
     def chat_delete(channel_id: int):
@@ -2177,6 +2202,15 @@ def create_app(database_url: str) -> Flask:
     def chat_toggle_qa(channel_id: int):
         """Галка «анкеты»: чаты с collects_qa=TRUE отдают анкеты в промпт LLM.
 
+        Корень бага «галка всё равно снимается»: форма отправлялась на
+        /chats/qa/<ID>, а маршрут /chats/<int:guild_id> принимал ЛЮБОЙ
+        целый ID — GET-редирект после POST попадал на страницу чатов, где
+        guild_id совпадал с channel_id → фильтр `guild_id == channel_id`
+        не находил ни одного чата → галка выглядела снятой (в БД она при
+        этом стояла). Поэтому:
+          * этот маршрут теперь сам рендерит страницу чатов этого канала
+            (без редиректа через перехватывающий маршрут);
+          * тот же обходной путь возвращают toggle «отслеживать» и «файлы».
         Включение — мгновенная полная обработка канала (по требованию):
         участники из авторов сообщений + посты-анкеты + привязка тредов.
         Быстрые повторные клики идемпотентны (ON CONFLICT / WHERE message_id
@@ -2190,8 +2224,12 @@ def create_app(database_url: str) -> Flask:
         linked = 0
         added_members = 0
         filled = 0
+        gid = None
+        err = None
         try:
             with engine.connect() as conn:
+                gid = conn.execute(sa_select(c.columns.guild_id).where(
+                    c.columns.channel_id == channel_id)).scalar()
                 conn.execute(sa_update(c).where(
                     c.columns.channel_id == channel_id).values(collects_qa=on))
                 if on:
@@ -2210,25 +2248,29 @@ def create_app(database_url: str) -> Flask:
                                 c.columns.channel_id == channel_id,
                                 c.columns.guild_id.is_(None)).values(
                                 guild_id=int(row[0]))).rowcount
+                            if linked:
+                                gid = int(row[0])
                     # сразу парсить весь канал: посты-анкеты (первые посты
                     # авторов), чтобы комментарии собирались без ожидания
                     # пересчёта LLM
                     filled = _qa_autofill(conn, channel_id)
                 conn.commit()
         except Exception as exc:  # noqa: BLE001 — показываем причину во flash
+            err = f"{type(exc).__name__}: {str(exc)[:200]}"
             audit("chat_collects_qa", target=f"channel={channel_id}",
                   details=f"error: {type(exc).__name__}: {exc}"[:400],
                   result="fail")
-            flash(f"Не удалось переключить анкеты: {type(exc).__name__}: "
-                  f"{str(exc)[:200]}", "warn")
-            return redirect(request.referrer or url_for("chats_page"))
-        audit("chat_collects_qa", target=f"channel={channel_id}",
-              details=("on" if on else "off")
-                      + (f" guild_linked={linked}" if linked else "")
-                      + (f" members+{added_members}" if added_members >= 0 else "")
-                      + (f" anket={filled}" if filled else ""),
-              result="ok")
-        if on:
+        else:
+            audit("chat_collects_qa", target=f"channel={channel_id}",
+                  details=("on" if on else "off")
+                          + (f" guild_linked={linked}" if linked else "")
+                          + (f" members+{added_members}" if added_members >= 0
+                             else "")
+                          + (f" anket={filled}" if filled else ""),
+                  result="ok")
+        if err:
+            flash(f"Не удалось переключить анкеты: {err}", "warn")
+        elif on:
             parts = []
             if added_members > 0:
                 parts.append(f"участников добавлено: {added_members}")
@@ -2241,7 +2283,49 @@ def create_app(database_url: str) -> Flask:
                              " позже и будут обработаны сборщиком автоматически")
             flash(f"Анкеты включены для чата {channel_id}: "
                   + "; ".join(parts) + ".", "ok")
-        return redirect(request.referrer or url_for("chats_page"))
+        else:
+            flash(f"Анкеты выключены для чата {channel_id}.", "ok")
+        if err or on:
+            # при ошибке или включении показываем результат (перерендер
+            # страницы этого же сервера — без url_for и без редиректов)
+            return _render_chats(guild_id=int(gid) if gid else None)
+        # выключение: тихий 204 — галка остаётся снятой в UI, сортировка цела
+        return _chats_return(channel_id)
+
+    def _toggle_back(target_channel_id: int):
+        """См. _chats_return — единый возврат toggles без перезагрузки страницы."""
+        return _chats_return(target_channel_id)
+
+    def _render_chats(guild_id: int | None):
+        """Общий рендер страницы чатов (для toggles без редиректов)."""
+        if not _qa_tables_ok("chats", "chat_members"):
+            abort(404)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        cm = Table("chat_members", MetaData(), autoload_with=engine)
+        pred = (c.columns.guild_id == guild_id) if guild_id is not None else None
+        with engine.connect() as conn:
+            sel = (sa_select(
+                c,
+                sa_select(func.count()).select_from(cm)
+                .where(cm.columns.channel_id == c.columns.channel_id)
+                .correlate(c).scalar_subquery().label("members_n"),
+                sa_select(func.count()).select_from(cm)
+                .where(cm.columns.channel_id == c.columns.channel_id,
+                       cm.columns.questionnaire.isnot(None))
+                .correlate(c).scalar_subquery().label("qa_n"))
+                .order_by(c.columns.messages_total.desc()))
+            if pred is not None:
+                sel = sel.where(pred)
+            rows = conn.execute(sel).mappings().all()
+            gname = None
+            if guild_id is not None and "guilds" in tables():
+                g = Table("guilds", MetaData(), autoload_with=engine)
+                gname = conn.execute(sa_select(g.columns.name).where(
+                    g.columns.guild_id == guild_id)).scalar()
+        return render("chats", page="chats", rows=rows, guild_id=guild_id,
+                      guild_name=gname or "",
+                      can_sync=(guild_id is not None
+                                and bool(os.getenv("DISCORD_TOKEN"))))
 
     @app.route("/chats/dl/<int:channel_id>", methods=["POST"])
     def chat_toggle_dl(channel_id: int):
@@ -2263,7 +2347,7 @@ def create_app(database_url: str) -> Flask:
             conn.commit()
         audit("chat_download_files", target=f"channel={channel_id}",
               details="on" if on else "off", result="ok")
-        return redirect(request.referrer or url_for("chats_page"))
+        return _toggle_back(channel_id)
 
     @app.route("/chats/members/<int:channel_id>")
     def chat_members_page(channel_id: int):
