@@ -2445,6 +2445,17 @@ def create_app(database_url: str) -> Flask:
                     conn.execute(sa_insert(cm).values(
                         channel_id=channel_id, author_id=author_id, **upd))
                 conn.commit()
+                # анкета должна быть видна в глобальном профиле:
+                # materialизуем в user_profiles.about (см. Repository.sync_qa_to_profile)
+                try:
+                    from sqlalchemy.orm import sessionmaker as _sm
+
+                    from app.models.repository import Repository
+                    Repository(_sm(bind=engine)).sync_qa_to_profile(author_id)
+                except Exception as _qa_exc:  # noqa: BLE001 — old schemas
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "анкета → профиль: %s", _qa_exc)
                 audit("questionnaire_save",
                       target=f"channel={channel_id} user={author_id}",
                       details=f"len={len(text_v)}", result="ok")

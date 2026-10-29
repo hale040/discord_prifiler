@@ -1005,9 +1005,32 @@ class CollectionService:
                     log.debug("chats-refresh: qa_posts_autofill failed",
                               exc_info=True)
                 rec = await asyncio.to_thread(self.repo.recount_chats_totals)
+                # материализация анкет в user_profiles.about: оператор ждёт,
+                # что «данные анкеты пишутся в профиль» — см. sync_qa_to_profile
+                synced = 0
+                try:
+                    from sqlalchemy import distinct, func as sa_func
+                    from sqlalchemy import select as sa_sel
+
+                    from app.models.entities import ChatMember
+                    with self.repo._sf() as _s:
+                        qa_uids = _s.scalars(
+                            sa_sel(distinct(ChatMember.author_id))
+                            .where(ChatMember.questionnaire.isnot(None),
+                                   sa_func.btrim(ChatMember.questionnaire) != "")
+                        ).all()
+                    for uid in qa_uids:
+                        if self.repo.sync_qa_to_profile(uid) is not None:
+                            synced += 1
+                except Exception:  # noqa: BLE001 — старые схемы без колонок
+                    log.debug("chats-refresh: sync_qa_to_profile failed",
+                              exc_info=True)
                 if moved or linked or rec:
                     log.info("chats-refresh: участников +%s, анкет +%s, "
                              "totals Обновлено %s", moved, linked, rec)
+                if synced:
+                    log.info("chats-refresh: анкет перенесено в профили: %s",
+                             synced)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001

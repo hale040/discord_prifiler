@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 import sqlalchemy as sa
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text as sa_text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -166,6 +166,96 @@ class Repository:
     def get_user(self, user_id: int) -> UserProfile | None:
         with self._sf() as s:
             return s.scalars(select(UserProfile).where(UserProfile.user_id == user_id)).first()
+
+    def sync_qa_to_profile(self, author_id: int) -> str | None:
+        """Материализовать анкету участника в user_profiles.about.
+
+        Ответ на вопрос оператора «куда сохраняются данные анкеты»: исходный
+        текст живёт в chat_members.questionnaire (одна строка на чат), а в
+        глобальный профиль пользователя он попадает сюда — колонка
+        user_profiles.about («О себе»). Профиль в админке/экспорте тогда
+        показывает анкету без пересчёта психо-профиля.
+
+        Правила (конфликт решается в пользу человека):
+          * если у профиля уже есть about, заполненный человеком (значение не
+            совпадает с ранее синхронизированной анкетой) — НЕ трогаем;
+          * иначе выбираем самую свежую заполненную анкету автора по всем
+            чатам (ORDER BY updated_at DESC); пустые ('' при создании
+            участников) и NULL не подходят;
+          * если заполненных анкет нет — about очищается только тогда, когда
+            там лежала именно синхронизированная анкета (ручной bio не теряем);
+          * user_profiles может ещё не существовать — создаём минимальную
+            запись (username='' заполнится сборщиком позже).
+
+        Возвращает сохранённый текст анкеты или None. Идемпотентно; на старых
+        схемах без колонок — молча None (вызывающий не обязан это ловить).
+        """
+        try:
+            with self._sf() as s:
+                trim = "btrim" if s.bind.dialect.name == "postgresql" else "trim"
+                row = s.execute(sa_text(
+                    "SELECT cm.questionnaire FROM chat_members cm "
+                    "JOIN chats c ON c.channel_id = cm.channel_id "
+                    "WHERE cm.author_id = :uid AND cm.questionnaire IS NOT NULL "
+                    f"  AND {trim}(cm.questionnaire) <> '' "
+                    "  AND COALESCE(c.collects_qa, TRUE) "
+                    "ORDER BY cm.updated_at DESC NULLS LAST LIMIT 1"),
+                    {"uid": int(author_id)}).scalar()
+                # SELECT/UPDATE сырым SQL: полный ORM-профиль падает на
+                # старых схемах без dm_*-колонок (UndefinedColumn)
+                up_cols = {str(r[1]) for r in s.execute(sa_text(
+                    "PRAGMA table_info(user_profiles)")).all()}                     if s.bind.dialect.name == "sqlite" else {
+                    str(r[0]) for r in s.execute(sa_text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='user_profiles'"))}
+                if "about" not in up_cols:
+                    return None
+                prev_about = s.execute(sa_text(
+                    "SELECT about FROM user_profiles WHERE user_id=:uid"),
+                    {"uid": int(author_id)}).scalar() or ""
+                exists = s.execute(sa_text(
+                    "SELECT 1 FROM user_profiles WHERE user_id=:uid"),
+                    {"uid": int(author_id)}).scalar()
+                if not exists and not row:
+                    return None
+                if row:
+                    # прежняя value — либо пусто, либо ранее синхронизированная
+                    # анкета: тогда перезаписываем; ручной bio не перетираем
+                    if prev_about and prev_about != row:
+                        old_synced = s.execute(sa_text(
+                            "SELECT questionnaire FROM chat_members "
+                            "WHERE author_id = :uid AND questionnaire = :t"
+                            " LIMIT 1"), {"uid": int(author_id),
+                                          "t": prev_about}).scalar()
+                        if old_synced is None:
+                            return None  # about заполнен руками — не трогаем
+                    new_about = row
+                elif prev_about:
+                    old_synced = s.execute(sa_text(
+                        "SELECT questionnaire FROM chat_members "
+                        "WHERE author_id = :uid AND questionnaire = :t"
+                        " LIMIT 1"), {"uid": int(author_id),
+                                      "t": prev_about}).scalar()
+                    if old_synced is None:
+                        return None
+                    new_about = None
+                else:
+                    return None
+                if exists:
+                    s.execute(sa_text(
+                        "UPDATE user_profiles SET about=:v WHERE user_id=:uid"),
+                        {"v": new_about, "uid": int(author_id)})
+                else:
+                    s.execute(sa_text(
+                        "INSERT INTO user_profiles (user_id, username, about)"
+                        " VALUES (:uid, '', :v)"),
+                        {"uid": int(author_id), "v": new_about})
+                s.commit()
+                return row
+        except Exception:  # noqa: BLE001 — старые схемы без нужных колонок
+            log.debug("sync_qa_to_profile: author=%s пропущено", author_id,
+                      exc_info=True)
+            return None
 
     # ------------------------------------------------------------------ games
     def fix_legacy_game_kinds(self, user_id: int | None = None) -> int:
