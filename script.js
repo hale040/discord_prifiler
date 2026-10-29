@@ -209,10 +209,10 @@ modal.addEventListener("keydown", e => {
 
 document.getElementById("callBtn").addEventListener("click", () => openModal(null, null, true));
 
-// «Оставить заявку» в hero и других местах — открывает форму заявки в модалке
+// «Заказать звонок» / «Оставить заявку» в hero — открывает форму заявки в модалке
 // (с комплектом документов: скачать сразу или выслать на почту)
 document.addEventListener("click", e => {
-  const btn = e.target.closest(".js-lead");
+  const btn = e.target.closest(".js-lead, .js-call");
   if (!btn) return;
   openModal(
     "Заполните форму — менеджер свяжется с вами в течение 15 минут, посчитает цену под объём и подготовит счёт.",
