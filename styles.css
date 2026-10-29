@@ -134,9 +134,11 @@ a { color: inherit; text-decoration: none; }
 .hero .container { position: relative; z-index: 1; }
 .hero__inner {
   display: grid; grid-template-columns: minmax(0,1.35fr) minmax(0,1fr);
-  gap: clamp(2.5rem, 5vw, 4.5rem); align-items: center;
+  gap: clamp(2.5rem, 5vw, 4.5rem); align-items: start;
 }
 .hero__content { text-align: left; }
+/* Выравнивание по верху: badge и карточка документов начинаются на одной линии */
+.hero__content > .hero__badge:first-child { margin-top: 0; padding: .5rem 1.25rem; }
 .hero__badge {
   display: inline-flex; align-items: center; gap: .5rem;
   background: linear-gradient(135deg, rgba(255,122,26,.28), rgba(255,122,26,.14));
