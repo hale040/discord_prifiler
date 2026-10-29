@@ -44,7 +44,8 @@
     <form method='post' action="{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
       <input type='hidden' name='on' value="{{ 0 if r.collects_qa else 1 }}">
       <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'>
-        <input type='checkbox' onclick="return toggleChat(this,'{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}')" {{ 'checked' if r.collects_qa }} style='width:auto'>
+        {# галка «анкеты» — только по чатам сервера (см. toggleChat в JS): #}
+        <input type='checkbox' {% if guild_id %}onclick="return toggleChat(this,'{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}')"{% else %}disabled title='Откройте чаты конкретного сервера (раздел «Серверы») — анкеты включаются только там'{% endif %} {{ 'checked' if r.collects_qa }} style='width:auto'>
         <span>{{ 'вкл' if r.collects_qa else 'выкл' }}</span></label>
     </form>
   </td>
@@ -72,14 +73,24 @@
 <tr><td colspan='10' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
 {% endfor %}
 </tbody></table>
+<script>window.__GUILD_ID = {{ 'null' if not guild_id else guild_id }};</script>
 <script>
 // Тихий POST для галок чатов: страница не перезагружается, поэтому
 // состояние чекбокса живёт в браузере, а сортировка строк не сбивается.
 async function toggleChat(cb, url){
   var on = cb.checked ? '1' : '0';
+  // галка «анкеты» включается только по чатам конкретного сервера:
+  // на общей странице /chats ID сервера неизвестен (guild_id пуст), и при
+  // ошибке/отказе чекбокс откатывается — визуально «снимается сам».
+  if (url.indexOf('/chats/qa/') !== -1 && !window.__GUILD_ID) {
+    cb.checked = !cb.checked;
+    alert('Анкеты включаются только внутри сервера: откройте раздел «Серверы», введите ID сервера и отметьте чат там.');
+    return false;
+  }
   try{
     var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'on='+on, credentials:'same-origin'});
     if(!r.ok && r.status!==204){ cb.checked = !cb.checked; alert('Не удалось сохранить ('+r.status+')'); }
+    else if (r.redirected) { cb.checked = !cb.checked; alert('Сохранение не подтверждено (сервер ответил переадресацией). Обновите страницу и повторите.'); }
   }catch(e){ cb.checked = !cb.checked; alert('Ошибка сети: '+e); }
   return false; // отменяем submit формы
 }
