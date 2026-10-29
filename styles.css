@@ -15,7 +15,7 @@
   --shadow: 0 10px 30px rgba(0,0,0,.25);
 }
 
-html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+html { scroll-behavior: smooth; scroll-padding-top: 70px; }
 body {
   font-family: "PT Sans", "Segoe UI", Roboto, Arial, sans-serif;
   background: var(--bg);
@@ -65,29 +65,23 @@ a { color: inherit; text-decoration: none; }
 .header.scrolled { box-shadow: 0 6px 24px rgba(0,0,0,.45); background: rgba(16,21,26,.97); }
 .header__inner {
   display: flex; align-items: center; justify-content: space-between;
-  gap: clamp(.8rem, 2vw, 1.6rem); padding: .7rem 0;
-  flex-wrap: nowrap; min-height: 64px;
+  gap: clamp(.8rem, 2vw, 1.4rem); padding: .45rem 0;
+  flex-wrap: nowrap; min-height: 54px;
 }
-/* навигация сжимается первой: ссылки переносятся в две строки вместо наезда на телефон/кнопку */
-.nav { flex-wrap: wrap; row-gap: .15rem; }
 @media (max-width: 1360px) {
   .header__actions .btn--accent { display: none; } /* звонок — через бургер-меню и sticky-bar */
 }
-.logo { display: flex; align-items: center; gap: .6rem; flex-shrink: 0; min-width: 0; transition: opacity .2s; }
+.logo { display: flex; align-items: center; gap: .55rem; flex-shrink: 0; min-width: 0; transition: opacity .2s; }
 .logo:hover { opacity: .85; }
-.logo__icon { width: 34px; height: 38px; display: block; flex-shrink: 0; }
-.logo__text { font-family: "Oswald", sans-serif; font-size: 1.2rem; font-weight: 400; letter-spacing: .02em; line-height: 1.1; white-space: nowrap; }
+.logo__icon { width: 30px; height: 34px; display: block; flex-shrink: 0; }
+.logo__text { font-family: "Oswald", sans-serif; font-size: 1.15rem; font-weight: 400; letter-spacing: .02em; line-height: 1.1; white-space: nowrap; }
 .logo__text b { color: var(--accent); font-weight: 700; }
-.logo__text small { display: block; font-family: "PT Sans", sans-serif; font-size: .62rem; color: var(--muted); letter-spacing: .04em; }
-@media (max-width: 1360px) {
-  .logo__text small { display: none; }
-}
 
-.nav { display: flex; gap: clamp(.6rem, 1.2vw, 1.15rem); flex: 1 1 auto; min-width: 0; justify-content: center; }
+.nav { display: flex; gap: clamp(.55rem, 1vw, .95rem); flex: 1 1 auto; min-width: 0; justify-content: center; }
 .nav__link {
   position: relative;
-  color: #c3ccd5; font-size: .86rem; font-weight: 400;
-  padding: .35rem 0; transition: color .2s;
+  color: #c3ccd5; font-size: .82rem; font-weight: 400;
+  padding: .3rem 0; transition: color .2s;
   white-space: nowrap; letter-spacing: .01em;
 }
 .nav__link::after { /* подчёркивание-индикатор активного раздела */
@@ -478,7 +472,7 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 .header__phone small { white-space: nowrap; }
 /* ниже 1240px навигация уходит в бургер */
 @media (max-width: 1240px) {
-  html { scroll-padding-top: 76px; }
+  html { scroll-padding-top: 62px; }
   .burger { display: block; }
   .nav {
     position: fixed; inset: 100% 0 auto 0; flex-direction: column;
