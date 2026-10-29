@@ -592,14 +592,21 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 
 /* ===== НОВЫЕ СЕКЦИИ: услуги, СРО, этапы, доставка-оплата ===== */
 /* Услуги металлообработки */
-.srv__wrap { display: grid; grid-template-columns: 1.1fr .9fr; gap: 2rem; align-items: start; margin-top: 1.4rem; }
-.srv__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6rem; }
-.srv__lead { font-family: 'Oswald', sans-serif; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--text-dark); margin-bottom: .6rem; }
-.srv__list { list-style: none; margin: 0; padding: 0; }
-.srv__list li { position: relative; padding: .5rem 0 .5rem 1.7rem; border-bottom: 1px solid #e3e7ec; font-size: .95rem; color: var(--text-dark); }
-.srv__list li::before { content: ""; position: absolute; left: 0; top: .95rem; width: 10px; height: 10px; background: var(--accent); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
-.srv__text { background: #fff; border: 1px solid #e3e7ec; border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.4rem 1.5rem; font-size: .95rem; color: #5b6672; line-height: 1.65; box-shadow: 0 4px 16px rgba(0,0,0,.05); }
-@media (max-width: 900px) { .srv__wrap { grid-template-columns: 1fr; } }
+/* Услуги металлообработки — карточки */
+.srv__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1.1rem; margin-top: 1.8rem; }
+.srv__card { position: relative; display: flex; flex-direction: column; gap: .55rem; background: #fff; border: 1px solid #e3e7ec; border-radius: var(--radius); padding: 1.35rem 1.3rem 1.4rem; box-shadow: 0 4px 16px rgba(0,0,0,.05); transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; overflow: hidden; }
+.srv__card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--accent); transform: scaleY(0); transform-origin: top; transition: transform .25s ease; }
+.srv__card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(15,23,32,.14); border-color: #d3dae2; }
+.srv__card:hover::before { transform: scaleY(1); }
+.srv__card-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px; color: var(--accent-dark); background: rgba(255,122,26,.1); margin-bottom: .15rem; }
+.srv__card-icon svg { width: 22px; height: 22px; }
+.srv__card h3 { font-family: 'Oswald', sans-serif; font-size: 1.02rem; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; color: var(--text-dark); }
+.srv__card p { font-size: .88rem; line-height: 1.55; color: #5b6672; }
+.srv__card--more { background: linear-gradient(180deg, #fff, #f4f7fa); border-style: dashed; }
+.srv__note { display: flex; align-items: center; justify-content: space-between; gap: 1.6rem; margin-top: 1.4rem; background: var(--bg-soft, #f4f7fa); border: 1px solid #e3e7ec; border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.3rem 1.5rem; }
+.srv__note p { font-size: .92rem; line-height: 1.65; color: #5b6672; max-width: 62ch; }
+.srv__note .btn { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 860px) { .srv__note { flex-direction: column; align-items: stretch; } .srv__note .btn { text-align: center; } }
 
 /* Вступление в СРО */
 /* SRO — dark section */
