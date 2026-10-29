@@ -278,10 +278,22 @@ class Repository:
                     if not _looks_synced(prev_about):
                         return None
                     new_about = None
+                elif marked:
+                    # about уже пуст, но флаг остался (например, анкету
+                    # очистили между проходами) — сбрасываем флаг честно
+                    new_about = None
+                    if not has_flag:
+                        return None
+                    s.execute(sa_text(
+                        f"UPDATE user_profiles SET {QA_FLAG_COL}=FALSE"
+                        " WHERE user_id=:uid"), {"uid": int(author_id)})
+                    s.commit()
+                    return None
                 else:
                     return None
                 if exists:
                     if has_flag:
+                        # при очистке (new_about=None) flag=False; при записи — True
                         s.execute(sa_text(
                             f"UPDATE user_profiles SET about=:v, {QA_FLAG_COL}=:f"
                             " WHERE user_id=:uid"),

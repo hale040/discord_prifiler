@@ -74,14 +74,17 @@ def test_resync_updates_previous_questionnaire(repo):
 
 
 def test_empty_questionnaire_clears_only_synced(repo):
-    _seed(repo, text_v=None)
+    # была синхронизированная анкета -> её удалили/очистили -> about чистится
+    _seed(repo, text_v="Анкета из чата")
     with repo._sf() as s:
         s.execute(text("INSERT INTO user_profiles (user_id, username, about)"
-                       " VALUES (7,'x','Анкета из чата')"))
-        s.execute(text("INSERT INTO chat_members (channel_id, author_id, questionnaire)"
-                       " VALUES (100,7,'Анкета из чата')"))
+                       " VALUES (7,'x','')"))
         s.commit()
-    repo.sync_qa_to_profile(7)
+    assert repo.sync_qa_to_profile(7) == "Анкета из чата"
+    with repo._sf() as s:
+        s.execute(text("UPDATE chat_members SET questionnaire=NULL"))
+        s.commit()
+    assert repo.sync_qa_to_profile(7) is None
     with repo._sf() as s:
         assert s.execute(text("SELECT about FROM user_profiles WHERE user_id=7")).scalar() is None
 
