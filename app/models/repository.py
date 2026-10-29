@@ -193,13 +193,16 @@ class Repository:
         try:
             with self._sf() as s:
                 trim = "btrim" if s.bind.dialect.name == "postgresql" else "trim"
+                # «NULLS LAST» есть только в Postgres; в SQLite сортировка
+                # по NULL идёт по умолчанию в конец — разводим диалекты явно
+                nulls = " NULLS LAST" if s.bind.dialect.name == "postgresql" else ""
                 row = s.execute(sa_text(
                     "SELECT cm.questionnaire FROM chat_members cm "
                     "JOIN chats c ON c.channel_id = cm.channel_id "
                     "WHERE cm.author_id = :uid AND cm.questionnaire IS NOT NULL "
                     f"  AND {trim}(cm.questionnaire) <> '' "
                     "  AND COALESCE(c.collects_qa, TRUE) "
-                    "ORDER BY cm.updated_at DESC NULLS LAST LIMIT 1"),
+                    f"ORDER BY cm.updated_at DESC{nulls} LIMIT 1"),
                     {"uid": int(author_id)}).scalar()
                 # SELECT/UPDATE сырым SQL: полный ORM-профиль падает на
                 # старых схемах без dm_*-колонок (UndefinedColumn)
@@ -218,25 +221,35 @@ class Repository:
                     {"uid": int(author_id)}).scalar()
                 if not exists and not row:
                     return None
+                def _looks_synced(t: str) -> bool:
+                    """about был записана нами, если такой текст анкеты всё
+                    ещё живёт в chat_members этого автора (или когда-то жил:
+                    LIKE по краям ловит обновлённые/склеенные варианты)."""
+                    hit = s.execute(sa_text(
+                        "SELECT 1 FROM chat_members "
+                        "WHERE author_id = :uid AND questionnaire = :t"
+                        " LIMIT 1"), {"uid": int(author_id),
+                                      "t": t}).scalar()
+                    if hit is not None:
+                        return True
+                    hit = s.execute(sa_text(
+                        "SELECT 1 FROM chat_members "
+                        "WHERE author_id = :uid AND ("
+                        " questionnaire LIKE '%' || :t "
+                        " OR :t LIKE '%' || questionnaire || '%')"
+                        " AND trim(questionnaire) <> '' LIMIT 1"),
+                        {"uid": int(author_id), "t": t}).scalar()
+                    return hit is not None
+
                 if row:
                     # прежняя value — либо пусто, либо ранее синхронизированная
                     # анкета: тогда перезаписываем; ручной bio не перетираем
-                    if prev_about and prev_about != row:
-                        old_synced = s.execute(sa_text(
-                            "SELECT questionnaire FROM chat_members "
-                            "WHERE author_id = :uid AND questionnaire = :t"
-                            " LIMIT 1"), {"uid": int(author_id),
-                                          "t": prev_about}).scalar()
-                        if old_synced is None:
-                            return None  # about заполнен руками — не трогаем
+                    if prev_about and prev_about != row \
+                            and not _looks_synced(prev_about):
+                        return None  # about заполнен руками — не трогаем
                     new_about = row
                 elif prev_about:
-                    old_synced = s.execute(sa_text(
-                        "SELECT questionnaire FROM chat_members "
-                        "WHERE author_id = :uid AND questionnaire = :t"
-                        " LIMIT 1"), {"uid": int(author_id),
-                                      "t": prev_about}).scalar()
-                    if old_synced is None:
+                    if not _looks_synced(prev_about):
                         return None
                     new_about = None
                 else:
