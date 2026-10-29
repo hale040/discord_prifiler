@@ -34,6 +34,20 @@ class ReadOnlyDb:
         with self._engine.connect() as conn:
             return [dict(r._mapping) for r in conn.execute(text(sql))]
 
+    def write(self, sql: str) -> int:
+        """Выполнить UPDATE/INSERT/DELETE и ВЕРНУТЬ ЧИСЛО ИЗМЕНЁННЫХ СТРОК.
+
+        Обязательно отдельный метод, а не execute(): у execute() контракт —
+        список dict-строк, и вызывающий код (qa_posts_autofill) принимал его
+        результат за «число привязок» и получал 0. Кроме того, без commit()
+        транзакция SQLAlchemy откатывалась при закрытии соединения: галка
+        «анкеты» ставилась, фоновый сборщик звал autofill, ничего не
+        сохранялось, анкет по-прежнему не было — и после перезагрузки
+        страницы чат выглядел «сброшенным».
+        """
+        with self._engine.begin() as conn:
+            return conn.execute(text(sql)).rowcount or 0
+
     def columns(self, table: str) -> set[str]:
         """Аналог PRAGMA table_info: имена колонок таблицы (пустое — нет таблицы)."""
         try:

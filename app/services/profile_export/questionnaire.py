@@ -77,26 +77,63 @@ def fetch_questionnaires(conn, channel_ids=None) -> list[dict]:
     return out
 
 
+def _message_columns(conn) -> set[str]:
+    """Колонки messages: драйверо-независимо, с запасным вариантом.
+
+    Корень бага «галка анкет ставится, но после перезагрузки страницы
+    снимается»: здесь стоял запрос к information_schema — Postgres-специфичный
+    и притом НЕ-workable в транзакции с UPDATE (в psycopg3/autocommit-режиме
+    SQLAlchemy ошибка обрывала всю команду). Колонки не удавалось получить →
+    условие «пост первого уровня» пустовало → реплаи и сообщения тредов
+    считались анкетами, а сам UPDATE падал. Сборщик каждые 5 минут сбрасывал
+    чат обратно (участники без заполненной анкеты), и оператор видел снятую
+    галку. Теперь колонки берутся из ReadOnlyDb.columns() (SQLAlchemy inspect),
+    а если метаданные недоступны — из фактического SELECT * LIMIT 0.
+    """
+    cols: set[str] = set()
+    try:
+        getter = getattr(conn, "columns", None)
+        if callable(getter):
+            cols = {str(c) for c in (getter("messages") or set())}
+    except Exception:  # noqa: BLE001
+        cols = set()
+    if not cols:
+        try:
+            cols = {str(k) for k in conn.execute(
+                "SELECT * FROM messages LIMIT 0")[0].keys()} \
+                if conn.execute("SELECT * FROM messages LIMIT 0") else set()
+        except Exception:  # noqa: BLE001
+            cols = set()
+    if not cols:
+        try:
+            rows = conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'messages'")
+            cols = {str(r["column_name"]) for r in rows}
+        except Exception:  # noqa: BLE001
+            cols = set()
+    return cols
+
+
 def _first_level_posts(conn) -> str:
     """SQL-условие «пост первого уровня» в имеющейся схеме.
 
-    Схема хранит только reference_id (reply-to; thread_root_id не маппится),
-    поэтому первый уровень дерева = сообщение ни на что не отвечает.
+    Первый уровень дерева = сообщение ни на что не отвечает (нет треда и нет
+    reply-to). Если колонки не удалось определить вовсе — возвращаем самую
+    консервативную формулировку по reference_id, а не пустую строку: пустая
+    строка превращает в «анкеты» ответы и сообщения из тредов.
     """
-    cols = set()
-    try:
-        rows = conn.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = 'messages'")
-        cols = {r["column_name"] for r in rows}
-    except Exception:  # noqa: BLE001
-        pass
+    cols = _message_columns(conn)
     conds = []
     if "thread_root_id" in cols:
         conds.append("m.thread_root_id IS NULL")
     if "reference_id" in cols:
         conds.append("m.reference_id IS NULL")
-    return ("AND (" + " AND ".join(conds) + ")" if conds else "")
+    if not conds:
+        # колонки не определены (повреждённая метадата) — НЕ выдаём пустое
+        # условие: без него в «анкеты» попадут реплаи и сообщения тредов
+        return "AND m.reference_id IS NULL"
+    return "AND (" + " AND ".join(conds) + ")"
 
 
 def qa_posts_autofill(conn, guild_id=None) -> int:
@@ -116,6 +153,18 @@ def qa_posts_autofill(conn, guild_id=None) -> int:
     if guild_id is not None:
         where_g = f" AND c.guild_id = {int(guild_id)}"
     lvl = _first_level_posts(conn)
+    # «до» считаем ДО UPDATE: ReadOnlyDb.execute() не отдаёт rowcount, а
+    # повторный запрос после UPDATE уже видит новое состояние — разница и
+    # есть число выполненных привязок (честное число в flash админки)
+    count_sql = (
+        "SELECT COUNT(*) AS n FROM chat_members cm"
+        " JOIN chats c ON c.channel_id = cm.channel_id AND c.collects_qa"
+        " WHERE cm.message_id IS NOT NULL" + where_g)
+    before = 0
+    try:
+        before = int(conn.execute(count_sql)[0]["n"])
+    except Exception:  # noqa: BLE001 — старые схемы
+        before = 0
     sql = (
         "UPDATE chat_members cm SET message_id = sub.pid, "
         "questionnaire = CASE WHEN btrim(COALESCE(cm.questionnaire, '')) = ''"
@@ -140,10 +189,19 @@ def qa_posts_autofill(conn, guild_id=None) -> int:
         "WHERE cm.channel_id = sub.ch AND cm.author_id = sub.au"
     )
     try:
-        res = conn.execute(sql)
-        return len(res) if isinstance(res, list) else getattr(res, "rowcount", 0)
+        writer = getattr(conn, "write", None)
+        if callable(writer):
+            # путь продакшена: commit + rowcount (см. ReadOnlyDb.write)
+            n = int(writer(sql))
+        else:
+            conn.execute(sql)
+            try:
+                n = max(int(conn.execute(count_sql)[0]["n"]) - before, 0)
+            except Exception:  # noqa: BLE001
+                n = 0
     except Exception:  # noqa: BLE001 — старые схемы
         return 0
+    return n
 
 
 def fetch_qa_replies(conn, channel_ids=None) -> list[dict]:
@@ -165,12 +223,7 @@ def fetch_qa_replies(conn, channel_ids=None) -> list[dict]:
         where_ch = f" AND q.channel_id IN ({ids})"
     # ветки UNION собираются по фактическим колонкам messages: thread_root_id
     # появляется только с новой ревизией маппера, reference_id есть всегда
-    try:
-        cols = {r["column_name"] for r in conn.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = 'messages'")}
-    except Exception:  # noqa: BLE001
-        cols = {"reference_id"}
+    cols = _message_columns(conn) or {"reference_id"}
     branches: list[str] = []
     head = (
         "  SELECT m.id, m.timestamp, m.channel_id, m.author_id,"

@@ -1912,17 +1912,23 @@ def create_app(database_url: str) -> Flask:
     def _qa_autofill(conn, channel_id: int | None = None) -> int:
         """Привязка постов-анкет к участникам чата (см. questionnaire.py).
 
-        Анкета = ПЕРВЫЙ пост автора в чате (thread_root_id IS NULL); с ним
-        связываются комментарии из треда. Идемпотентно, ошибки старых схем
-        проглатываются."""
-        try:
-            lvl_cols = {r[0] for r in conn.execute(sa_text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name='messages'"))}
-        except Exception:  # noqa: BLE001
+        Анкета = ПЕРВЫЙ пост автора в чате (ни реплай, ни сообщение треда);
+        с ним связываются комментарии из треда. Идемпотентно, ошибки старых
+        схем проглатываются.
+
+        Две ловушки, из-за которых галка «анкеты» выглядела снятой:
+          * список колонок нельзя брать из information_schema — этот запрос
+            вне транзакции с UPDATE на psycopg3 падает, и функция молча
+            возвращала 0 (галка есть, анкет нет → сборщик «сбрасывал» чат);
+            берём через SQLAlchemy inspect (columns());
+          * условие «первый уровень» не имеет права быть пустым, иначе
+            анкету ставили первому попавшемуся ответу автора.
+        """
+        from app.services.profile_export.questionnaire import _first_level_posts
+
+        lvl = _first_level_posts(conn)
+        if not lvl:
             return 0
-        lvl = ("AND (m.thread_root_id IS NULL AND m.reference_id IS NULL)"
-               if {"thread_root_id", "reference_id"} <= lvl_cols else "")
         where_ch = f" AND cm.channel_id = {int(channel_id)}" \
             if channel_id is not None else ""
         sql = sa_text(
@@ -2102,7 +2108,8 @@ def create_app(database_url: str) -> Flask:
                 .correlate(c).scalar_subquery().label("members_n"),
                 sa_select(func.count()).select_from(cm)
                 .where(cm.columns.channel_id == c.columns.channel_id,
-                       cm.columns.questionnaire.isnot(None))
+                       cm.columns.questionnaire.isnot(None),
+                       sa_text("btrim(cm.questionnaire) <> ''"))
                 .correlate(c).scalar_subquery().label("qa_n"))
                 .order_by(c.columns.messages_total.desc()))
             if pred is not None:
@@ -2338,7 +2345,8 @@ def create_app(database_url: str) -> Flask:
                 .correlate(c).scalar_subquery().label("members_n"),
                 sa_select(func.count()).select_from(cm)
                 .where(cm.columns.channel_id == c.columns.channel_id,
-                       cm.columns.questionnaire.isnot(None))
+                       cm.columns.questionnaire.isnot(None),
+                       sa_text("btrim(cm.questionnaire) <> ''"))
                 .correlate(c).scalar_subquery().label("qa_n"))
                 .order_by(c.columns.messages_total.desc()))
             if pred is not None:
