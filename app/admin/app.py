@@ -2109,7 +2109,7 @@ def create_app(database_url: str) -> Flask:
                 sa_select(func.count()).select_from(cm)
                 .where(cm.columns.channel_id == c.columns.channel_id,
                        cm.columns.questionnaire.isnot(None),
-                       sa_text("btrim(cm.questionnaire) <> ''"))
+                       func.btrim(cm.columns.questionnaire) != "")
                 .correlate(c).scalar_subquery().label("qa_n"))
                 .order_by(c.columns.messages_total.desc()))
             if pred is not None:
@@ -2346,7 +2346,7 @@ def create_app(database_url: str) -> Flask:
                 sa_select(func.count()).select_from(cm)
                 .where(cm.columns.channel_id == c.columns.channel_id,
                        cm.columns.questionnaire.isnot(None),
-                       sa_text("btrim(cm.questionnaire) <> ''"))
+                       func.btrim(cm.columns.questionnaire) != "")
                 .correlate(c).scalar_subquery().label("qa_n"))
                 .order_by(c.columns.messages_total.desc()))
             if pred is not None:
