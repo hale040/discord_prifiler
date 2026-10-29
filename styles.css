@@ -734,8 +734,8 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 @media (max-width: 1024px) { .stages__list { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .stages__list { grid-template-columns: 1fr; } }
 
-#delivery .section__title { color: var(--text); }
-.dlv__subtitle { margin: 2.2rem 0 1rem; font-size: 1.3rem; color: var(--text); border-left: 4px solid var(--accent); padding-left: .8rem; }
+#delivery .section__title { color: var(--text-dark); }
+.dlv__subtitle { margin: 2.2rem 0 1rem; font-size: 1.3rem; color: var(--text-dark); border-left: 4px solid var(--accent); padding-left: .8rem; }
 #delivery .serv h3 { color: var(--text-dark); }
 .dlv__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.4rem; }
 .dlv__grid--4 { grid-template-columns: repeat(4, 1fr); }
