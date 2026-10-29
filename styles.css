@@ -198,9 +198,11 @@ a { color: inherit; text-decoration: none; }
 .hero__panel-link span { color: var(--accent); }
 .hero__panel-link:hover { color: var(--accent); gap: .7rem; }
 
+/* Правая колонка hero: сначала документы, под ними панель «в цифрах» */
+.hero__side { display: grid; gap: 1.2rem; align-content: start; }
+
 /* Документы в первом блоке: карточка-панель с рамкой (в тон панели «в цифрах») */
 .hero__docs {
-  margin-top: 1.6rem;
   background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
   border: 1px solid rgba(255,255,255,.12);
   border-radius: calc(var(--radius) + 4px);
@@ -472,7 +474,8 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 }
 @media (max-width: 1024px) {
   .hero__inner { grid-template-columns: 1fr; gap: 2.2rem; }
-  .hero__panel { transform: none; max-width: 560px; }
+  .hero__side { max-width: 560px; }
+  .hero__panel { transform: none; }
 }
 @media (max-width: 760px) {
   .hero { padding: 2.6rem 0 2.2rem; }
