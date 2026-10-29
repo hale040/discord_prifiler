@@ -752,3 +752,22 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
   .gcard__pic, .gcard:hover .gcard__pic { transition: none; transform: none; }
   .gcard::after { transition: none; }
 }
+
+/* ===== P1/P2: дизайн-полировка (SVG-иконки, стрелки этапов, glass-карточки СРО) ===== */
+.ico { width: 1.05em; height: 1.05em; vertical-align: -0.18em; margin-right: .45em; color: var(--accent); flex: none; }
+#delivery .serv h3 svg { width: 1.15em; height: 1.15em; vertical-align: -0.2em; margin-right: .4em; color: var(--accent-dark); }
+.sticky-bar__call svg { width: 1.1em; height: 1.1em; vertical-align: -0.18em; margin-right: .35em; }
+.contacts__info p { display: flex; align-items: baseline; gap: 0; }
+/* карточки СРО: единый glass-стиль тёмной секции */
+.sro__org { background: rgba(255,255,255,.045); border: 1px solid var(--line); box-shadow: none; }
+.sro__org:hover { border-color: rgba(255,122,26,.55); background: rgba(255,255,255,.07); box-shadow: 0 12px 28px rgba(0,0,0,.3); }
+.sro__org h4 { color: var(--text); }
+.sro__org-type { color: var(--muted); }
+.sro__org-type b { color: #dbe3ea; }
+.sro__org-facts { border-top-color: rgba(255,255,255,.12); }
+.sro__org-facts li { color: var(--muted); }
+.sro__org-mark { background: linear-gradient(160deg, var(--accent), #e05e00); box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); }
+/* этапы: соединительные стрелки (процесс читается линейно) */
+.stage__arrow { position: absolute; top: 50%; right: -1.9rem; width: 1.6rem; height: 2px; background: linear-gradient(90deg, var(--accent), transparent); }
+.stage__arrow::after { content: ""; position: absolute; right: -.15rem; top: 50%; transform: translateY(-50%); border-left: 7px solid var(--accent); border-top: 5px solid transparent; border-bottom: 5px solid transparent; opacity: .9; }
+@media (max-width: 900px) { .stage__arrow { display: none; } }
