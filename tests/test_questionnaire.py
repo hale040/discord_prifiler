@@ -178,8 +178,25 @@ def test_render_replies_blocks_split_by_target(conn):
     txt = q.render_replies_block(rep, target_uid=11)
     assert "Отзывы на анкету целевого пользователя" in txt
     assert "Вася вообще не рыбачит" in txt
-    assert "Комментарии целевого пользователя к анкетам других" in txt
+    # В СЕССИИ 1004 — ответ Пети (22) в треде анкеты Васи: он попадает в
+    # блок «Отзывы на анкету целевого пользователя», а не в блок комментариев
+    # целевого. Поэтому здесь проверяем только этот блок + пустой вход.
+    assert "- @Петя: Петя тоже рыбак?" in txt
     assert q.render_replies_block([], target_uid=11) == ""
+
+
+def test_render_replies_target_comments_to_others(conn):
+    """Блок «Комментарии целевого пользователя к анкетам других».
+
+    Целевой = 22 (Петя): его реплик на чужую анкету (1004 → анкета 11)
+    достаточно, чтобы отдельный блок появился и был подписан правильно.
+    """
+    _seed(conn)
+    q.qa_posts_autofill(conn)
+    rep = q.fetch_qa_replies(conn)
+    txt = q.render_replies_block(rep, target_uid=22)
+    assert "Комментарии целевого пользователя к анкетам других" in txt
+    assert "(к анкете @Вася): Петя тоже рыбак?" in txt
 
 
 # --------------------------------------------------------------- render/inject
