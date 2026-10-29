@@ -41,6 +41,10 @@ USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
 ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 
 
+# служебная пометка «about записан из анкеты» — отдельная колонка, а не
+# суффикс текста: ничего не протечёт в UI/экспорт и не сломает сравнения bio.
+QA_FLAG_COL = "qa_synced"
+
 class Repository:
     def __init__(self, session_factory: sessionmaker[Session]):
         self._sf = session_factory
@@ -196,54 +200,76 @@ class Repository:
                 # «NULLS LAST» есть только в Postgres; в SQLite сортировка
                 # по NULL идёт по умолчанию в конец — разводим диалекты явно
                 nulls = " NULLS LAST" if s.bind.dialect.name == "postgresql" else ""
-                row = s.execute(sa_text(
-                    "SELECT cm.questionnaire FROM chat_members cm "
+                qrow = s.execute(sa_text(
+                    "SELECT cm.questionnaire, cm.channel_id, cm.updated_at "
+                    "FROM chat_members cm "
                     "JOIN chats c ON c.channel_id = cm.channel_id "
                     "WHERE cm.author_id = :uid AND cm.questionnaire IS NOT NULL "
                     f"  AND {trim}(cm.questionnaire) <> '' "
                     "  AND COALESCE(c.collects_qa, TRUE) "
-                    f"ORDER BY cm.updated_at DESC{nulls} LIMIT 1"),
-                    {"uid": int(author_id)}).scalar()
+                    f"ORDER BY cm.updated_at DESC{nulls}, cm.channel_id LIMIT 1"),
+                    {"uid": int(author_id)}).first()
+                row = qrow[0] if qrow else None
                 # SELECT/UPDATE сырым SQL: полный ORM-профиль падает на
                 # старых схемах без dm_*-колонок (UndefinedColumn)
-                up_cols = {str(r[1]) for r in s.execute(sa_text(
-                    "PRAGMA table_info(user_profiles)")).all()}                     if s.bind.dialect.name == "sqlite" else {
-                    str(r[0]) for r in s.execute(sa_text(
+                if s.bind.dialect.name == "sqlite":
+                    up_cols = {str(r[1]) for r in s.execute(sa_text(
+                        "PRAGMA table_info(user_profiles)")).all()}
+                else:
+                    up_cols = {str(r[0]) for r in s.execute(sa_text(
                         "SELECT column_name FROM information_schema.columns "
                         "WHERE table_name='user_profiles'"))}
                 if "about" not in up_cols:
                     return None
+                if QA_FLAG_COL not in up_cols:
+                    # служебная колонка флага — добавляем на лету (как это уже
+                    # делают другие места проекта для своих колонок); если нет
+                    # прав — работа продолжается по текстовым правилам
+                    try:
+                        s.execute(sa_text(
+                            "ALTER TABLE user_profiles"
+                            f" ADD COLUMN {QA_FLAG_COL} BOOLEAN DEFAULT FALSE"))
+                        s.commit()
+                        up_cols.add(QA_FLAG_COL)
+                    except Exception:  # noqa: BLE001
+                        s.rollback()
+                has_flag = QA_FLAG_COL in up_cols
                 prev_about = s.execute(sa_text(
                     "SELECT about FROM user_profiles WHERE user_id=:uid"),
                     {"uid": int(author_id)}).scalar() or ""
                 exists = s.execute(sa_text(
                     "SELECT 1 FROM user_profiles WHERE user_id=:uid"),
                     {"uid": int(author_id)}).scalar()
+                marked = False
+                if has_flag and exists:
+                    marked = bool(s.execute(sa_text(
+                        f"SELECT {QA_FLAG_COL} FROM user_profiles"
+                        " WHERE user_id=:uid"),
+                        {"uid": int(author_id)}).scalar())
                 if not exists and not row:
                     return None
+                def _qa_pairs() -> list:
+                    """Все заполненные анкеты автора: [(текст, channel_id)]."""
+                    return [(r[0], r[1]) for r in s.execute(sa_text(
+                        "SELECT cm.questionnaire, cm.channel_id "
+                        "FROM chat_members cm "
+                        "JOIN chats c ON c.channel_id = cm.channel_id "
+                        "WHERE cm.author_id = :uid AND cm.questionnaire IS NOT NULL "
+                        f"  AND {trim}(cm.questionnaire) <> '' "
+                        "  AND COALESCE(c.collects_qa, TRUE)"),
+                        {"uid": int(author_id)}).all()]
+
                 def _looks_synced(t: str) -> bool:
-                    """about был записана нами, если такой текст анкеты всё
-                    ещё живёт в chat_members этого автора (или когда-то жил:
-                    LIKE по краям ловит обновлённые/склеенные варианты)."""
-                    hit = s.execute(sa_text(
-                        "SELECT 1 FROM chat_members "
-                        "WHERE author_id = :uid AND questionnaire = :t"
-                        " LIMIT 1"), {"uid": int(author_id),
-                                      "t": t}).scalar()
-                    if hit is not None:
+                    """about записана нами: флаг qa_synced взведён, либо текст
+                    совпадает с анкетой/её префиксом (обратная совместимость
+                    со схемами без колонки флага)."""
+                    if marked:
                         return True
-                    hit = s.execute(sa_text(
-                        "SELECT 1 FROM chat_members "
-                        "WHERE author_id = :uid AND ("
-                        " questionnaire LIKE '%' || :t "
-                        " OR :t LIKE '%' || questionnaire || '%')"
-                        " AND trim(questionnaire) <> '' LIMIT 1"),
-                        {"uid": int(author_id), "t": t}).scalar()
-                    return hit is not None
+                    return any(q == t or q.startswith(t)
+                               for q, _cid in _qa_pairs())
 
                 if row:
-                    # прежняя value — либо пусто, либо ранее синхронизированная
-                    # анкета: тогда перезаписываем; ручной bio не перетираем
+                    # перезаписываем только пусто/нашу запись; ручной bio не трогаем
                     if prev_about and prev_about != row \
                             and not _looks_synced(prev_about):
                         return None  # about заполнен руками — не трогаем
@@ -255,9 +281,22 @@ class Repository:
                 else:
                     return None
                 if exists:
+                    if has_flag:
+                        s.execute(sa_text(
+                            f"UPDATE user_profiles SET about=:v, {QA_FLAG_COL}=:f"
+                            " WHERE user_id=:uid"),
+                            {"v": new_about, "f": bool(new_about),
+                             "uid": int(author_id)})
+                    else:
+                        s.execute(sa_text(
+                            "UPDATE user_profiles SET about=:v WHERE user_id=:uid"),
+                            {"v": new_about, "uid": int(author_id)})
+                elif has_flag:
                     s.execute(sa_text(
-                        "UPDATE user_profiles SET about=:v WHERE user_id=:uid"),
-                        {"v": new_about, "uid": int(author_id)})
+                        f"INSERT INTO user_profiles (user_id, username, about,"
+                        f" {QA_FLAG_COL}) VALUES (:uid, '', :v, :f)"),
+                        {"uid": int(author_id), "v": new_about,
+                         "f": bool(new_about)})
                 else:
                     s.execute(sa_text(
                         "INSERT INTO user_profiles (user_id, username, about)"
@@ -266,8 +305,8 @@ class Repository:
                 s.commit()
                 return row
         except Exception:  # noqa: BLE001 — старые схемы без нужных колонок
-            log.debug("sync_qa_to_profile: author=%s пропущено", author_id,
-                      exc_info=True)
+            log.warning("sync_qa_to_profile: author=%s ошибка синхронизации",
+                        author_id, exc_info=True)
             return None
 
     # ------------------------------------------------------------------ games

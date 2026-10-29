@@ -98,6 +98,9 @@ class UserProfile(Base):
 
     # «О себе» / bio
     about: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # about записан авто-синхронизацией анкеты (см. Repository.sync_qa_to_profile)
+    qa_synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                           server_default="false")
 
     # Публичные флаги аккаунта (DISCORD_EMPLOYEE, NITRO и т.п.)
     public_flags: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
