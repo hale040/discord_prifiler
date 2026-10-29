@@ -149,7 +149,6 @@ function phoneMask(input) {
     input.value = out;
   });
 }
-phoneMask(document.getElementById("phoneInput"));
 phoneMask(document.getElementById("modalPhone"));
 
 /* =========================================================
@@ -170,23 +169,12 @@ const DOCS = [
   { title: "Коммерческое предложение", short: "КП", file: "assets/docs/kommercheskoe-predlozhenie.pdf", type: "PDF" },
   { title: "Реквизиты компании", short: "Реквизиты", file: "assets/docs/rekvizity.docx", type: "DOCX" },
 ];
-const DOC_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></svg>';
 
-// Блок «скачать сразу + отправить на почту» для модалки
-const modalDocs = document.getElementById("modalDocs");
-modalDocs.innerHTML =
-  '<div class="modal__docs-label">Нужны документы? Скачайте сразу или менеджер вышлет на почту:</div>' +
-  '<div class="modal__docs-actions">' +
-  DOCS.map(d => `<a class="hero__doc-link" href="${d.file}" download>${DOC_ICON}${d.title}&nbsp;<em>${d.type}</em></a>`).join("") +
-  '<button type="button" class="btn btn--outline btn--sm js-docs-email">Отправить на почту</button>' +
-  "</div>";
-
-// Все точки входа модалки несут документы с собой (data-docs="1")
-function openModal(html, title, withDocs) {
+// Модальное окно «Заказать звонок» — только телефон (без имени, сообщения и документов)
+function openModal(html, title) {
   lastFocused = document.activeElement;
   modalText.innerHTML = html || DEFAULT_MODAL_TEXT;
   modalTitle.textContent = title || "Заказать звонок";
-  modalDocs.hidden = !withDocs;
   modal.classList.add("open");
   const input = document.getElementById("modalPhone");
   setTimeout(() => input && input.focus(), 60);
@@ -207,21 +195,7 @@ modal.addEventListener("keydown", e => {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
-document.getElementById("callBtn").addEventListener("click", () => openModal(null, null, true));
-
-// «Заказать звонок» / «Оставить заявку» в hero — открывает форму заявки в модалке
-// (с комплектом документов: скачать сразу или выслать на почту)
-document.addEventListener("click", e => {
-  const btn = e.target.closest(".js-lead, .js-call");
-  if (!btn) return;
-  openModal(
-    "Заполните форму — менеджер свяжется с вами в течение 15 минут, посчитает цену под объём и подготовит счёт.",
-    "Оставить заявку",
-    true
-  );
-});
-
-// ===== Кнопки «Узнать цену» в каталоге и модалка заказа =====
+// ===== Кнопки «Узнать цену» в каталоге: модалка «только телефон» =====
 document.addEventListener("click", (e) => {
   const btn = e.target.closest(".js-order");
   if (!btn) return;
@@ -234,8 +208,7 @@ document.addEventListener("click", (e) => {
     : "";
   openModal(
     `Категория: <b>${name}</b>. Оставьте телефон — менеджер перезвонит в течение 15 минут и назовёт актуальную цену и срок отгрузки.${priceNote}`,
-    "Узнать цену: " + name,
-    true
+    "Узнать цену: " + name
   );
 });
 modalClose.addEventListener("click", closeModal);
@@ -244,16 +217,8 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal()
 
 modalForm.addEventListener("submit", async e => {
   e.preventDefault();
-  const name = document.getElementById("modalName").value.trim();
   const phone = document.getElementById("modalPhone").value;
-  const msg = document.getElementById("modalMsg").value.trim();
   const agree = document.getElementById("modalAgree").checked;
-  if (name.length < 2) {
-    modalStatus.textContent = "Укажите имя";
-    modalStatus.className = "form__status err";
-    document.getElementById("modalName").focus();
-    return;
-  }
   if (phone.replace(/\D/g, "").length < 11) {
     modalStatus.textContent = "Введите полный номер телефона";
     modalStatus.className = "form__status err";
@@ -264,8 +229,7 @@ modalForm.addEventListener("submit", async e => {
     modalStatus.className = "form__status err";
     return;
   }
-  const isLead = modalTitle.textContent.toLowerCase().includes("заявк");
-  const sent = await sendLead({ type: isLead ? "lead-modal" : "callback", name, phone, message: msg, page: location.href, ts: new Date().toISOString() });
+  const sent = await sendLead({ type: "callback", phone, page: location.href, ts: new Date().toISOString() });
   modalStatus.textContent = sent
     ? "Заявка принята! Перезвоним в течение 15 минут."
     : "Не удалось отправить. Позвоните сами: " + CONTACTS.phoneDisplay;
@@ -298,15 +262,14 @@ async function sendLead(payload) {
 }
 
 document.addEventListener("click", e => {
-  const goal = e.target.closest("#callBtn, .js-order, .header__phone, .fab--wa");
+  const goal = e.target.closest(".header__phone, .fab--wa");
   if (goal && window.ym) { try { ym(METRIKA_ID, "reachGoal", "click_contact"); } catch (_) {} }
 });
 
 /* =========================================================
-   Документы: «Отправить на почту» — КП (PDF) и реквизиты (DOCX).
+   «Отправить документы на почту» — единственная точка входа: hero.
    Скачивание — прямыми ссылками; отправка — заявкой через sendLead
    (webhook/очередь), без webhook — письмо через почтовый клиент.
-   Работает во всех точках: hero, модалки (через .js-docs-email).
    ========================================================= */
 document.addEventListener("click", async e => {
   const btn = e.target.closest(".js-docs-email");
@@ -346,37 +309,43 @@ document.addEventListener("click", async e => {
 const leadForm = document.getElementById("leadForm");
 const formStatus = document.getElementById("formStatus");
 
+// Форма в контактах: e-mail — обязательное поле, комментарий — необязательный
 leadForm.addEventListener("submit", async e => {
   e.preventDefault();
-  const name = leadForm.elements.name;
-  const phone = leadForm.elements.phone;
+  const email = leadForm.elements.email;
   const agree = document.getElementById("agree");
   let ok = true;
 
-  [name, phone].forEach(f => { f.classList.remove("invalid"); f.setAttribute("aria-invalid", "false"); });
+  email.classList.remove("invalid");
+  email.setAttribute("aria-invalid", "false");
 
-  if (name.value.trim().length < 2) { name.classList.add("invalid"); name.setAttribute("aria-invalid", "true"); ok = false; }
-  if (phone.value.replace(/\D/g, "").length < 11) { phone.classList.add("invalid"); phone.setAttribute("aria-invalid", "true"); ok = false; }
+  if (!/^[^@\s]+@[^@\s]+\.[a-zA-Zа-яА-Я]{2,}$/.test(email.value.trim())) {
+    email.classList.add("invalid");
+    email.setAttribute("aria-invalid", "true");
+    ok = false;
+  }
   if (!agree.checked) ok = false;
 
   if (!ok) {
-    formStatus.textContent = "Проверьте поля: имя, телефон и согласие на обработку данных.";
+    formStatus.textContent = agree.checked
+      ? "Проверьте e-mail — пример: name@company.ru"
+      : "Укажите e-mail и отметьте согласие на обработку данных.";
     formStatus.className = "form__status err";
+    email.focus();
     return;
   }
   formStatus.textContent = "Отправляем…";
   formStatus.className = "form__status";
   const sent = await sendLead({
-    type: "lead",
-    name: name.value.trim(),
-    phone: phone.value,
+    type: "lead-email",
+    email: email.value.trim(),
     message: leadForm.elements.message.value.trim(),
     page: location.href,
     ts: new Date().toISOString(),
   });
   formStatus.textContent = sent
-    ? "Спасибо, " + name.value.trim() + "! Заявка принята — менеджер свяжется с вами."
-    : "Не удалось отправить заявку. Позвоните нам: " + CONTACTS.phoneDisplay;
+    ? "Спасибо! Письмо с вашей заявкой уйдёт на " + email.value.trim() + " — ответим в течение часа."
+    : "Не удалось отправить. Напишите нам: " + CONTACTS.email + " или позвоните: " + CONTACTS.phoneDisplay;
   formStatus.className = "form__status " + (sent ? "ok" : "err");
   if (sent) leadForm.reset();
   setTimeout(() => { formStatus.textContent = ""; }, 6000);
