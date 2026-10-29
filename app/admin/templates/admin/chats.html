@@ -78,20 +78,40 @@
 // Тихий POST для галок чатов: страница не перезагружается, поэтому
 // состояние чекбокса живёт в браузере, а сортировка строк не сбивается.
 async function toggleChat(cb, url){
+  var isQa = url.indexOf('/chats/qa/') !== -1;
   var on = cb.checked ? '1' : '0';
   // галка «анкеты» включается только по чатам конкретного сервера:
   // на общей странице /chats ID сервера неизвестен (guild_id пуст), и при
   // ошибке/отказе чекбокс откатывается — визуально «снимается сам».
-  if (url.indexOf('/chats/qa/') !== -1 && !window.__GUILD_ID) {
+  if (isQa && !window.__GUILD_ID) {
     cb.checked = !cb.checked;
     alert('Анкеты включаются только внутри сервера: откройте раздел «Серверы», введите ID сервера и отметьте чат там.');
     return false;
   }
+  var lbl = cb.closest('label');
+  function setUi(v){
+    cb.checked = v;
+    if (lbl) { var sp = lbl.querySelector('span'); if (sp) sp.textContent = v ? 'вкл' : 'выкл'; }
+  }
   try{
-    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'on='+on, credentials:'same-origin'});
-    if(!r.ok && r.status!==204){ cb.checked = !cb.checked; alert('Не удалось сохранить ('+r.status+')'); }
-    else if (r.redirected) { cb.checked = !cb.checked; alert('Сохранение не подтверждено (сервер ответил переадресацией). Обновите страницу и повторите.'); }
-  }catch(e){ cb.checked = !cb.checked; alert('Ошибка сети: '+e); }
+    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-Silent':'1'}, body:'on='+on, credentials:'same-origin'});
+    if (r.redirected) {
+      // POST был перехвачен GET-маршрутом (например /chats/<int:id>) —
+      // состояние НЕ подтверждено; перечитываем страницу, чтобы показать
+      // честное значение из БД вместо «самовольно снявшейся» галки.
+      location.reload(); return false;
+    }
+    if (!r.ok && r.status !== 204) {
+      var txt = await r.text().catch(function(){return '';});
+      setUi(!cb.checked);
+      alert('Не удалось сохранить (' + r.status + ')' + (txt ? ': ' + txt.slice(0,200) : ''));
+    } else if (isQa && on === '1') {
+      // сервер зафиксировал collects_qa=true отдельной транзакцией до
+      // тяжёлой обработки канала — галка остаётся включённой независимо
+      // от результата мгновенного парсинга (фоновый цикл догонит его).
+      setUi(true);
+    }
+  }catch(e){ setUi(!cb.checked); alert('Ошибка сети: '+e); }
   return false; // отменяем submit формы
 }
 </script></div>

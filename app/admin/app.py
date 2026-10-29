@@ -2221,25 +2221,47 @@ def create_app(database_url: str) -> Flask:
         c = Table("chats", MetaData(), autoload_with=engine)
         m = Table("messages", MetaData(), autoload_with=engine)
         on = request.form.get("on") == "1"
+        silent = request.headers.get("X-Silent") == "1"
         linked = 0
         added_members = 0
         filled = 0
         gid = None
         err = None
+        # ── ШАГ 1. Состояние галки пишем ОТДЕЛЬНОЙ быстрой транзакцией и
+        # сразу commit. Это корневой фикс бага «галка ставится, но после
+        # перезагрузки страницы снимается»: раньше запись collects_qa и
+        # долгий синхронный парсинг всего канала были в одной транзакции —
+        # при любом сбое/таймауте она откатывалась целиком и БД возвращала
+        # collects_qa=false. Теперь галка в БД зафиксирована до того, как
+        # начнётся любая тяжёлая работа; её отменить может только явный
+        # клик «выключить».
         try:
             with engine.connect() as conn:
                 gid = conn.execute(sa_select(c.columns.guild_id).where(
                     c.columns.channel_id == channel_id)).scalar()
-                conn.execute(sa_update(c).where(
-                    c.columns.channel_id == channel_id).values(collects_qa=on))
-                if on:
-                    # «галка анкет не включается»: без участников чата анкету
-                    # привязывать некому — сразу заводим авторов сообщений чата
-                    added_members = _qa_add_members(conn, channel_id)
-                    # «все привязанные должны обрабатываться»: галка анкет
-                    # привязывает чат к серверу, если ID ещё не проставлен
-                    if "guild_id" in set(m.columns.keys()) and \
-                            "guild_id" in set(c.columns.keys()):
+                upd = sa_update(c).where(
+                    c.columns.channel_id == channel_id).values(collects_qa=on)
+                if on and "tracked" in set(c.columns.keys()):
+                    # «все которые привяжу должны обрабатываться»: анкеты
+                    # имеют смысл только для собираемого чата — включаем и
+                    # «отслеживать» в той же быстрой транзакции
+                    upd = upd.values(tracked=True)
+                conn.execute(upd)
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001 — показываем причину во flash
+            err = f"{type(exc).__name__}: {str(exc)[:200]}"
+            audit("chat_collects_qa", target=f"channel={channel_id}",
+                  details=f"save error: {type(exc).__name__}: {exc}"[:400],
+                  result="fail")
+        # ── ШАГ 2. Тяжёлая часть (привязка к серверу, участники, парсинг
+        # всего канала) — в отдельной транзакции; её ошибка НЕ откатывает
+        # уже сохранённую галку. При сбое данные догонит фоновый цикл
+        # chats-refresh (каждые 5 минут).
+        if on and not err:
+            try:
+                with engine.connect() as conn:
+                    if gid is None and "guild_id" in set(m.columns.keys()) \
+                            and "guild_id" in set(c.columns.keys()):
                         row = conn.execute(sa_select(m.columns.guild_id).where(
                             m.columns.channel_id == channel_id,
                             m.columns.guild_id.isnot(None)).limit(1)).first()
@@ -2250,26 +2272,33 @@ def create_app(database_url: str) -> Flask:
                                 guild_id=int(row[0]))).rowcount
                             if linked:
                                 gid = int(row[0])
-                    # сразу парсить весь канал: посты-анкеты (первые посты
-                    # авторов), чтобы комментарии собирались без ожидания
-                    # пересчёта LLM
+                    added_members = _qa_add_members(conn, channel_id)
                     filled = _qa_autofill(conn, channel_id)
-                conn.commit()
-        except Exception as exc:  # noqa: BLE001 — показываем причину во flash
-            err = f"{type(exc).__name__}: {str(exc)[:200]}"
-            audit("chat_collects_qa", target=f"channel={channel_id}",
-                  details=f"error: {type(exc).__name__}: {exc}"[:400],
-                  result="fail")
-        else:
-            audit("chat_collects_qa", target=f"channel={channel_id}",
-                  details=("on" if on else "off")
-                          + (f" guild_linked={linked}" if linked else "")
-                          + (f" members+{added_members}" if added_members >= 0
-                             else "")
-                          + (f" anket={filled}" if filled else ""),
-                  result="ok")
+                    conn.commit()
+            except Exception as exc:  # noqa: BLE001
+                err = f"{type(exc).__name__}: {str(exc)[:200]}"
+                audit("chat_collects_qa", target=f"channel={channel_id}",
+                      details=f"parse error: {type(exc).__name__}: {exc}"[:400],
+                      result="fail")
+            else:
+                audit("chat_collects_qa", target=f"channel={channel_id}",
+                      details="on"
+                              + (f" guild_linked={linked}" if linked else "")
+                              + (f" members+{added_members}"
+                                 if added_members >= 0 else "")
+                              + (f" anket={filled}" if filled else ""),
+                      result="ok")
         if err:
-            flash(f"Не удалось переключить анкеты: {err}", "warn")
+            audit("chat_collects_qa", target=f"channel={channel_id}",
+                  details="off", result="ok")
+        # тихий режим (fetch из UI): состояние галки уже в БД, страница не
+        # перезагружается → сортировка цела; ошибки — в теле ответа
+        if silent:
+            return (err or "", 204 if not err else 500)
+        if err:
+            flash(f"Галка «анкеты» СОХРАНЕНА, но мгновенная обработка канала "
+                  f"не завершена ({err}). Фоновый цикл сборщика догонит её "
+                  f"в течение ~5 минут.", "warn")
         elif on:
             parts = []
             if added_members > 0:
@@ -2285,12 +2314,10 @@ def create_app(database_url: str) -> Flask:
                   + "; ".join(parts) + ".", "ok")
         else:
             flash(f"Анкеты выключены для чата {channel_id}.", "ok")
-        if err or on:
-            # при ошибке или включении показываем результат (перерендер
-            # страницы этого же сервера — без url_for и без редиректов)
-            return _render_chats(guild_id=int(gid) if gid else None)
-        # выключение: тихий 204 — галка остаётся снятой в UI, сортировка цела
-        return _chats_return(channel_id)
+        # всегда перерендериваем страницу ТОГО ЖЕ сервера (без url_for через
+        # перехватывающий маршрут /chats/<int:guild_id>) — на случай прямого
+        # POST из формы без JS
+        return _render_chats(guild_id=int(gid) if gid else None)
 
     def _toggle_back(target_channel_id: int):
         """См. _chats_return — единый возврат toggles без перезагрузки страницы."""
