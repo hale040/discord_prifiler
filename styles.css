@@ -68,6 +68,11 @@ a { color: inherit; text-decoration: none; }
   gap: clamp(.8rem, 2vw, 1.6rem); padding: .7rem 0;
   flex-wrap: nowrap; min-height: 64px;
 }
+/* навигация сжимается первой: ссылки переносятся в две строки вместо наезда на телефон/кнопку */
+.nav { flex-wrap: wrap; row-gap: .15rem; }
+@media (max-width: 1360px) {
+  .header__actions .btn--accent { display: none; } /* звонок — через бургер-меню и sticky-bar */
+}
 .logo { display: flex; align-items: center; gap: .6rem; flex-shrink: 0; min-width: 0; transition: opacity .2s; }
 .logo:hover { opacity: .85; }
 .logo__icon { width: 34px; height: 38px; display: block; flex-shrink: 0; }
@@ -78,7 +83,7 @@ a { color: inherit; text-decoration: none; }
   .logo__text small { display: none; }
 }
 
-.nav { display: flex; gap: clamp(.6rem, 1.2vw, 1.15rem); flex-shrink: 1; min-width: 0; }
+.nav { display: flex; gap: clamp(.6rem, 1.2vw, 1.15rem); flex: 1 1 auto; min-width: 0; justify-content: center; }
 .nav__link {
   position: relative;
   color: #c3ccd5; font-size: .86rem; font-weight: 400;
@@ -483,9 +488,6 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
   }
   .nav.open { transform: none; }
   .nav__link { font-size: 1rem; padding: .3rem 0; }
-}
-@media (max-width: 1100px) {
-  .header__actions .btn--accent { display: none; } /* звонок — через sticky-bar и бургер-меню */
 }
 @media (max-width: 480px) {
   .header__inner { gap: .5rem; }
