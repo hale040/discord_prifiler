@@ -788,6 +788,6 @@ main > .section:not(.section--dark) .section__subtitle { color: #5b6672; }
 
 /* ===== Проход 2/3 · Дизайнер: состояния и выравнивание ===== */
 .stage:hover ~ .stage__arrow, .stage:hover .stage__arrow { filter: drop-shadow(0 0 4px rgba(255,122,26,.6)); }
-.dlv__grid > .serv { display: flex; flex-direction: column; }
+.dlv__grid > .serv { display: flex; flex-direction: column; gap: .5rem; }
 .dlv__grid > .serv p:last-child { margin-top: auto; }
 .about__media img { min-height: 220px; }
