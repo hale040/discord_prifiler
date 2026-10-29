@@ -1009,13 +1009,16 @@ class CollectionService:
                 # что «данные анкеты пишутся в профиль» — см. sync_qa_to_profile
                 synced = 0
                 try:
-                    from sqlalchemy import distinct, func as sa_func
+                    from sqlalchemy import func as sa_func
                     from sqlalchemy import select as sa_sel
 
                     from app.models.entities import ChatMember
                     with self.repo._sf() as _s:
+                        # SELECT DISTINCT (а не distinct(col) внутри select) —
+                        # иначе SAWarning: unary distinct вне агрегатной функции
                         qa_uids = _s.scalars(
-                            sa_sel(distinct(ChatMember.author_id))
+                            sa_sel(ChatMember.author_id)
+                            .distinct()
                             .where(ChatMember.questionnaire.isnot(None),
                                    sa_func.btrim(ChatMember.questionnaire) != "")
                         ).all()
