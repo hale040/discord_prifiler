@@ -78,10 +78,13 @@ def _seed(conn):
         " clean_content, timestamp, reference_id, thread_root_id) VALUES"
         " (1003, 100, 33, 'Вася вообще не рыбачит', 'Вася вообще не рыбачит',"
         " '2026-01-01T10:03:00', 1000, 1000)",
+        # 1004 — ответ Пети в треде поста-анкеты Васи (thread_root_id=1000);
+        # reply-to (reference_id) у сообщений тредов Discord обычно NULL,
+        # поэтому ветка reference_id его не ловит — ловит ветка thread_root_id
         "INSERT INTO messages (id, channel_id, author_id, content,"
         " clean_content, timestamp, reference_id, thread_root_id) VALUES"
         " (1004, 100, 22, 'Петя тоже рыбак?', 'Петя тоже рыбак?',"
-        " '2026-01-01T10:04:00', 1000, NULL)",
+        " '2026-01-01T10:04:00', NULL, 1000)",
         "INSERT INTO messages (id, channel_id, author_id, content,"
         " clean_content, timestamp, reference_id, thread_root_id) VALUES"
         " (1005, 200, 11, 'пост в канале без галки',"
