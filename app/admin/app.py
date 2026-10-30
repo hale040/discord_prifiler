@@ -1912,9 +1912,11 @@ def create_app(database_url: str) -> Flask:
     def _qa_autofill(conn, channel_id: int | None = None) -> int:
         """Привязка постов-анкет к участникам чата (см. questionnaire.py).
 
-        Анкета = ПЕРВЫЙ пост автора в чате (ни реплай, ни сообщение треда);
-        с ним связываются комментарии из треда. Идемпотентно, ошибки старых
-        схем проглатываются.
+        Делегирует общему qa_posts_autofill — раньше здесь лежала копия SQL,
+        и две ветки разошлись: админская версия перезаписывала вручную
+        сохранённую анкету первым попавшимся постом (условие «пустая анкета»
+        было обязательным, а message_id при ручном сохранении не ставился),
+        а общий вариант эту защиту имел. Один источник правды.
 
         Две ловушки, из-за которых галка «анкеты» выглядела снятой:
           * список колонок нельзя брать из information_schema — этот запрос
@@ -1924,31 +1926,17 @@ def create_app(database_url: str) -> Flask:
           * условие «первый уровень» не имеет права быть пустым, иначе
             анкету ставили первому попавшемуся ответу автора.
         """
-        from app.services.profile_export.questionnaire import _first_level_posts
+        from app.services.profile_export.db import ReadOnlyDb
+        from app.services.profile_export.questionnaire import qa_posts_autofill
 
-        lvl = _first_level_posts(conn)
-        if not lvl:
-            return 0
-        where_ch = f" AND cm.channel_id = {int(channel_id)}" \
-            if channel_id is not None else ""
-        sql = sa_text(
-            "UPDATE chat_members cm SET message_id = sub.pid, "
-            "questionnaire = sub.pcontent, updated_at = now() FROM ("
-            "  SELECT DISTINCT ON (cm2.channel_id, cm2.author_id)"
-            "         cm2.channel_id AS ch, cm2.author_id AS au,"
-            "         m.id AS pid, COALESCE(m.content, '') AS pcontent"
-            "    FROM chat_members cm2"
-            "    JOIN chats c ON c.channel_id = cm2.channel_id"
-            "             AND c.collects_qa"
-            "    JOIN messages m ON m.channel_id = cm2.channel_id"
-            "             AND m.author_id = cm2.author_id"
-            "   WHERE (cm2.questionnaire IS NULL OR btrim(cm2.questionnaire) = '')"
-            "     AND cm2.message_id IS NULL"
-            f"     {lvl}{where_ch}"
-            "   ORDER BY cm2.channel_id, cm2.author_id, m.timestamp ASC"
-            ") sub WHERE cm.channel_id = sub.ch AND cm.author_id = sub.au")
         try:
-            return conn.execute(sql).rowcount
+            if isinstance(conn, ReadOnlyDb):
+                return qa_posts_autofill(conn, channel_id=channel_id)
+            # админское соединение — raw SQLAlchemy; оборачиваем в тот же
+            # ReadOnlyDb-интерфейс, чтобы общий autofill работал без копий SQL
+            wdb = ReadOnlyDb(conn._engine if hasattr(conn, "_engine")
+                             else conn.engine)
+            return qa_posts_autofill(wdb, channel_id=channel_id)
         except Exception:  # noqa: BLE001 — старые схемы
             return 0
 

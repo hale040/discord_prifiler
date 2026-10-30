@@ -106,6 +106,12 @@ def _sqlite_compatible(sql: str) -> str:
         cmch = re.search(r"AND cm2\.channel_id = (\d+)", extra)
         if cmch:
             cond += f" AND qm.channel_id = {cmch.group(1)}"
+        # фильтр канала в прод-SQL набирается по наружному алиасу («cm.»),
+        # а не cm2 — учитывать обе формы, иначе трансляция молча теряет
+        # ограничение и тесты/репро с channel_id ведут себя неверно
+        cmch2 = re.search(r"AND cm\.channel_id = (\d+)", extra)
+        if cmch2 and not cmch:
+            cond += f" AND qm.channel_id = {cmch2.group(1)}"
         cond += ")"
         return ("UPDATE chat_members SET message_id = CASE WHEN " + cond +
                 " THEN " + pick + " ELSE message_id END"

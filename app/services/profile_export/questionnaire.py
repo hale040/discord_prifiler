@@ -136,8 +136,12 @@ def _first_level_posts(conn) -> str:
     return "AND (" + " AND ".join(conds) + ")"
 
 
-def qa_posts_autofill(conn, guild_id=None) -> int:
+def qa_posts_autofill(conn, guild_id=None, channel_id=None) -> int:
     """Привязать посты-анкеты к участникам чатов с галкой «анкеты».
+
+    guild_id / channel_id — ограничить обработку одним сервером/чатом
+    (админка вызывает с channel_id при включении галки). Ручная анкета
+    НЕ перезаписывается: UPDATE берёт только пустые questionnaire.
 
     Анкета участника = POST первого уровня дерева чата (сообщение автора,
     ни на что не отвечающее), автор сообщения == автор анкеты
@@ -151,7 +155,9 @@ def qa_posts_autofill(conn, guild_id=None) -> int:
         return 0
     where_g = ""
     if guild_id is not None:
-        where_g = f" AND c.guild_id = {int(guild_id)}"
+        where_g += f" AND c.guild_id = {int(guild_id)}"
+    if channel_id is not None:
+        where_g += f" AND cm.channel_id = {int(channel_id)}"
     lvl = _first_level_posts(conn)
     # «до» считаем ДО UPDATE: ReadOnlyDb.execute() не отдаёт rowcount, а
     # повторный запрос после UPDATE уже видит новое состояние — разница и
