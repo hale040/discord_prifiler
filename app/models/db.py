@@ -279,6 +279,45 @@ def ensure_schema(engine) -> None:
 
             cfg = _alembic_config()
             command.upgrade(cfg, "head")
+
+        # 6. Страховка против «тихого пропуска» Alembic: если alembic_version
+        #    формально = head, но физически в user_profiles нет колонок из
+        #    моделей (упавший halfway прогон миграций, ложный стемп, ручные
+        #    правки БД) — приложение падает на первом же SELECT с
+        #    UndefinedColumn (например qa_synced, rev a00000000011). Доливаем
+        #    недостающие колонки прямым идемпотентным DDL из типов моделей.
+        if _table_exists(engine, "user_profiles"):
+            have_up = _columns(engine, "user_profiles")
+            want_up = {c.name for c in UserProfile.__table__.columns}
+            missing_up = sorted(want_up - have_up)
+            if missing_up:
+                log.warning(
+                    "ensure_schema: в живой БД отсутствуют колонки user_profiles "
+                    "%s при alembic_version=%s — прямой идемпотентный DDL.",
+                    ", ".join(missing_up), _alembic_version(engine),
+                )
+                with engine.begin() as conn:
+                    for colname in missing_up:
+                        coltype = UserProfile.__table__.columns[colname].type.compile(
+                            engine.dialect) or "TEXT"
+                        conn.execute(_text(
+                            f"ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS "
+                            f"{colname} {coltype}"))
+                # NOT NULL-колонки на непустой таблице получили NULL —
+                # затираем дефолтами из модели, чтобы ORM-запросы не падали.
+                for colobj in UserProfile.__table__.columns:
+                    if colobj.name in missing_up and not colobj.nullable:
+                        default = colobj.server_default
+                        lit = ("FALSE" if default is None and colobj.type.python_type is bool
+                               else "0" if default is None and colobj.type.python_type in (int,)
+                               else "''")
+                        if default is not None:
+                            compiled = str(default.arg) if hasattr(default, "arg") else None
+                            lit = compiled or lit
+                        with engine.begin() as conn:
+                            conn.execute(_text(
+                                f"UPDATE user_profiles SET {colobj.name} = {lit} "
+                                f"WHERE {colobj.name} IS NULL"))
     except Exception as exc:  # noqa: BLE001
         log.error(
             "Миграции схемы не прошли (%s). Проверьте DATABASE_URL и "
