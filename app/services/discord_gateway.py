@@ -88,6 +88,16 @@ class UserbotClient(discord.Client):
             guild_subscriptions=True,  # нужны live MESSAGE_CREATE для гильдий
             max_messages=200,
             status=discord.Status.online,
+            # Ключевое для сборщика: discord.py по умолчанию ставит
+            # restart_on_disconnect=True и keep_alive=True — при обрыве WS
+            # клиент сам переподключается (с экспоненциальным backoff до
+            # reconnect_max_attempts) вместо того, чтобы .start() завершился
+            # исключением и процесс умер. Явная фиксация поведения: без неё
+            # апстрим-дефолты могут смениться, а сборщик «тихо» перестанет
+            # переживать сетевые сбои.
+            keep_alive=True,
+            restart_on_disconnect=True,
+            reconnect_max_attempts=None,  # не лимитировать попытки
         )
         self._token = token
         self._gateway_callback = gateway_callback or _noop_callback

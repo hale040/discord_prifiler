@@ -162,13 +162,63 @@ class CollectorController:
                 log.debug("stats failed: %s", exc)
 
     async def run(self) -> None:
-        """Точка входа контроллера: крутим клиент до отмены/ошибки."""
-        try:
-            await self.client.start()
-        except asyncio.CancelledError:
-            raise
-        finally:
-            await self.shutdown()
+        """Точка входа контроллера: крутим клиент до отмены.
+
+        Устойчивость к обрывам связи (требование «сборщик не должен умирать
+        при потере соединения»):
+          * штатный путь — keep_alive/restart_on_disconnect внутри
+            discord.Client: WS-обрыв переподключается самой библиотекой,
+            .start() не завершается;
+          * если всё же вылетело (fatal gateway error, исчерпан reconnect
+            backoff, сетевой сбой на handshake, ошибка в on_ready) — НЕ
+            выходим: чиним клиента и стартуем заново с экспоненциальным
+            бэкоффом (10s → 2× → cap 300s). Останавливаемся только по
+            CancelledError (сигнал SIGINT/SIGTERM обрабатывается в main.py).
+        Логика уровня процесса (перезапуск под systemd/supervisor) остаётся
+        запасной — но теперь она не единственная защита.
+
+        ВАЖНО: finally c shutdown() убран намеренно. В старой версии он делал
+        run() непригодным для переподключения: shutdown() отменял _stats_task
+        и закрывал collector, а повторный on_ready их не восстанавливал —
+        после первого же обрыва сбор замолкал, процесс «жил», но ничего не
+        собирал. Теперь очистка — обязанность main.py (сигнал остановки) и
+        ветки LoginFailure выше по стеку.
+        """
+        attempt = 0
+        while True:
+            try:
+                await self.client.start()
+                # start() вернулся без исключения (нетипично) — считаем это
+                # потерей коннекта и переподключаемся, а не завершаем процесс.
+                log.warning("client.start() завершился без ошибки — переподключение")
+            except asyncio.CancelledError:
+                # осмысленная остановка процесса: чинимся перед выходом
+                await self.shutdown()
+                raise
+            except Exception as exc:  # noqa: BLE001 — тут любые сетевые/fatal
+                attempt += 1
+                delay = min(10 * 2 ** (attempt - 1), 300)
+                log.warning(
+                    "Клиент упал (попытка %s): %r — переподключение через %ss",
+                    attempt, exc, delay,
+                )
+            else:
+                delay = min(10 * 2 ** attempt, 300) if attempt else 10
+            try:
+                if not self.client.is_closed():
+                    await self.client.close()
+            except Exception:  # noqa: BLE001
+                pass
+            # discord.Client нельзя повторно запустить после close():
+            # пересоздаём клиента, сохраняя коллбэки контроллера.
+            self.client = UserbotClient(
+                self.settings.discord_token,
+                gateway_callback=self.on_gateway_event,
+                ready_callback=self.on_client_ready,
+            )
+            await asyncio.sleep(delay)
+            # цикл сбора пересоздаётся штатно в on_client_ready при
+            # следующем ready (он идемпотентен).
 
     async def shutdown(self) -> None:
         if self._stats_task:
