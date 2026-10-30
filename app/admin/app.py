@@ -1897,14 +1897,17 @@ def create_app(database_url: str) -> Flask:
         правилу «первый пост автора = анкета».
         """
         try:
-            return conn.execute(sa_text(
+            # параметр не передаётся -> psycopg3 вернёт column names вместо
+            # rowcount; .scalar() берёт первую колонку (число вставок).
+            # .rowcount здесь был молча 0 — «участников добавлено» не росло.
+            return int(conn.execute(sa_text(
                 "INSERT INTO chat_members (channel_id, author_id, "
                 "questionnaire) "
                 "SELECT DISTINCT m.channel_id, m.author_id, '' "
                 "  FROM messages m WHERE m.channel_id = :cid "
                 "   AND m.author_id IS NOT NULL "
                 " ON CONFLICT (channel_id, author_id) DO NOTHING"),
-                {"cid": channel_id}).rowcount or 0
+                {"cid": channel_id}).scalar() or 0)
         except Exception:  # noqa: BLE001 — старые схемы без таблицы участников
             conn.rollback()
             return -1
@@ -2268,8 +2271,12 @@ def create_app(database_url: str) -> Flask:
                             if linked:
                                 gid = int(row[0])
                     added_members = _qa_add_members(conn, channel_id)
-                    filled = _qa_autofill(conn, channel_id)
+                    # commit ДО autofill: ReadOnlyDb.write() открывает своё
+                    # соединение и видит данные только закоммиченными — без
+                    # этого свежие участники не получали посты-анкеты с первого
+                    # включения галки (только фоновый цикл через 5 минут)
                     conn.commit()
+                    filled = _qa_autofill(conn, channel_id)
             except Exception as exc:  # noqa: BLE001
                 err = f"{type(exc).__name__}: {str(exc)[:200]}"
                 audit("chat_collects_qa", target=f"channel={channel_id}",

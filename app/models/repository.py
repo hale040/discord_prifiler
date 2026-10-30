@@ -49,6 +49,12 @@ class Repository:
     def __init__(self, session_factory: sessionmaker[Session]):
         self._sf = session_factory
 
+    @property
+    def engine(self):
+        """SQLAlchemy-движок сессий — для прямых raw-операций вне ORM
+        (ReadOnlyDb.write в qa_posts_autofill). Не создавать второй engine!"""
+        return self._sf.kw["bind"]
+
     # ------------------------------------------------------------------ users
     def upsert_user_profile(
         self,

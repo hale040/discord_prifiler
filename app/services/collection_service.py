@@ -996,11 +996,13 @@ class CollectionService:
                     self.repo.sync_chat_members_from_messages)
                 linked = 0
                 try:
-                    from app.services.profile_export.db import open_db
+                    from app.services.profile_export.db import ReadOnlyDb
                     from app.services.profile_export.questionnaire import \
                         qa_posts_autofill
-                    with open_db(str(self.s.database_url)) as conn:
-                        linked = qa_posts_autofill(conn)
+                    # НЕ open_db(): он при ошибке подключения вызывает
+                    # sys.exit() и убивал процесс сборщика; здесь свой
+                    # ReadOnlyDb поверх существующего движка репозитория
+                    linked = qa_posts_autofill(ReadOnlyDb(self.repo.engine))  # тот же пул, без sys.exit-риска
                 except Exception:  # noqa: BLE001 — старые схемы без колонок
                     log.debug("chats-refresh: qa_posts_autofill failed",
                               exc_info=True)
