@@ -196,29 +196,28 @@ class Repository:
         """
         try:
             with self._sf() as s:
-                trim = "btrim" if s.bind.dialect.name == "postgresql" else "trim"
-                # «NULLS LAST» есть только в Postgres; в SQLite сортировка
-                # по NULL идёт по умолчанию в конец — разводим диалекты явно
-                nulls = " NULLS LAST" if s.bind.dialect.name == "postgresql" else ""
+                # PostgreSQL-only: проект больше не поддерживает SQLite
+                # (см. app.models.db.require_postgres), поэтому диалектные
+                # развилки trim/NULLS LAST/PRAGMA отсюда выпилены.
                 qrow = s.execute(sa_text(
                     "SELECT cm.questionnaire, cm.channel_id, cm.updated_at "
                     "FROM chat_members cm "
                     "JOIN chats c ON c.channel_id = cm.channel_id "
                     "WHERE cm.author_id = :uid AND cm.questionnaire IS NOT NULL "
-                    f"  AND {trim}(cm.questionnaire) <> '' "
+                    "  AND btrim(cm.questionnaire) <> '' "
                     "  AND COALESCE(c.collects_qa, TRUE) "
-                    f"ORDER BY cm.updated_at DESC{nulls}, cm.channel_id LIMIT 1"),
+                    "ORDER BY cm.updated_at DESC NULLS LAST, cm.channel_id LIMIT 1"),
                     {"uid": int(author_id)}).first()
                 row = qrow[0] if qrow else None
                 # SELECT/UPDATE сырым SQL: полный ORM-профиль падает на
-                # старых схемах без dm_*-колонок (UndefinedColumn)
-                if s.bind.dialect.name == "sqlite":
-                    up_cols = {str(r[1]) for r in s.execute(sa_text(
-                        "PRAGMA table_info(user_profiles)")).all()}
-                else:
-                    up_cols = {str(r[0]) for r in s.execute(sa_text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name='user_profiles'"))}
+                # старых схемах без dm_*-колонок (UndefinedColumn).
+                # sa_inspect driver-independent (Postgres -> information_schema,
+                # тестовый SQLite -> PRAGMA), без диалектных развилок в коде.
+                from sqlalchemy import inspect as sa_inspect
+                _insp = sa_inspect(s.bind)
+                up_cols = ({str(c["name"]) for c in
+                            _insp.get_columns("user_profiles")}
+                           if _insp.has_table("user_profiles") else set())
                 if "about" not in up_cols:
                     return None
                 if QA_FLAG_COL not in up_cols:
@@ -255,7 +254,7 @@ class Repository:
                         "FROM chat_members cm "
                         "JOIN chats c ON c.channel_id = cm.channel_id "
                         "WHERE cm.author_id = :uid AND cm.questionnaire IS NOT NULL "
-                        f"  AND {trim}(cm.questionnaire) <> '' "
+                        "  AND btrim(cm.questionnaire) <> '' "
                         "  AND COALESCE(c.collects_qa, TRUE)"),
                         {"uid": int(author_id)}).all()]
 
