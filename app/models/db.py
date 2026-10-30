@@ -227,6 +227,8 @@ def ensure_schema(engine) -> None:
     Страховка: если после upgrade физически отсутствуют dm_* колонки
     (ложный стемп, ручные правки БД) — прогоняется прямой идемпотентный DDL.
     """
+    from sqlalchemy import text as _text
+
     from app.models.migrations import _columns, _table_exists
 
     try:
