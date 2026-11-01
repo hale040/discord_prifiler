@@ -38,13 +38,7 @@ reactions_emotions / own_emoji_emotions / top_emojis из stats и постро�
 Отражай это в tone.dominant/triggers, style и evidence (цитата может быть реакцией вида \
 "❤️x12 на сообщение про X").
 
-7. Приоритет источников и противоречия: анкета — первичный источник о самом человеке \
-(её выводы помечай [анкета]), метрики bh/stats и транскрипт — вторичный. Если самоотчёт \
-и наблюдения расходятся (например, «интроверт» в анкете при высокой инициативе в DM) — \
-не усредняй молча: зафиксируй противоречие в data_gaps и понизь confidence вывода; \
-расхождение само по себе — значимый сигнал (социальная желательность или смена состояния).
-
-8. Итоговое резюме (summary) обязательно и пишется ПЕРВЫМ блоком ответа: 5–10 \
+7. Итоговое резюме (summary) обязательно и пишется ПЕРВЫМ блоком ответа: 5–10 \
 связных предложений цельным текстом (не список), описывающих человека как живую \
 личность — характер, автономность, отношение к личному пространству, \
 коммуникативная маска (сарказм/ирония/искренность), источники восстановления сил, \
@@ -403,29 +397,6 @@ def compact_dossier(d: dict) -> dict:
         if sub and any(v not in (None, [], {}, 0, False) for v in
                        (sub.values() if isinstance(sub, dict) else [sub])):
             bhc[key] = sub
-    # сигнальное ядро первыми: короткие ключи с прямыми интерпретациями —
-    # модель лучше читает явные указатели, чем сырые вложенные словари
-    sig: dict = {}
-    il = bh_in.get("initiative_latency") or {}
-    if isinstance(il, dict):
-        if il.get("overall_initiative") is not None:
-            sig["init_share"] = round(il["overall_initiative"], 2)
-        if il.get("reciprocity_ratio") is not None:
-            sig["reciprocity"] = round(il["reciprocity_ratio"], 2)
-    seg = bh_in.get("segments") or {}
-    for k in ("dm", "guild"):
-        v = seg.get(k) or {}
-        if isinstance(v, dict) and v.get("question_rate") is not None:
-            sig[f"{k}_question_rate"] = round(v["question_rate"], 2)
-    pres = bh_in.get("presence") or {}
-    if isinstance(pres, dict) and pres.get("night_share") is not None:
-        sig["night_share"] = round(pres["night_share"], 2)
-    rec = bh_in.get("reactions") or {}
-    if isinstance(rec, dict) and rec.get("received_per_message") is not None:
-        sig["react_per_msg"] = round(rec["received_per_message"], 2)
-    if sig:
-        bhc = {"signals": sig, **{k: v for k, v in bhc.items()
-                                  if k not in ("initiative_latency",)}}
 
     # активный психопрофиль от нейросети -> компактный блок psych
     psy_in = d.get("psych_profile") or {}
@@ -448,25 +419,6 @@ def compact_dossier(d: dict) -> dict:
             **({"bh": bhc} if bhc else {}),
             **({"hist": hc} if hc else {}),
             **({"psych": pc2} if pc2 else {})}
-
-
-def _coverage_header(d: dict) -> str:
-    """Одна строка покрытия: что видно в ленте относительно всех данных."""
-    st = d.get("statistics") or {}
-    meta = d.get("meta") or {}
-    shown = meta.get("transcript_lines")
-    total = st.get("messages_total")
-    part = f"[покрытие ленты: {shown} строк из ~{total} сообщений целевого"
-    na = st.get("distinct_authors")
-    if na:
-        part += f", авторов всего: {na}"
-    if meta.get("window_days"):
-        part += f", окно: {meta['window_days']} дн."
-    period = ""
-    f_, l_ = st.get("first_message_at"), st.get("last_message_at")
-    if f_ and l_:
-        period = f", период {_date_only(f_)}..{_date_only(l_)}"
-    return part + period + "]"
 
 
 def _render_prompt_text(dossier: dict) -> str:
@@ -518,7 +470,6 @@ def _render_prompt_text(dossier: dict) -> str:
         "@Uk — упоминание, ed/d — правка/удаление, img/emb — картинка/embed;",
         "легенда имён — первой строкой транскрипта)",
         "```",
-        _coverage_header(d),
         d["transcript"] or "(нет сообщений)",
         "```",
         "",
