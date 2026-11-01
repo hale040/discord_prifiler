@@ -209,6 +209,39 @@ def main():
                     f" WHERE {err_col} > 0 ORDER BY {err_col} DESC LIMIT 5")
                 for u, st, ec, er in stuck:
                     emit(f"stuck user={u} status={st} errors={ec} last_err={(er or '')[:80]}")
+                # диагностика зависших статусов: error без счётчика — аномалия
+                # (успешный/ошибочный проход всегда проставляет status; status=None
+                #  означает строку, созданную до v14 и ни разу не тронутую dm-loop)
+                bad_st = scalar(cur,
+                    f"SELECT count(*) FROM user_profiles "
+                    f"WHERE dm_status IS DISTINCT FROM 'ok' AND COALESCE({err_col},0)=0 "
+                    f"AND dm_synced_at IS NOT NULL")
+                emit(f"status_anomaly={bad_st}")
+                if bad_st not in ("ERR", 0):
+                    emit("WARN status_anomaly>0: статус error/None при нулевых сбоях — проверь update_dm_cursor")
+                # серия 40001 (закрытые ЛС / блокировка): сколько пользователей
+                # заблокировано и есть ли среди них «вечнопробные» (fail>=limit).
+                # ВНИМАНИЕ: в БД хранится текст discord.py-self вида
+                # "403 Forbidden (error code: 40001)" — скобка стоит ПОСЛЕ кода,
+                # поэтому паттерн '%40001)%' сработал бы на пустом месте. Ищем
+                # просто подстроку '40001' (ILIKE регистронезависимо).
+                blocked = scalar(cur,
+                    "SELECT count(*) FROM user_profiles "
+                    "WHERE dm_last_error LIKE '%%40001%%'")
+                emit(f"blocked_40001={blocked}")
+                susp = scalar(cur,
+                    "SELECT count(*) FROM user_profiles "
+                    "WHERE dm_last_error LIKE '%%ПРИОСТАНОВЛЕН%%'")
+                emit(f"auto_suspended={susp}")
+                if blocked not in ("ERR", 0):
+                    emit("INFO blocked_40001: закрытые ЛС/блокировка — штатный исход, не баг; "
+                         "после лимита сбоя сбор авто-приостановлен, включите «💬 Собрать ЛС» заново")
+                    lst = rows(cur,
+                        f"SELECT user_id, {err_col}, dm_status, left(coalesce(dm_last_error,''),60) "
+                        f"FROM user_profiles WHERE dm_last_error LIKE '%%40001%%' "
+                        f"ORDER BY {err_col} DESC LIMIT 10")
+                    for u, fc, st, er in lst:
+                        emit(f"blocked user={u} fails={fc} status={st} err={er}")
             else:
                 emit("stuck_users=N/A (нет колонки dm_error_count/dm_fail_count)")
 
@@ -347,6 +380,23 @@ def main():
                     "SELECT count(*) FROM chat_members "
                     "WHERE btrim(coalesce(questionnaire,'')) <> ''")
                 emit(f"questionnaires_filled={q_filled}")
+                # анкета «в процессе»: черновики сохраняются как JSON с полями
+                # (см. app/services/profile_export/questionnaire.py), пустая
+                # строка '' — просто участник без анкеты
+                if column_exists(cur, "chat_members", "updated_at"):
+                    draft = scalar(cur,
+                        "SELECT count(*) FROM chat_members "
+                        "WHERE questionnaire IS NOT NULL AND btrim(questionnaire) <> '' "
+                        "AND btrim(questionnaire) NOT LIKE '{%'")
+                    emit(f"questionnaires_nonjson={draft}")
+                    last_q = scalar(cur,
+                        "SELECT max(updated_at) FROM chat_members "
+                        "WHERE btrim(coalesce(questionnaire,'')) <> ''")
+                    emit(f"last_questionnaire_at={last_q}")
+                if q_filled in ("ERR", 0):
+                    emit("INFO questionnaires_filled=0: это НЕ баг, если никто не заполнял — "
+                         "анкеты появляются только после ответа пользователя на вопросы бота; "
+                         "проверь чат с галкой «анкеты» и отправку вопросов")
                 orphan = scalar(cur, "SELECT count(*) FROM chat_members cm LEFT JOIN chats c ON c.channel_id = cm.channel_id WHERE c.channel_id IS NULL")
                 emit(f"members_orphan_no_chat={orphan}")  # >0 => перенос не покрывает авторов ЛС/левых каналов
                 if orphan not in ("ERR", 0):
