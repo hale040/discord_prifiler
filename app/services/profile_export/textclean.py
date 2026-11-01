@@ -85,7 +85,7 @@ _CTRL_RE = re.compile(
     # zero-width, bidi embed/override/isolate (маскировка скрытых команд),
     # soft hyphen, mongolian VS, hangul filler, BOM
     r"\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f"
-    r"\u00ad\u180e\u3164\ufeff]")
+    r"\u00ad\u180e\u3164\ufeff\ue000-\uf8ff]")
 
 
 def anti_inject(text: str) -> str:
