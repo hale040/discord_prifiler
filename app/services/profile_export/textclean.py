@@ -66,3 +66,29 @@ def strip_urls_text(text: str) -> str:
     """Убирает голые http(s)-ссылки из текста (картинки/CDN-URL не нужны LLM;
     сам факт вложения остаётся виден по флагу [img])."""
     return re.sub(r"https?://\S+", "", text or "")
+
+
+# анти-инъекционная нормализация (AI prompt injection defense):
+# 1) закрытые токены моделей — вырезаются целиком, чтобы текст сообщения
+#    не мог «закрыть» системный блок и начать свой;
+_INJECT_TOKENS_RE = re.compile(
+    r"</?\s*(?:system|assistant|user|instructions?|prompt)\b[^>]*>",
+    re.IGNORECASE)
+# 2) markdown-заголовки внутри пользовательских строк понижаются до «▍» —
+#    лента не может создавать ##-секции, конкурирующие с настоящей структурой
+#    промпта;
+# 3) управляемые символы (включая zero-width и direction-override, которыми
+#    маскируют скрытые команды) заменяются на пробел.
+_MD_HEAD_RE = re.compile(r"^\s*#{1,6}\s+", re.MULTILINE)
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200f\u2060-\u2064\ufeff]")
+
+
+def anti_inject(text: str) -> str:
+    """Безусловная (не зависит от redact_pii) нормализация любого текста,
+    попадающего в промпт: user content, анкеты, комментарии, имена."""
+    if not text:
+        return text or ""
+    t = _INJECT_TOKENS_RE.sub("", text)
+    t = _MD_HEAD_RE.sub("▍", t)
+    t = _CTRL_RE.sub(" ", t)
+    return t

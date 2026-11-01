@@ -319,6 +319,15 @@ def main():
             emit(f"users_with_games={distinct_players}")
             topg = rows(cur, "SELECT name, count(*) c FROM user_games GROUP BY 1 ORDER BY c DESC LIMIT 5")
             emit("top_games=" + ",".join(f"{n}:{c}" for n, c in topg) if topg else "top_games=-")
+            # game_kinds: 'playing'=обычная игра, 'custom'=кастомный статус —
+            # если custom нет вовсе при nonzero presence_snapshots, проверь
+            # fix_legacy_game_kinds / сбор kind из presence (kind_null выше)
+            if table_exists(cur, "user_games") and column_exists(cur, "user_games", "kind"):
+                gk = rows(cur, "SELECT coalesce(kind,'NULL') k, count(*) c,"
+                               " count(DISTINCT user_id) u"
+                               " FROM user_games GROUP BY 1 ORDER BY 2 DESC")
+                emit("game_kinds=" + ", ".join(
+                    f"{k}:n={c},users={u}" for k, c, u in gk) if gk else "game_kinds=-")
             # нормализация kind из presence_snapshots: legacy-строки содержат
             # 'ActivityType.playing' вместо 'playing'. lower + replace префикса.
             ps_kind_norm = ("lower(replace(activity_kind,'ActivityType.',''))")

@@ -578,6 +578,12 @@ def create_app(database_url: str) -> Flask:
                 return ""
 
         ctx.setdefault("snowdt", snow_dt)
+        # ВНИМАНИЕ: Markup() здесь — осознанный выбор «доверенного локального
+        # контента»: внутренний render_template уже экранирует ВСЕ переменные
+        # ({% autoescape %} по умолчанию Jinja), включая поля LLM-ответов
+        # (summary/evidence выводятся без |safe). Внешняя обёртка нужна только
+        # чтобы layout.html не экранировал готовый HTML повторно. Не добавлять
+        # |safe/Markup к отдельным данным в шаблонах!
         return render_template(
             "admin/layout.html",
             content=Markup(render_template(f"admin/{tpl}.html", **ctx)),

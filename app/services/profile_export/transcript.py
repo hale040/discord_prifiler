@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from .env import load_json, parse_ts
 from .stats import classify_reaction, reaction_display, strip_mentions
-from .textclean import redact, strip_urls_text
+from .textclean import anti_inject, redact, strip_urls_text
 
 
 DEFAULT_PROMPT_MAX_KB = 300   # максимальный вес файла промпта (.md), КБ
@@ -63,7 +63,8 @@ def _make_transcript_plain(msgs: list[dict], max_lines: "int | None",
     limit_on = bool(max_lines) and max_lines > 0
     for m in reversed(msgs):  # идём от свежих к старым
         ts = parse_ts(m["timestamp"])
-        text = (m["clean_content"] or m["content"] or "").strip()
+        text = anti_inject(strip_mentions(
+            (m["clean_content"] or m["content"] or "").strip()))
         if not text and not m["has_attachment"]:
             continue
         meta = []
@@ -173,7 +174,7 @@ def make_transcript(
         gap_min = (ts - prev_ts_dt).total_seconds() / 60 if prev_ts_dt else 999
         label = "T" if m["author_id"] == target_uid else labels.get(
             m["author_id"], f"?{m['author_id']}")
-        text = strip_mentions((m["clean_content"] or m["content"] or "").strip())
+        text = anti_inject(strip_mentions((m["clean_content"] or m["content"] or "").strip()))
         text = re.sub(r"\s+", " ", text)
         if not text:
             text = "[msg]"
