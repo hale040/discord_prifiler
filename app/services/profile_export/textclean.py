@@ -80,7 +80,12 @@ _INJECT_TOKENS_RE = re.compile(
 # 3) управляемые символы (включая zero-width и direction-override, которыми
 #    маскируют скрытые команды) заменяются на пробел.
 _MD_HEAD_RE = re.compile(r"^\s*#{1,6}\s+", re.MULTILINE)
-_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200f\u2060-\u2064\ufeff]")
+_CTRL_RE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
+    # zero-width, bidi embed/override/isolate (маскировка скрытых команд),
+    # soft hyphen, mongolian VS, hangul filler, BOM
+    r"\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f"
+    r"\u00ad\u180e\u3164\ufeff]")
 
 
 def anti_inject(text: str) -> str:
