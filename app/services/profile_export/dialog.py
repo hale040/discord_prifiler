@@ -59,8 +59,8 @@ def rebuild_links(messages_all: dict[int, list[dict]]) -> None:
 def build_dialog(
     all_msgs: list[dict],
     target_uid: int,
-    window_sec: int = CONTEXT_WINDOW_SEC,
-    time_window_sec: int = 30,
+    window_sec: int | None = None,
+    time_window_sec: int | None = None,
 ) -> tuple[list[dict], str]:
     """Собрать связанные беседы вокруг сообщений целевого пользователя.
 
@@ -73,6 +73,19 @@ def build_dialog(
     """
     if not all_msgs:
         return [], "none"
+    # единый источник окон: env EXPORT_CONTEXT_WINDOW (window_sec) и
+    # EXPORT_TIME_WINDOW (узкое окно собеседников); явные аргументы — приоритет.
+    import os as _os
+    if window_sec is None:
+        try:
+            window_sec = int(_os.getenv("EXPORT_CONTEXT_WINDOW") or CONTEXT_WINDOW_SEC)
+        except ValueError:
+            window_sec = CONTEXT_WINDOW_SEC
+    if time_window_sec is None:
+        try:
+            time_window_sec = int(_os.getenv("EXPORT_TIME_WINDOW") or 30)
+        except ValueError:
+            time_window_sec = 30
     tgt_ts = [parse_ts(m["timestamp"]) for m in all_msgs]
     tgt_pos = {m["id"]: i for i, m in enumerate(all_msgs)}
     selected: dict[int, dict] = {}
@@ -123,9 +136,15 @@ def build_dialog(
                 add(other)
                 linked_any = True
         # 1b) ПИНГИ: целевой упомянут в чужом сообщении — берём только само
-        # сообщение-пинг (обращение к целевому), без лавины соседних реплик
-        for other in all_msgs:
+        # сообщение-пинг (обращение к целевому), без лавины соседних реплик.
+        # Окно ограничено window_sec вокруг реплики целевого: раньше скан
+        # шёл по ВСЕМУ каналу и тащил пинги недельной давности — «несвязанные»
+        # сообщения в ленте.
+        _mts = parse_ts(m["timestamp"])
+        for other in all_msgs[max(0, i - 400): i + 401]:
             if other["author_id"] == target_uid or other["id"] in selected:
+                continue
+            if abs((parse_ts(other["timestamp"]) - _mts).total_seconds()) > window_sec:
                 continue
             if target_uid in _pings(other):
                 add(other)
@@ -141,7 +160,10 @@ def build_dialog(
                 pass
         pinged.discard(target_uid)
         if pinged:
-            for other in reversed(all_msgs[:i]):
+            lo = max(0, i - 400)
+            while lo < i and (parse_ts(m["timestamp"]) - parse_ts(all_msgs[lo]["timestamp"])).total_seconds() > window_sec:
+                lo += 1
+            for other in reversed(all_msgs[lo:i]):
                 if other["author_id"] == target_uid:
                     continue
                 if other["author_id"] in pinged and \
