@@ -396,7 +396,8 @@ def main():
                     draft = scalar(cur,
                         "SELECT count(*) FROM chat_members "
                         "WHERE questionnaire IS NOT NULL AND btrim(questionnaire) <> '' "
-                        "AND btrim(questionnaire) NOT LIKE '{%'")
+                        # psycopg3: литеральный '%' в SQL пишется как '%%'
+                        "AND btrim(questionnaire) NOT LIKE '{%%'")
                     emit(f"questionnaires_nonjson={draft}")
                     last_q = scalar(cur,
                         "SELECT max(updated_at) FROM chat_members "
