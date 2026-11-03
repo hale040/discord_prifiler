@@ -2260,7 +2260,16 @@ def create_app(database_url: str) -> Flask:
               if val else
               "Дата сброшена — парсинг от глобальной START_DATE (.env).",
               "ok")
-        return _chats_return(channel_id)
+        # перерендер страницы после сохранения: с пустым ответом 204 поле
+        # продолжало показывать старое значение до ручного F5 — выглядело
+        # как «не сохранилось». Редирект на страницу чатов этого сервера.
+        try:
+            with engine.connect() as conn2:
+                gid2 = conn2.execute(sa_select(c.columns.guild_id).where(
+                    c.columns.channel_id == channel_id)).scalar()
+            return redirect(url_for("chats_page", guild_id=gid2))
+        except Exception:  # noqa: BLE001
+            return redirect(url_for("chats_page"))
 
     @app.route("/chats/toggle/<int:channel_id>", methods=["POST"])
     def chat_toggle_collect(channel_id: int):

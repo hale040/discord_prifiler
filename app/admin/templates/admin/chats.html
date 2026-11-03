@@ -34,14 +34,15 @@
   <td>
     {# дата «парсить с» (chats.parse_from); пусто = глобальная START_DATE из .env;
        задать/сбросить — кнопка 📅 (POST /chats/parsefrom/<ID>) #}
-    {% if r.pf_dt %}<span title='{{ r.pf_dt }}'>{{ r.pf_dt.strftime('%d.%m.%Y') }}</span>
-    {% else %}<span class='muted' title='дата не задана — действует глобальная START_DATE из .env (или вся история)'>START_DATE</span>{% endif %}
-    {% if guild_id %}<form method='post' action="{{ url_for('chat_set_parse_from', channel_id=r.channel_id) }}" style='display:inline-flex;gap:.3rem;align-items:center'>
+    {# всегда активное поле ввода: раньше при guild_id=None (страница /chats)
+       выводился только статичный текст «START_DATE» — пользователь видел
+       заглушку вместо поля. Теперь form+input рендерятся в обоих режимах. #}
+    <form method='post' action="{{ url_for('chat_set_parse_from', channel_id=r.channel_id) }}" style='display:inline-flex;gap:.3rem;align-items:center'>
       <input type='text' name='date' size='10' inputmode='numeric' placeholder='ДД.ММ.ГГГГ'
              pattern='[0-9]{2}\.[0-9]{2}\.[0-9]{4}|[0-9]{4}-[0-9]{2}-[0-9]{2}' value='{{ pf_cur }}'
              title='Дата начала парсинга этого чата; пусто = глобальная START_DATE из .env'>
       <button class='btn sm' type='submit' title="сохранить дату (пустое поле = сброс на START_DATE)">💾</button>
-    </form>{% endif %}
+    </form>
   </td>
   <td>
     {# галка «отслеживать»: коллектор собирает live-сообщения этого чата (chats.tracked) #}
