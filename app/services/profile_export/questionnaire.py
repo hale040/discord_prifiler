@@ -19,11 +19,45 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 
 # якорь даты/времени стандартной строки ленты: [YYYY-MM-DD HH:MM] ...
 _ANCHOR_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]")
+
+
+def qa_text(raw) -> str:
+    """Текст анкеты из поля questionnaire в ЛЮБОМ формате хранения.
+
+    JSON-обёртка {"v":1,"text":...,"answers":[...]} (новый формат — пишет
+    админка и scripts/fix_nonjson_questionnaires.py) или старый сырой текст.
+    Пустое/NULL -> "". Читатели обязаны проходить через эту функцию, иначе
+    анкета «есть», но в промпт не попадает.
+    """
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    if s.startswith("{"):
+        try:
+            obj = json.loads(s)
+        except Exception:  # noqa: BLE001 — битый JSON лечит diag nonjson
+            return s       # отдаём как есть: лучше кривой текст, чем молчание
+        if isinstance(obj, dict):
+            parts = []
+            t = str(obj.get("text") or "").strip()
+            if t:
+                parts.append(t)
+            ans = obj.get("answers")
+            if isinstance(ans, list) and ans:
+                parts.append("\n".join(
+                    f"- {a}" if isinstance(a, str) else json.dumps(
+                        a, ensure_ascii=False)
+                    for a in ans))
+            return "\n".join(parts).strip() or s
+    return s
 
 
 def _snowflake_dt(mid: int) -> datetime | None:
@@ -72,6 +106,11 @@ def fetch_questionnaires(conn, channel_ids=None) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         d = dict(r)
+        # поле может быть JSON-обёрткой (новый формат) или raw (старый) —
+        # нормализуем ЗДЕСЬ, все читатели получают честный текст
+        d["text"] = qa_text(d.get("text"))
+        if not d["text"]:
+            continue
         d["author_name"] = d.get("global_name") or d.get("username") or str(d["author_id"])
         out.append(d)
     return out

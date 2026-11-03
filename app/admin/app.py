@@ -2453,7 +2453,18 @@ def create_app(database_url: str) -> Flask:
                 text_v = (request.form.get("questionnaire") or "").strip()
                 anchor_raw = (request.form.get("message_id") or "").strip()
                 anchor = int(anchor_raw) if anchor_raw.isdigit() else None
-                upd = {"questionnaire": text_v or None,
+                # анкета хранится JSON-обёрткой (см. scripts/fix_nonjson_...):
+                # сырой текст попадал в questionnaires_nonjson и не читался
+                # пайплайном промпта; обратно совместимо — читатели принимают
+                # и старый raw-формат
+                if text_v and not text_v.startswith("{"):
+                    import json as _json
+                    text_v = _json.dumps(
+                        {"v": 1, "text": text_v, "answers": []},
+                        ensure_ascii=False)
+                elif not text_v:
+                    text_v = None
+                upd = {"questionnaire": text_v,
                        "message_id": anchor, "updated_at": utcnow()}
                 res = conn.execute(sa_update(cm).where(
                     cm.columns.channel_id == channel_id,
