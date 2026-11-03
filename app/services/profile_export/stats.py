@@ -62,7 +62,9 @@ def strip_mentions(text: str) -> str:
     return MENTION_RE.sub(lambda m: "@" if m.group(1) == "@!" else "#", text or "")
 
 
-USER_MENTION_RE = re.compile(r"<@!?\d{5,25}>")
+# capture-группа 1 — ID; [0-9] вместо \d (баг окружения); ">" опционален —
+# не терять пинги при обрезке/PII-редации хвоста токена.
+USER_MENTION_RE = re.compile(r"<@!?([0-9]{5,25})>?")
 
 
 def ping_targets(text: str) -> list[int]:

@@ -41,10 +41,10 @@
            value="{{ r.pf_dt.strftime('%d.%m.%Y') if (has_pf and r.pf_dt) else '' }}"
            title='Дата начала парсинга этого чата, формат Д.М.ГГГГ (день.месяц.год), напр. 03.11.2026; пусто = глобальная START_DATE из .env'>
   </td>
-  <td style='text-align:center'><input type='checkbox' name='tracked' value='1' {{ 'checked' if r.tracked }} title='Коллектор собирает live-сообщения'></td>
-  <td style='text-align:center'><input type='checkbox' name='collects_qa' value='1' {{ 'checked' if r.collects_qa }} title='Анкеты этого чата попадают в промпт LLM'></td>
+  <td style='text-align:center'><input type='checkbox' name='tracked' value='1' {{ 'checked' if r.tracked }} form='row-{{ r.channel_id }}' title='Коллектор собирает live-сообщения'></td>
+  <td style='text-align:center'><input type='checkbox' name='collects_qa' value='1' {{ 'checked' if r.collects_qa }} form='row-{{ r.channel_id }}' title='Анкеты этого чата попадают в промпт LLM'></td>
   {% if 'download_files' in r %}
-  <td style='text-align:center'><input type='checkbox' name='download_files' value='1' {{ 'checked' if r.download_files }} title='Скачивать вложения ≤5МБ'></td>
+  <td style='text-align:center'><input type='checkbox' name='download_files' value='1' {{ 'checked' if r.download_files }} form='row-{{ r.channel_id }}' title='Скачивать вложения ≤5МБ'></td>
   {% else %}
   <td style='text-align:center' class='muted'>—</td>
   {% endif %}
