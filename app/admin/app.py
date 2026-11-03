@@ -176,6 +176,38 @@ def _sync_url(url: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+
+def _parse_date_userfmt(s: str):
+    """Разбор даты начала парсинга, введённой пользователем.
+
+    Принимает ДД.ММ.ГГГГ (основной формат поля) и ГГГГ-ММ-ДД (календарь/prompt).
+    Возвращает (aware_datetime_UTC_полночь | None для сброса, текст_ошибки | None).
+    Пустая строка = сброс на глобальную START_DATE из .env.
+    """
+    from datetime import datetime as _dt, time as _t, timezone as _tz
+    s = (s or "").strip()
+    if not s:
+        return None, None
+    d = None
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            d = _dt.strptime(s, fmt).date()
+            break
+        except ValueError:
+            continue
+    if d is None:
+        # подсказка при перепутанном порядке: 2026.01.22 → явно год.месяц.день
+        parts = s.replace("-", ".").split(".")
+        if len(parts) == 3 and len(parts[0]) == 4:
+            return None, ("нужный формат ДД.ММ.ГГГГ — похоже, вы ввели "
+                          "ГГГГ.ММ.ДД")
+        return None, f"не удалось распознать дату «{s[:40]}» — формат ДД.ММ.ГГГГ, напр. 05.11.2026"
+    if d.year < 2015:
+        return None, f"дата {d.strftime('%d.%m.%Y')} слишком ранняя (минимум 2015)"
+    dt_aware = _dt.combine(d, _t.min, tzinfo=_tz.utc)
+    if dt_aware > _dt.now(_tz.utc):
+        return None, f"дата {d.strftime('%d.%m.%Y')} из будущего — парсить неоткуда"
+    return dt_aware, None
 def create_app(database_url: str) -> Flask:
     load_dotenv(BASE_DIR / ".env")
     password = os.getenv("ADMIN_PASSWORD", "")
@@ -2184,14 +2216,11 @@ def create_app(database_url: str) -> Flask:
                   "(перезапустите приложение).", "warn")
             return _chats_return(channel_id)
         raw = (request.form.get("date") or "").strip()
-        val = None
-        if raw:
-            try:
-                d = datetime.strptime(raw, "%Y-%m-%d")
-                val = d.replace(tzinfo=timezone.utc)
-            except ValueError:
-                flash("Дата должна быть в формате ГГГГ-ММ-ДД.", "err")
-                return _chats_return(channel_id)
+        # ДД.ММ.ГГГГ (поле ввода) + ГГГГ-ММ-ДД (календарь/prompt), валидация
+        val, err = _parse_date_userfmt(raw)
+        if err:
+            flash(err, "err")
+            return _chats_return(channel_id)
         with engine.connect() as conn:
             conn.execute(sa_update(c).where(
                 c.columns.channel_id == channel_id).values(parse_from=val))
@@ -2208,12 +2237,28 @@ def create_app(database_url: str) -> Flask:
                     conn.commit()
         except Exception:  # noqa: BLE001 — состояния могут ещё не быть
             pass
+        warn_extra = ""
+        if val is not None:
+            try:  # подсказка: если новая дата позже старейшего загруженного
+                   # сообщения в этом чате — часть истории будет пересобрана
+                m = Table("messages", MetaData(), autoload_with=engine)
+                with engine.connect() as conn:
+                    oldest = conn.execute(sa_select(
+                        func.min(m.columns.timestamp)).where(
+                        m.columns.channel_id == channel_id)).scalar()
+                if oldest is not None and val > oldest:
+                    warn_extra = (" Внимание: это позже старейшего загруженного "
+                                  "сообщения — диапазон будет перечитан заново, "
+                                  "дубликаты отфильтрует ON CONFLICT.")
+            except Exception:  # noqa: BLE001
+                pass
         audit("chat_parse_from", target=f"channel={channel_id}",
               details=val.isoformat() if val else "reset->START_DATE",
               result="ok")
-        flash(("Дата начала парсинга: " + val.strftime("%Y-%m-%d")
-               + " UTC — история пойдёт заново от неё.") if val
-              else "Дата сброшена — парсинг от глобальной START_DATE (.env).",
+        flash(("Дата начала парсинга: " + val.strftime("%d.%m.%Y")
+               + " (UTC-полночь) — история пойдёт заново от неё." + warn_extra)
+              if val else
+              "Дата сброшена — парсинг от глобальной START_DATE (.env).",
               "ok")
         return _chats_return(channel_id)
 
