@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import re
 from .env import load_json, parse_ts
-from .stats import classify_reaction, reaction_display, strip_mentions
+from .stats import (classify_reaction, ping_targets, reaction_display,
+                    strip_mentions)
 from .textclean import anti_inject, redact, strip_urls_text
 
 
@@ -155,11 +156,23 @@ def make_transcript(
             lab = f"O{len(order)}"
             labels[rid] = lab
             order.append((lab, rid))
+        # адресаты «пингов без reply» (<@id> в тексте) тоже получают метку —
+        # иначе @? теряет смысл для модели
+        try:
+            raw = m["content"] or ""
+        except (KeyError, TypeError):
+            raw = ""
+        for pid in ping_targets(raw):
+            if pid != target_uid and pid not in labels:
+                lab = f"O{len(order)}"
+                labels[pid] = lab
+                order.append((lab, pid))
 
     legend = ", ".join(f"{lab}={names.get(uid, uid)}" for lab, uid in order)
     head = (f"# целевой=T; {legend}; "
-            "формат: 'автор ЧЧ:ММ [>N|@Uk][ed][img] текст', >N — ответ на реплику N, "
-            "@Uk — адресат ответа, *=новая тема, «...» — реакции на реплику")
+            "формат: 'автор ЧЧ:ММ [>N|@Uk][pUk][ed][img] текст', >N — ответ на реплику N, "
+            "@Uk — адресат ответа, pUk — прямой пинг Uk без явного ответа "
+            "(обращение к человеку, не цитирование), *=новая тема, «...» — реакции на реплику")
 
     lines: list[str] = []
     id_to_num: dict[int, int] = {}
@@ -174,7 +187,8 @@ def make_transcript(
         gap_min = (ts - prev_ts_dt).total_seconds() / 60 if prev_ts_dt else 999
         label = "T" if m["author_id"] == target_uid else labels.get(
             m["author_id"], f"?{m['author_id']}")
-        text = anti_inject(strip_mentions((m["clean_content"] or m["content"] or "").strip()))
+        raw_content = m["content"] or ""          # до strip_mentions: там <@id>
+        text = anti_inject(strip_mentions((m["clean_content"] or raw_content).strip()))
         text = re.sub(r"\s+", " ", text)
         if not text:
             text = "[msg]"
@@ -185,11 +199,25 @@ def make_transcript(
             parts.append("*")
         flags = ""
         ref = m.get("reference_id")
+        has_reply_flag = False
         if ref and ref in id_to_num and ref != m["id"]:
             flags += f">{id_to_num[ref]}"
+            has_reply_flag = True
         elif m.get("reply_to_author_id"):
             rid = m["reply_to_author_id"]
             flags += "@" + ("T" if rid == target_uid else labels.get(rid, "?"))
+            has_reply_flag = True
+        # Пинг без явного reply: выделяем адресатов, которые НЕ уже отмечены
+        # как адресат ответа. Если после этого остались люди — это «обращение
+        # в лоб» (ping-to-person), а не цитирование поста.
+        if not has_reply_flag:
+            tgts = []
+            for pid in ping_targets(raw_content):
+                lab = "T" if pid == target_uid else labels.get(pid)
+                if lab and lab not in tgts:
+                    tgts.append(lab)
+            if tgts:
+                flags += "p" + ",".join(tgts[:3])
         if m.get("edited_at"):
             flags += "e"
         if m.get("deleted_at"):

@@ -62,6 +62,17 @@ def strip_mentions(text: str) -> str:
     return MENTION_RE.sub(lambda m: "@" if m.group(1) == "@!" else "#", text or "")
 
 
+USER_MENTION_RE = re.compile(r"<@!?(\d{5,25})>")
+
+
+def ping_targets(text: str) -> list[int]:
+    """ID пользователей, упомянутых в тексте (<@id>/<@!id>) — без ролей/каналов.
+
+    Нужен для различения в ленте: явный reply (ссылка на сообщение) против
+    «пинга без ответа» — человек обращается к адресату напрямую."""
+    return [int(m.group(1)) for m in USER_MENTION_RE.finditer(text or "")]
+
+
 EMOTION_EMOJI: dict[str, set[str]] = {
     "support_agreement": {
         "👍", "👌", "🤝", "👏", "🙌", "✔️", "✅", "🫡", "💪", "👊", "🤞", "✊",
