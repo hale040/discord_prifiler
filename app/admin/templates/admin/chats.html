@@ -49,18 +49,20 @@
   <td style='text-align:center' class='muted'>—</td>
   {% endif %}
   <td style='white-space:nowrap'>
-    <button class='btn sm' type='submit' title="Сохранить всю строку: дата + галки">💾 Сохранить</button>
+    <button class='btn sm' type='submit' title="Сохранить всю строку: дата + галки" aria-label="Сохранить">💾</button>
     {# Удаление — с подтверждением: сначала показываем inline-подтверждение,
        затем POST с confirm=<ID>; сервер сверяет значение (см. chat_delete) #}
     <span class='delbox' id='del-{{ r.channel_id }}' style='display:none'>
       <input type='text' name='confirm' size='11' placeholder='ID для удаления'
              title='Введите ID канала {{ r.channel_id }}, чтобы подтвердить удаление'>
       <button class='btn sm danger' type='submit' formaction="{{ url_for('chat_delete', channel_id=r.channel_id) }}"
-              onclick="return confirm('Удалить чат {{ r.channel_id }} «{{ r.name or '' }}»? Анкеты участников будут удалены, сообщения в БД останутся.')">🗑 Удалить</button>
-      <button class='btn sm' type='button' onclick="document.getElementById('del-{{ r.channel_id }}').style.display='none';this.previousElementSibling.previousElementSibling.style.display=''">✕</button>
+              title="Подтвердить удаление (введите ID)" aria-label="Подтвердить удаление"
+              onclick="return confirm('Удалить чат {{ r.channel_id }} «{{ r.name or '' }}»? Анкеты участников будут удалены, сообщения в БД останутся.')">🗑</button>
+      <button class='btn sm' type='button' title="Отменить удаление" aria-label="Отменить"
+              onclick="document.getElementById('del-{{ r.channel_id }}').style.display='none';this.previousElementSibling.previousElementSibling.style.display=''">✕</button>
     </span>
-    <button class='btn sm danger' type='button' title="Удалить чат из списка (сообщения останутся)"
-            onclick="var b=this; b.style.display='none'; var d=document.getElementById('del-{{ r.channel_id }}'); d.style.display=''">✕ удалить</button>
+    <button class='btn sm danger' type='button' title="Удалить чат из списка (сообщения останутся)" aria-label="Удалить"
+            onclick="var b=this; b.style.display='none'; var d=document.getElementById('del-{{ r.channel_id }}'); d.style.display=''">🗑</button>
   </td>
 </tr>
 </form>
