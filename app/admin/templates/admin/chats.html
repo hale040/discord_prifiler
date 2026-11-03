@@ -13,7 +13,7 @@
 
 <div class='tbl-wrap' style='--cols: 11'>
 <table class='lenta'><colgroup><col><col class='wide'><col style='width:80px'><col style='width:70px'><col style='width:100px'><col style='width:150px'><col style='width:130px'><col style='width:110px'><col style='width:120px'><col style='width:120px'><col style='width:70px'></colgroup>
-<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>парсить с</th><th>отслеживать</th><th>анкеты</th><th>файлы ≤5МБ</th><th></th></tr></thead>
+<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>парсить с</th><th>галки (отслеж./анкеты/файлы)</th><th></th></tr></thead>
 <tbody>
 {% for r in rows %}<tr>
   {% set pf_cur = r.pf_dt.strftime('%d.%m.%Y') if (r.pf_dt and r.pf_dt is not none and r.pf_dt.__class__.__name__ != 'NoneType') else '' %}
@@ -32,49 +32,24 @@
     {% else %}<span class='muted'>—</span>{% endif %}
   </td>
   <td>
-    {# дата «парсить с» (chats.parse_from); пусто = глобальная START_DATE из .env;
-       задать/сбросить — кнопка 📅 (POST /chats/parsefrom/<ID>) #}
-    {# всегда активное поле ввода: раньше при guild_id=None (страница /chats)
-       выводился только статичный текст «START_DATE» — пользователь видел
-       заглушку вместо поля. Теперь form+input рендерятся в обоих режимах. #}
-    <form method='post' action="{{ url_for('chat_set_parse_from', channel_id=r.channel_id) }}" style='display:inline-flex;gap:.3rem;align-items:center'>
-      <input type='text' name='date' size='11' inputmode='numeric' placeholder='ДД.ММ.ГГГГ'
-             pattern='[0-9]{2}\.[0-9]{2}\.[0-9]{4}|[0-9]{4}-[0-9]{2}-[0-9]{2}'
-             value="{{ r.pf_dt.strftime('%d.%m.%Y') if (has_pf and r.pf_dt) else '' }}"
-             title='Дата начала парсинга этого чата (формат ДД.ММ.ГГГГ); пусто = глобальная START_DATE из .env'>
-      <button class='btn sm' type='submit' title="сохранить дату (пустое поле = сброс на START_DATE)">💾</button>
-    </form>
+    <form method='post' action="{{ url_for('chat_save_row', channel_id=r.channel_id) }}" style='display:flex;gap:.3rem;align-items:center' id='row-{{ r.channel_id }}'>
+      <input type='text' name='date' size='11' inputmode='numeric' placeholder='М.Д.ГГГГ'
+             pattern='[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4}'
+             value="{{ r.pf_dt.strftime('%-d.%-m.%Y') if (has_pf and r.pf_dt) else '' }}"
+             title='Дата начала парсинга этого чата (формат М.Д.ГГГГ); пусто = глобальная START_DATE из .env'>
   </td>
+
+
   <td>
-    {# галка «отслеживать»: коллектор собирает live-сообщения этого чата (chats.tracked) #}
-    <form method='post' action="{{ url_for('chat_toggle_collect', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
-      <input type='hidden' name='on' value="{{ 0 if r.tracked else 1 }}">
-      <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'>
-        <input type='checkbox' onclick="return toggleChat(this,'{{ url_for('chat_toggle_collect', channel_id=r.channel_id) }}')" {{ 'checked' if r.tracked }} style='width:auto'>
-        <span>{{ 'да' if r.tracked else 'нет' }}</span></label>
-    </form>
-  </td>
-  <td>
-    {# галка «анкеты»: только отмеченные чаты отдают анкеты участников в промпт LLM #}
-    <form method='post' action="{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
-      <input type='hidden' name='on' value="{{ 0 if r.collects_qa else 1 }}">
-      <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'>
-        {# галка «анкеты» — только по чатам сервера (см. toggleChat в JS): #}
-        <input type='checkbox' {% if guild_id %}onclick="return toggleChat(this,'{{ url_for('chat_toggle_qa', channel_id=r.channel_id) }}')"{% else %}disabled title='Откройте чаты конкретного сервера (раздел «Серверы») — анкеты включаются только там'{% endif %} {{ 'checked' if r.collects_qa }} style='width:auto'>
-        <span>{{ 'вкл' if r.collects_qa else 'выкл' }}</span></label>
-    </form>
-  </td>
-  <td>
-    {# галка «скачивать файлы»: worker скачивает ВСЕ вложения чата <= 5 МБ (файлы и картинки) #}
-    {% if 'download_files' in r %}
-    <form method='post' action="{{ url_for('chat_toggle_dl', channel_id=r.channel_id) }}" style='display:flex;align-items:center;gap:.4rem'>
-      <input type='hidden' name='on' value="{{ 0 if r.download_files else 1 }}">
-      <label style='display:flex;align-items:center;gap:.3rem;color:var(--ink);cursor:pointer;margin:0'
-             title='Скачивать все вложения этого чата (файлы и изображения) размером до 5 МБ'>
-        <input type='checkbox' onclick="return toggleChat(this,'{{ url_for('chat_toggle_dl', channel_id=r.channel_id) }}')" {{ 'checked' if r.download_files }} style='width:auto'>
-        <span>{{ 'вкл' if r.download_files else 'выкл' }}</span></label>
-    </form>
-    {% else %}<span class='muted' title="колонка появится после миграции a00000000010">—</span>{% endif %}
+    <div style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap'>
+      <label title='Коллектор собирает live-сообщения'><input type='checkbox' form='row-{{ r.channel_id }}' name='tracked' value='1' {{ 'checked' if r.tracked }}> отслеж.</label>
+      <label title='Анкеты этого чата попадают в промпт LLM (галка активна везде)'><input type='checkbox' form='row-{{ r.channel_id }}' name='collects_qa' value='1' {{ 'checked' if r.collects_qa }}> анкеты</label>
+      {% if 'download_files' in r %}
+      <label title='Скачивать вложения ≤5МБ'><input type='checkbox' form='row-{{ r.channel_id }}' name='download_files' value='1' {{ 'checked' if r.download_files }}> файлы</label>
+      {% endif %}
+      <button class='btn sm' type='submit' form='row-{{ r.channel_id }}' title="Сохранить всю строку (дата + все галки)">💾 Сохранить</button>
+    </div>
+  </form>
   </td>
   <td style='text-align:right'>
     {# удаление — с подтверждением вводом ID канала (см. chat_delete) #}
@@ -85,48 +60,18 @@
     </form>
   </td>
 </tr>{% else %}
-<tr><td colspan='11' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
+<tr><td colspan='9' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
 {% endfor %}
 </tbody></table>
 <script>window.__GUILD_ID = {{ 'null' if not guild_id else guild_id }};</script>
 <script>
-// Тихий POST для галок чатов: страница не перезагружается, поэтому
-// состояние чекбокса живёт в браузере, а сортировка строк не сбивается.
-async function toggleChat(cb, url){
-  var isQa = url.indexOf('/chats/qa/') !== -1;
-  var on = cb.checked ? '1' : '0';
-  // галка «анкеты» включается только по чатам конкретного сервера:
-  // на общей странице /chats ID сервера неизвестен (guild_id пуст), и при
-  // ошибке/отказе чекбокс откатывается — визуально «снимается сам».
-  if (isQa && !window.__GUILD_ID) {
-    cb.checked = !cb.checked;
-    alert('Анкеты включаются только внутри сервера: откройте раздел «Серверы», введите ID сервера и отметьте чат там.');
-    return false;
-  }
-  var lbl = cb.closest('label');
-  function setUi(v){
-    cb.checked = v;
-    if (lbl) { var sp = lbl.querySelector('span'); if (sp) sp.textContent = v ? 'вкл' : 'выкл'; }
-  }
-  try{
-    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-Silent':'1'}, body:'on='+on, credentials:'same-origin'});
-    if (r.redirected) {
-      // POST был перехвачен GET-маршрутом (например /chats/<int:id>) —
-      // состояние НЕ подтверждено; перечитываем страницу, чтобы показать
-      // честное значение из БД вместо «самовольно снявшейся» галки.
-      location.reload(); return false;
-    }
-    if (!r.ok && r.status !== 204) {
-      var txt = await r.text().catch(function(){return '';});
-      setUi(!cb.checked);
-      alert('Не удалось сохранить (' + r.status + ')' + (txt ? ': ' + txt.slice(0,200) : ''));
-    } else if (isQa && on === '1') {
-      // сервер зафиксировал collects_qa=true отдельной транзакцией до
-      // тяжёлой обработки канала — галка остаётся включённой независимо
-      // от результата мгновенного парсинга (фоновый цикл догонит его).
-      setUi(true);
-    }
-  }catch(e){ setUi(!cb.checked); alert('Ошибка сети: '+e); }
-  return false; // отменяем submit формы
+// Одна кнопка 💾 на строку: дата + все галки сохраняются одним POST
+// /chats/row/<ID>. Чекбоксы привязаны к форме через form="row-<ID>",
+// поэтому физически находятся в другой ячейке, но отправляются вместе.
+function saveRow(cid){
+  var f = document.getElementById('row-'+cid);
+  if (!f) return true;
+  f.requestSubmit ? f.requestSubmit() : f.submit();
+  return false; // клик по кнопке в td галок тоже вызывает submit сам
 }
 </script></div>

@@ -180,28 +180,42 @@ def _sync_url(url: str) -> str:
 def _parse_date_userfmt(s: str):
     """Разбор даты начала парсинга, введённой пользователем.
 
-    Принимает ДД.ММ.ГГГГ (основной формат поля) и ГГГГ-ММ-ДД (календарь/prompt).
+    Основной формат поля — М.Д.ГГГГ (например 11.3.2026; день/месяц без
+    ведущих нулей или с ними). Дополнительно принимаются ДД.ММ.ГГГГ и
+    ГГГГ-ММ-ДД (старые значения/календарь), чтобы не ломать сохранённое.
     Возвращает (aware_datetime_UTC_полночь | None для сброса, текст_ошибки | None).
     Пустая строка = сброс на глобальную START_DATE из .env.
     """
+    import re as _re
     from datetime import datetime as _dt, time as _t, timezone as _tz
     s = (s or "").strip()
     if not s:
         return None, None
     d = None
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+    m = _re.fullmatch(r"(\d{1,2})[.](\d{1,2})[.](\d{4})", s)
+    if m:
+        dd, mm, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
         try:
-            d = _dt.strptime(s, fmt).date()
-            break
+            d = _dt(yy, mm, dd).date()
         except ValueError:
-            continue
+            # частая ошибка: месяц > 12 — вероятно перепутаны день и месяц
+            if mm > 12 >= dd:
+                return None, (f"месяц {mm} невозможен — похоже, день и месяц "
+                              f"перепутаны; нужно М.Д.ГГГГ, напр. 11.3.2026")
+            return None, f"несуществующая дата «{s[:40]}» — проверьте число"
+    else:
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+            try:
+                d = _dt.strptime(s, fmt).date()
+                break
+            except ValueError:
+                continue
     if d is None:
-        # подсказка при перепутанном порядке: 2026.01.22 → явно год.месяц.день
         parts = s.replace("-", ".").split(".")
         if len(parts) == 3 and len(parts[0]) == 4:
-            return None, ("нужный формат ДД.ММ.ГГГГ — похоже, вы ввели "
+            return None, ("нужный формат М.Д.ГГГГ — похоже, вы ввели "
                           "ГГГГ.ММ.ДД")
-        return None, f"не удалось распознать дату «{s[:40]}» — формат ДД.ММ.ГГГГ, напр. 05.11.2026"
+        return None, f"не удалось распознать дату «{s[:40]}» — формат М.Д.ГГГГ, напр. 11.3.2026"
     if d.year < 2015:
         return None, f"дата {d.strftime('%d.%m.%Y')} слишком ранняя (минимум 2015)"
     dt_aware = _dt.combine(d, _t.min, tzinfo=_tz.utc)
@@ -2256,7 +2270,7 @@ def create_app(database_url: str) -> Flask:
         audit("chat_parse_from", target=f"channel={channel_id}",
               details=val.isoformat() if val else "reset->START_DATE",
               result="ok")
-        flash(("Дата начала парсинга: " + val.strftime("%d.%m.%Y")
+        flash(("Дата начала парсинга: " + val.strftime("%-d.%-m.%Y")
                + " (UTC-полночь) — история пойдёт заново от неё." + warn_extra)
               if val else
               "Дата сброшена — парсинг от глобальной START_DATE (.env).",
@@ -2264,6 +2278,72 @@ def create_app(database_url: str) -> Flask:
         # перерендер страницы после сохранения: с пустым ответом 204 поле
         # продолжало показывать старое значение до ручного F5 — выглядело
         # как «не сохранилось». Редирект на страницу чатов этого сервера.
+        try:
+            with engine.connect() as conn2:
+                gid2 = conn2.execute(sa_select(c.columns.guild_id).where(
+                    c.columns.channel_id == channel_id)).scalar()
+            return redirect(url_for("chats_page", guild_id=gid2))
+        except Exception:  # noqa: BLE001
+            return redirect(url_for("chats_page"))
+
+    @app.route("/chats/row/<int:channel_id>", methods=["POST"])
+    @auth_required
+    def chat_save_row(channel_id: int):
+        """Одна кнопка 💾 на всю строку чата: дата «парсить с» + все галки
+        (отслеж./анкеты/файлы) сохраняются одним POST и редиректом — без JS.
+
+        Чекбоксы в HTML привязаны к форме атрибутом form="row-<ID>", поэтому
+        находятся в другой ячейке, но уходят вместе с датой. Снятая галка =
+        поля нет в форме → трактуется как 0 (включена только если value пришёл).
+        """
+        if not _qa_tables_ok("chats"):
+            abort(404)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        cols = set(c.columns.keys())
+        raw = (request.form.get("date") or "").strip()
+        val, err = _parse_date_userfmt(raw)
+        if err:
+            flash(err, "err")
+            return redirect(request.referrer or url_for("chats_page"))
+        flags = {f: (request.form.get(f) == "1") for f in
+                 ("tracked", "collects_qa", "download_files")}
+        upd = {}
+        if "parse_from" in cols:
+            upd["parse_from"] = val
+        for f, v in flags.items():
+            if f in cols:
+                upd[f] = v
+        qa_turned_on = False
+        with engine.connect() as conn:
+            if upd:
+                conn.execute(sa_update(c).where(
+                    c.columns.channel_id == channel_id).values(**upd))
+            # раньше анкеты включались отдельным тяжёлым маршрутом; здесь —
+            # только запись флага, фоновый цикл догонит обработку канала
+            if flags.get("collects_qa") and "collects_qa" in cols:
+                prev = conn.execute(sa_select(c.columns.collects_qa).where(
+                    c.columns.channel_id == channel_id)).scalar()
+                qa_turned_on = bool(prev) is False
+            conn.commit()
+        # сдвиг границы парсинга -> сброс курсора резюм (backfill от новой даты)
+        if "parse_from" in cols:
+            try:
+                st = Table("channel_states", MetaData(), autoload_with=engine)
+                if "last_message_id" in set(st.columns.keys()):
+                    with engine.connect() as conn:
+                        conn.execute(sa_update(st).where(
+                            st.columns.channel_id == channel_id).values(
+                            last_message_id=None))
+                        conn.commit()
+            except Exception:  # noqa: BLE001
+                pass
+        audit("chat_row_save", target=f"channel={channel_id}",
+              details=(val.isoformat() if val else "date->START_DATE") + " " +
+                      ",".join(f"{k}={int(v)}" for k, v in flags.items()),
+              result="ok")
+        msg = ("Строка сохранена." if not qa_turned_on else
+               "Строка сохранена. Анкеты включены — фоновый цикл обработает канал.")
+        flash(msg, "ok")
         try:
             with engine.connect() as conn2:
                 gid2 = conn2.execute(sa_select(c.columns.guild_id).where(
