@@ -312,6 +312,11 @@ class CollectionService:
                 ch_parse_from = getattr(ch_row, "parse_from", None)
         except Exception:  # noqa: BLE001 — старые схемы без колонки
             ch_parse_from = None
+        if ch_parse_from is None and self.s.start_date is not None:
+            # Дата по умолчанию из .env (START_DATE): если в чате дата начала
+            # парсинга не задана — берём её. Чатная дата (календарь в админке)
+            # имеет приоритет над глобальной.
+            ch_parse_from = self.s.start_date
         pf_ms = int(ch_parse_from.timestamp() * 1000) if ch_parse_from else 0
         oldest_ms = ((state.oldest_message_id or 0) >> 22) + DISCORD_EPOCH_MS
         # Курсор: от чего идём вперёд по времени.

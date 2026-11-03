@@ -11,11 +11,12 @@
 </form>
 {% endif %}
 
-<div class='tbl-wrap' style='--cols: 10'>
-<table class='lenta'><colgroup><col><col class='wide'><col style='width:80px'><col style='width:70px'><col style='width:100px'><col style='width:150px'><col style='width:110px'><col style='width:120px'><col style='width:120px'><col style='width:70px'></colgroup>
-<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>отслеживать</th><th>анкеты</th><th>файлы ≤5МБ</th><th></th></tr></thead>
+<div class='tbl-wrap' style='--cols: 11'>
+<table class='lenta'><colgroup><col><col class='wide'><col style='width:80px'><col style='width:70px'><col style='width:100px'><col style='width:150px'><col style='width:130px'><col style='width:110px'><col style='width:120px'><col style='width:120px'><col style='width:70px'></colgroup>
+<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>парсить с</th><th>отслеживать</th><th>анкеты</th><th>файлы ≤5МБ</th><th></th></tr></thead>
 <tbody>
 {% for r in rows %}<tr>
+  {% set pf_cur = r.pf_dt.strftime('%Y-%m-%d') if (r.pf_dt and r.pf_dt is not none and r.pf_dt.__class__.__name__ != 'NoneType') else '' %}
   <td><a href="{{ url_for('chat_members_page', channel_id=r.channel_id) }}" title="участники и анкеты">{{ r.channel_id }}</a></td>
   <td class='clamp' title='{{ r.name or "" }}'>{{ v_or(r.name) }}</td>
   <td style='text-align:right'>{{ r.members_n }}</td>
@@ -29,6 +30,17 @@
       {% elif r.synced_at %}<span class='muted' title="последнее получение списка каналов">✓ {{ fmtdt(r.synced_at) }}</span>
       {% else %}<span class='muted'>—</span>{% endif %}
     {% else %}<span class='muted'>—</span>{% endif %}
+  </td>
+  <td>
+    {# дата «парсить с» (chats.parse_from); пусто = глобальная START_DATE из .env;
+       задать/сбросить — кнопка 📅 (POST /chats/parsefrom/<ID>) #}
+    {% if r.pf_dt %}<span title='{{ r.pf_dt }}'>{{ r.pf_dt.strftime('%Y-%m-%d') }}</span>
+    {% else %}<span class='muted' title='дата не задана — действует глобальная START_DATE из .env (или вся история)'>START_DATE</span>{% endif %}
+    {% if guild_id %}<form method='post' action="{{ url_for('chat_set_parse_from', channel_id=r.channel_id) }}"
+          onsubmit="var d=prompt('Парсить с какой даты (ГГГГ-ММ-ДД)? Пусто = сброс на глобальную START_DATE:', '{{ pf_cur }}'); if(d===null) return false; this.querySelector('input[name=date]').value=d.trim(); return true;" style='display:inline'>
+      <input type='hidden' name='date' value=''>
+      <button class='btn sm' title="календарь начала парсинга этого чата">📅</button>
+    </form>{% endif %}
   </td>
   <td>
     {# галка «отслеживать»: коллектор собирает live-сообщения этого чата (chats.tracked) #}
@@ -70,7 +82,7 @@
     </form>
   </td>
 </tr>{% else %}
-<tr><td colspan='10' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
+<tr><td colspan='11' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
 {% endfor %}
 </tbody></table>
 <script>window.__GUILD_ID = {{ 'null' if not guild_id else guild_id }};</script>

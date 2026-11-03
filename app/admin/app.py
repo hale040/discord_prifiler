@@ -24,7 +24,7 @@ from flask import (
     session,
     url_for,
 )
-from sqlalchemy import Boolean, MetaData, Table, Text, cast as sa_cast, create_engine, func, inspect, select as sa_select, text
+from sqlalchemy import Boolean, MetaData, Table, Text, cast as sa_cast, create_engine, func, inspect, literal_column, select as sa_select, text
 from sqlalchemy import and_ as sa_and, or_ as sa_or, update as sa_update, insert as sa_insert, delete as sa_delete
 from sqlalchemy import text as sa_text
 from sqlalchemy import String
@@ -2114,8 +2114,11 @@ def create_app(database_url: str) -> Flask:
                     _new, msg = _sync_guild_channels(conn, guild_id, c, m)
                     flash(msg, "ok" if "Синхронизировано" in msg else "warn")
                 return redirect(url_for("chats_page", guild_id=guild_id))
+            has_pf = "parse_from" in set(c.columns.keys())
             sel = (sa_select(
                 c,
+                (c.columns.parse_from.label("pf_dt") if has_pf
+                 else literal_column("NULL").label("pf_dt")),
                 sa_select(func.count()).select_from(cm)
                 .where(cm.columns.channel_id == c.columns.channel_id)
                 .correlate(c).scalar_subquery().label("members_n"),
@@ -2162,6 +2165,57 @@ def create_app(database_url: str) -> Flask:
         except Exception:  # noqa: BLE001
             gid = None
         return ("", 204) if gid or channel_id is None else ("", 204)
+
+    @app.route("/chats/parsefrom/<int:channel_id>", methods=["POST"])
+    def chat_set_parse_from(channel_id: int):
+        """Календарь «парсить с»: пишет chats.parse_from (UTC-полночь выбранной
+        даты). Пустая дата = сброс на глобальную START_DATE из .env.
+
+        Сдвиг даты вперёд (например, на месяц назад от уже загруженного
+        начала) помечает диапазон [новая_граница .. старейшее] к пересборке:
+        backfill пойдёт заново от новой даты; уже сохранённое в новом окне
+        не дублируется (ON CONFLICT), анкеты не затираются.
+        """
+        if not _qa_tables_ok("chats"):
+            abort(404)
+        c = Table("chats", MetaData(), autoload_with=engine)
+        if "parse_from" not in set(c.columns.keys()):
+            flash("Колонка parse_from появится после миграции a00000000012 "
+                  "(перезапустите приложение).", "warn")
+            return _chats_return(channel_id)
+        raw = (request.form.get("date") or "").strip()
+        val = None
+        if raw:
+            try:
+                d = datetime.strptime(raw, "%Y-%m-%d")
+                val = d.replace(tzinfo=timezone.utc)
+            except ValueError:
+                flash("Дата должна быть в формате ГГГГ-ММ-ДД.", "err")
+                return _chats_return(channel_id)
+        with engine.connect() as conn:
+            conn.execute(sa_update(c).where(
+                c.columns.channel_id == channel_id).values(parse_from=val))
+            conn.commit()
+        # сдвиг границы вперёд -> сброс курсора резюм, чтобы backfill пошёл
+        # от новой даты (см. collection_service: pf_ms > oldest -> rerange)
+        try:
+            st = Table("channel_states", MetaData(), autoload_with=engine)
+            with engine.connect() as conn:
+                if "last_message_id" in set(st.columns.keys()):
+                    conn.execute(sa_update(st).where(
+                        st.columns.channel_id == channel_id).values(
+                        last_message_id=None))
+                    conn.commit()
+        except Exception:  # noqa: BLE001 — состояния могут ещё не быть
+            pass
+        audit("chat_parse_from", target=f"channel={channel_id}",
+              details=val.isoformat() if val else "reset->START_DATE",
+              result="ok")
+        flash(("Дата начала парсинга: " + val.strftime("%Y-%m-%d")
+               + " UTC — история пойдёт заново от неё.") if val
+              else "Дата сброшена — парсинг от глобальной START_DATE (.env).",
+              "ok")
+        return _chats_return(channel_id)
 
     @app.route("/chats/toggle/<int:channel_id>", methods=["POST"])
     def chat_toggle_collect(channel_id: int):
