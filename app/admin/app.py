@@ -2147,7 +2147,7 @@ def create_app(database_url: str) -> Flask:
                     flash(msg, "ok" if "Синхронизировано" in msg else "warn")
                 return redirect(url_for("chats_page", guild_id=guild_id))
             has_pf = "parse_from" in set(c.columns.keys())
-            sel = (sa_select(
+            _sel_chats = (sa_select(
                 c,
                 (c.columns.parse_from.label("pf_dt") if has_pf
                  else literal_column("NULL").label("pf_dt")),
@@ -2161,14 +2161,15 @@ def create_app(database_url: str) -> Flask:
                 .correlate(c).scalar_subquery().label("qa_n"))
                 .order_by(c.columns.messages_total.desc()))
             if pred is not None:
-                sel = sel.where(pred)
-            rows = conn.execute(sel).mappings().all()
+                _sel_chats = _sel_chats.where(pred)
+            rows = conn.execute(_sel_chats).mappings().all()
             gname = None
             if guild_id is not None and "guilds" in tables():
                 g = Table("guilds", MetaData(), autoload_with=engine)
                 gname = conn.execute(sa_select(g.columns.name).where(
                     g.columns.guild_id == guild_id)).scalar()
         return render("chats", page="chats", rows=rows, guild_id=guild_id,
+                      has_pf=has_pf,   # шаблон: показывать значение «парсить с»
                       guild_name=gname or "",
                       can_sync=(guild_id is not None
                                 and bool(os.getenv("DISCORD_TOKEN"))))
@@ -2462,9 +2463,12 @@ def create_app(database_url: str) -> Flask:
         c = Table("chats", MetaData(), autoload_with=engine)
         cm = Table("chat_members", MetaData(), autoload_with=engine)
         pred = (c.columns.guild_id == guild_id) if guild_id is not None else None
+        has_pf = "parse_from" in set(c.columns.keys())
         with engine.connect() as conn:
             sel = (sa_select(
                 c,
+                (c.columns.parse_from.label("pf_dt") if has_pf
+                 else literal_column("NULL").label("pf_dt")),
                 sa_select(func.count()).select_from(cm)
                 .where(cm.columns.channel_id == c.columns.channel_id)
                 .correlate(c).scalar_subquery().label("members_n"),
@@ -2483,6 +2487,7 @@ def create_app(database_url: str) -> Flask:
                 gname = conn.execute(sa_select(g.columns.name).where(
                     g.columns.guild_id == guild_id)).scalar()
         return render("chats", page="chats", rows=rows, guild_id=guild_id,
+                      has_pf=has_pf,   # шаблон: показывать значение «парсить с»
                       guild_name=gname or "",
                       can_sync=(guild_id is not None
                                 and bool(os.getenv("DISCORD_TOKEN"))))
