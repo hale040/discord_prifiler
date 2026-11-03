@@ -11,19 +11,24 @@
 </form>
 {% endif %}
 
-<div class='tbl-wrap' style='--cols: 11'>
-<table class='lenta'><colgroup><col><col class='wide'><col style='width:80px'><col style='width:70px'><col style='width:100px'><col style='width:150px'><col style='width:130px'><col style='width:110px'><col style='width:120px'><col style='width:120px'><col style='width:70px'></colgroup>
-<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>парсить с</th><th>галки (отслеж./анкеты/файлы)</th><th></th></tr></thead>
+{# Верстка строки чата: ОДНА форма на всю строку (дата + галки + кнопки).
+   Раньше форма была разорвана между <td> (тег <form> не может пересекать
+   границы ячеек без form=""-привязки) — из-за этого «поезжала» верстка и
+   терялась кнопка сохранения. Теперь: форма оборачивает <tr>, поля лежат
+   в своих ячейках, разметка таблицы корректна. #}
+<div class='tbl-wrap'>
+<table class='lenta'>
+<thead><tr><th>ID канала</th><th>название</th><th>участн.</th><th>анкет</th><th>сообщений</th><th>синхронизация</th><th>парсить с (Д.М.ГГГГ)</th><th>отслеж.</th><th>анкеты</th><th>файлы</th><th></th></tr></thead>
 <tbody>
-{% for r in rows %}<tr>
-  {% set pf_cur = r.pf_dt.strftime('%d.%m.%Y') if (r.pf_dt and r.pf_dt is not none and r.pf_dt.__class__.__name__ != 'NoneType') else '' %}
+{% for r in rows %}
+<form method='post' action="{{ url_for('chat_save_row', channel_id=r.channel_id) }}" id='row-{{ r.channel_id }}'>
+<tr>
   <td><a href="{{ url_for('chat_members_page', channel_id=r.channel_id) }}" title="участники и анкеты">{{ r.channel_id }}</a></td>
   <td class='clamp' title='{{ r.name or "" }}'>{{ v_or(r.name) }}</td>
   <td style='text-align:right'>{{ r.members_n }}</td>
   <td style='text-align:right'>{% if r.qa_n %}<span class='pill ok'>{{ r.qa_n }}</span>{% else %}0{% endif %}</td>
   <td style='text-align:right'>{{ r.messages_total }}</td>
   <td>
-    {# статус отложенного запроса каналов: запрошено → сборщик → получено/ошибка #}
     {% if 'sync_requested' in r %}
       {% if r.sync_requested %}<span class='pill warn' title="сборщик подтянет каналы в течение ~30 сек">⏳ запрошено</span>
       {% elif r.sync_error %}<span class='pill err' title='{{ r.sync_error }}'>❌ ошибка</span>
@@ -32,46 +37,35 @@
     {% else %}<span class='muted'>—</span>{% endif %}
   </td>
   <td>
-    <form method='post' action="{{ url_for('chat_save_row', channel_id=r.channel_id) }}" style='display:flex;gap:.3rem;align-items:center' id='row-{{ r.channel_id }}'>
-      <input type='text' name='date' size='11' inputmode='numeric' placeholder='М.Д.ГГГГ'
-             pattern='[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4}'
-             value="{{ r.pf_dt.strftime('%-d.%-m.%Y') if (has_pf and r.pf_dt) else '' }}"
-             title='Дата начала парсинга этого чата (формат М.Д.ГГГГ); пусто = глобальная START_DATE из .env'>
+    <input type='text' name='date' size='11' inputmode='numeric' placeholder='Д.М.ГГГГ'
+           value="{{ r.pf_dt.strftime('%d.%m.%Y') if (has_pf and r.pf_dt) else '' }}"
+           title='Дата начала парсинга этого чата, формат Д.М.ГГГГ (день.месяц.год), напр. 03.11.2026; пусто = глобальная START_DATE из .env'>
   </td>
-
-
-  <td>
-    <div style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap'>
-      <label title='Коллектор собирает live-сообщения'><input type='checkbox' form='row-{{ r.channel_id }}' name='tracked' value='1' {{ 'checked' if r.tracked }}> отслеж.</label>
-      <label title='Анкеты этого чата попадают в промпт LLM (галка активна везде)'><input type='checkbox' form='row-{{ r.channel_id }}' name='collects_qa' value='1' {{ 'checked' if r.collects_qa }}> анкеты</label>
-      {% if 'download_files' in r %}
-      <label title='Скачивать вложения ≤5МБ'><input type='checkbox' form='row-{{ r.channel_id }}' name='download_files' value='1' {{ 'checked' if r.download_files }}> файлы</label>
-      {% endif %}
-      <button class='btn sm' type='submit' form='row-{{ r.channel_id }}' title="Сохранить всю строку (дата + все галки)">💾 Сохранить</button>
-    </div>
-  </form>
+  <td style='text-align:center'><input type='checkbox' name='tracked' value='1' {{ 'checked' if r.tracked }} title='Коллектор собирает live-сообщения'></td>
+  <td style='text-align:center'><input type='checkbox' name='collects_qa' value='1' {{ 'checked' if r.collects_qa }} title='Анкеты этого чата попадают в промпт LLM'></td>
+  {% if 'download_files' in r %}
+  <td style='text-align:center'><input type='checkbox' name='download_files' value='1' {{ 'checked' if r.download_files }} title='Скачивать вложения ≤5МБ'></td>
+  {% else %}
+  <td style='text-align:center' class='muted'>—</td>
+  {% endif %}
+  <td style='white-space:nowrap'>
+    <button class='btn sm' type='submit' title="Сохранить всю строку: дата + галки">💾 Сохранить</button>
+    {# Удаление — с подтверждением: сначала показываем inline-подтверждение,
+       затем POST с confirm=<ID>; сервер сверяет значение (см. chat_delete) #}
+    <span class='delbox' id='del-{{ r.channel_id }}' style='display:none'>
+      <input type='text' name='confirm' size='11' placeholder='ID для удаления'
+             title='Введите ID канала {{ r.channel_id }}, чтобы подтвердить удаление'>
+      <button class='btn sm danger' type='submit' formaction="{{ url_for('chat_delete', channel_id=r.channel_id) }}"
+              onclick="return confirm('Удалить чат {{ r.channel_id }} «{{ r.name or '' }}»? Анкеты участников будут удалены, сообщения в БД останутся.')">🗑 Удалить</button>
+      <button class='btn sm' type='button' onclick="document.getElementById('del-{{ r.channel_id }}').style.display='none';this.previousElementSibling.previousElementSibling.style.display=''">✕</button>
+    </span>
+    <button class='btn sm danger' type='button' title="Удалить чат из списка (сообщения останутся)"
+            onclick="var b=this; b.style.display='none'; var d=document.getElementById('del-{{ r.channel_id }}'); d.style.display=''">✕ удалить</button>
   </td>
-  <td style='text-align:right'>
-    {# удаление — с подтверждением вводом ID канала (см. chat_delete) #}
-    <form method='post' action="{{ url_for('chat_delete', channel_id=r.channel_id) }}"
-          onsubmit="return confirm('Удалить чат {{ r.channel_id }} «{{ r.name or '' }}» из списка?\nАнкеты участников будут удалены, сообщения в БД останутся.');">
-      <input type='hidden' name='confirm' value="{{ r.channel_id }}">
-      <button class='btn sm danger' title="удалить чат из списка (сообщения останутся)">✕</button>
-    </form>
-  </td>
-</tr>{% else %}
-<tr><td colspan='9' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
+</tr>
+</form>
+{% else %}
+<tr><td colspan='11' class='muted'>Чатов нет — миграция перенесёт их из истории сообщений автоматически.</td></tr>
 {% endfor %}
 </tbody></table>
-<script>window.__GUILD_ID = {{ 'null' if not guild_id else guild_id }};</script>
-<script>
-// Одна кнопка 💾 на строку: дата + все галки сохраняются одним POST
-// /chats/row/<ID>. Чекбоксы привязаны к форме через form="row-<ID>",
-// поэтому физически находятся в другой ячейке, но отправляются вместе.
-function saveRow(cid){
-  var f = document.getElementById('row-'+cid);
-  if (!f) return true;
-  f.requestSubmit ? f.requestSubmit() : f.submit();
-  return false; // клик по кнопке в td галок тоже вызывает submit сам
-}
-</script></div>
+</div>
