@@ -57,12 +57,12 @@
              title='Введите ID канала {{ r.channel_id }}, чтобы подтвердить удаление'>
       <button class='btn sm danger' type='submit' formaction="{{ url_for('chat_delete', channel_id=r.channel_id) }}"
               title="Подтвердить удаление (введите ID)" aria-label="Подтвердить удаление"
-              onclick="return confirm('Удалить чат {{ r.channel_id }} «{{ r.name or '' }}»? Анкеты участников будут удалены, сообщения в БД останутся.')">🗑</button>
+              onclick="return confirm('Удалить чат {{ r.channel_id }} «{{ r.name or '' }}»? Анкеты участников будут удалены, сообщения в БД останутся.')">✕</button>
       <button class='btn sm' type='button' title="Отменить удаление" aria-label="Отменить"
               onclick="document.getElementById('del-{{ r.channel_id }}').style.display='none';this.previousElementSibling.previousElementSibling.style.display=''">✕</button>
     </span>
     <button class='btn sm danger' type='button' title="Удалить чат из списка (сообщения останутся)" aria-label="Удалить"
-            onclick="var b=this; b.style.display='none'; var d=document.getElementById('del-{{ r.channel_id }}'); d.style.display=''">🗑</button>
+            onclick="var b=this; b.style.display='none'; var d=document.getElementById('del-{{ r.channel_id }}'); d.style.display=''">✕</button>
   </td>
 </tr>
 </form>
