@@ -2036,20 +2036,36 @@ def create_app(database_url: str) -> Flask:
                 sa_select(m.columns.channel_id, func.count())
                 .where(m.columns.guild_id == gid).group_by(m.columns.channel_id)))
             new_n = upd_n = 0
+            # «парсить с даты»: у новых чатов по умолчанию — дата создания
+            # канала (snowflake id >> 22 + эпоха Discord), т.е. ВЕСЬ канал;
+            # оператор сдвинет в календаре. Колонка может отсутствовать до
+            # миграции a00000000012 — тогда пишем как раньше.
+            has_pf = "parse_from" in set(c.columns.keys())
+            pf_val = None
+            if has_pf:
+                from app.services.collection_service import snowflake_dt
             for cid, cname in channels:
                 if not cid:
                     continue
                 if cid in existing:
                     # подтянуть название, если раньше было заглушкой из БД
-                    upd_n += conn.execute(sa_update(c).where(
-                        c.columns.channel_id == cid,
-                        c.columns.name.is_(None)).values(
-                        name=str(cname)[:256])).rowcount
+                    upd = {}
+                    if c.columns.name is not None:
+                        upd["name"] = str(cname)[:256]
+                    if has_pf and pf_val is None:
+                        pf_val = True  # вычисление ленивое, ниже по cid
+                    vals = {k: v for k, v in upd.items()}
+                    if vals:
+                        upd_n += conn.execute(sa_update(c).where(
+                            c.columns.channel_id == cid,
+                            c.columns.name.is_(None)).values(**vals)).rowcount
                     continue
-                conn.execute(sa_insert(c).values(
-                    channel_id=cid, guild_id=gid, name=str(cname)[:256],
-                    collects_qa=False, messages_total=msg_counts.get(cid, 0),
-                    created_at=utcnow()))
+                ins = dict(channel_id=cid, guild_id=gid, name=str(cname)[:256],
+                           collects_qa=False, messages_total=msg_counts.get(cid, 0),
+                           created_at=utcnow())
+                if has_pf:
+                    ins["parse_from"] = snowflake_dt(cid) or utcnow()
+                conn.execute(sa_insert(c).values(**ins))
                 new_n += 1
             conn.commit()
             audit("chats_sync", target=f"guild={gid}",

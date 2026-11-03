@@ -44,6 +44,26 @@ def snowflake_for(dt: datetime) -> int:
     return max(ms, 0) << 22
 
 
+def snowflake_dt(value) -> datetime | None:
+    """Обратное преобразование: дата по snowflake (id канала/сообщения).
+
+    id >> 22 + DISCORD_EPOCH_MS — время создания объекта в Discord.
+    Используется админкой («парсить с даты»: по умолчанию — дата создания
+    канала) и диаг-скриптом. None — если значение не число.
+    """
+    try:
+        sid = int(value)
+    except (TypeError, ValueError):
+        return None
+    if sid <= 0:
+        return None
+    ms = (sid >> 22) + DISCORD_EPOCH_MS
+    try:
+        return datetime.fromtimestamp(ms / 1000, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 def _to_snowflake(value: int | None) -> discord.Object | None:
     """discord.py-self ожидает в history(after=/before=) объект с атрибутом .id.
 
@@ -282,10 +302,30 @@ class CollectionService:
         max(id) страницы + добавляется hard-cap по количеству пустых страниц.
         """
         state = self.repo.get_state(channel.id)
+        # Дата «парсить с» конкретного канала (календарь в админке,
+        # chats.parse_from). Приоритет над глобальным START_DATE.
+        ch_parse_from = None
+        try:
+            ch_row = self.repo.get_chat(channel.id) if hasattr(
+                self.repo, "get_chat") else None
+            if ch_row is not None:
+                ch_parse_from = getattr(ch_row, "parse_from", None)
+        except Exception:  # noqa: BLE001 — старые схемы без колонки
+            ch_parse_from = None
+        pf_ms = int(ch_parse_from.timestamp() * 1000) if ch_parse_from else 0
+        oldest_ms = ((state.oldest_message_id or 0) >> 22) + DISCORD_EPOCH_MS
         # Курсор: от чего идём вперёд по времени.
         if self._backfill_cursor is not None:
             # продолжение догружения после reconnect в рамках процесса
             after = self._backfill_cursor
+        elif pf_ms and (not state.last_message_id or pf_ms > oldest_ms):
+            # дату сменили (или чат раньше не грузился) — идём от неё; ниже
+            # курсор состояния будет переброшен на первое сообщение >= даты
+            after = snowflake_for(ch_parse_from)
+            log.info(
+                "Backfill канала %s с даты parse_from %s (snowflake %s).",
+                channel.id, ch_parse_from.isoformat(), after,
+            )
         elif self.s.start_date is not None and not state.last_message_id:
             after = snowflake_for(self.s.start_date)
             log.info(
@@ -302,6 +342,25 @@ class CollectionService:
             )
             if state.last_message_id:
                 log.info("Backfill: резюм от последнего курсора %s.", after)
+        # Смена даты «парсить с»: если parse_from позже уже загруженной
+        # старейшей точки — помечаем диапазон [after .. oldest] к удалению
+        # (worker удалит только сообщения, НЕ являющиеся анкетами/ответами
+        # на анкеты) и стартуем выгрузку заново от новой даты.
+        if (pf_ms and state.oldest_message_id
+                and pf_ms > oldest_ms
+                and not self._backfill_cursor):
+            try:
+                await asyncio.to_thread(
+                    self.repo.request_rerange, channel.id,
+                    after, state.oldest_message_id)
+                log.info(
+                    "Backfill %s: дата сдвинута вперёд (%s > %s) — помечен "
+                    "диапазон к пересборке, история пойдёт заново.",
+                    channel.id, ch_parse_from.isoformat(),
+                    state.oldest_message_id,
+                )
+            except Exception:  # noqa: BLE001 — старые схемы
+                log.debug("rerange mark failed", exc_info=True)
         total_pages = 0
         empty_pages = 0
         while self._running:

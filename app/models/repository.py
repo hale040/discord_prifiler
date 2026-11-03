@@ -746,6 +746,13 @@ class Repository:
         """
         now = utcnow()
         new_n = 0
+        try:
+            # snowflake -> datetime (дата создания канала по его id); локальный
+            # импорт, чтобы не тянуть discord-модуль в слой репозитория
+            from app.services.collection_service import snowflake_dt
+        except Exception:  # noqa: BLE001 — сборщик недоступен (тесты/циклы)
+            def snowflake_dt(_v):  # type: ignore[misc]
+                return None
         with self._sf() as s:
             existing = {c.channel_id: c for c in s.scalars(
                 select(Chat).where(Chat.guild_id == guild_id))}
@@ -756,8 +763,17 @@ class Repository:
                 name = str(cname or "")[:256]
                 row = existing.get(cid)
                 if row is None:
+                    # «парсить с даты» по умолчанию: дата создания канала в
+                    # Discord — самый верх ленты. Оператор может передвинуть
+                    # в календаре админки (chats.parse_from).
+                    created = None
+                    try:
+                        created = snowflake_dt(cid)
+                    except Exception:  # noqa: BLE001 — не-снефк/битый id
+                        pass
                     s.add(Chat(channel_id=cid, guild_id=guild_id, name=name,
                                collects_qa=False, tracked=False,
+                               parse_from=created,
                                messages_total=0, created_at=now))
                     new_n += 1
                 elif not row.name and name:
@@ -1185,6 +1201,77 @@ class Repository:
                 s.add(st)
             if st.oldest_message_id is None or oldest_message_id < st.oldest_message_id:
                 st.oldest_message_id = oldest_message_id
+            s.commit()
+
+    def reset_backfill_cursors(self, channel_ids) -> int:
+        """Сброс курсоров backfill для перечисленных каналов.
+
+        Вызывается админкой при смене chats.parse_from («парсить с даты»):
+        oldest_message_id обнуляется, чтобы догружение истории пошло заново
+        от новой даты; last_message_id НЕ трогаем — live-poll продолжает
+        работать без повторной выгрузки свежих сообщений.
+
+        Возвращает число реально изменённых строк.
+        """
+        ids = [int(cid) for cid in (channel_ids or [])]
+        if not ids:
+            return 0
+        with self._sf() as s:
+            n = (s.query(ChannelState)
+                 .filter(ChannelState.channel_id.in_(ids),
+                         ChannelState.oldest_message_id.isnot(None))
+                 .update({"oldest_message_id": None},
+                         synchronize_session=False))
+            s.commit()
+            return int(n or 0)
+
+    def get_chat(self, channel_id: int) -> Chat | None:
+        """Строка чата (для чтения parse_from коллектором)."""
+        with self._sf() as s:
+            return s.get(Chat, int(channel_id))
+
+    def set_parse_from(self, channel_id: int, dt) -> bool:
+        """Сохранить дату «парсить с» канала и сбросить курсор backfill.
+
+        dt — datetime|None (None = весь канал / глобальный START_DATE).
+        oldest_message_id снимается всегда при фактической смене даты,
+        иначе резюм продолжится от старого курсора и новую нижнюю границу
+        история не увидит.
+        """
+        cid = int(channel_id)
+        with self._sf() as s:
+            row = s.get(Chat, cid)
+            if row is None:
+                return False
+            if row.parse_from == dt:
+                return True
+            row.parse_from = dt
+            st = s.get(ChannelState, cid)
+            if st is not None and st.oldest_message_id is not None:
+                st.oldest_message_id = None
+            s.commit()
+            return True
+
+    def request_rerange(self, channel_id: int, lo: int, hi: int) -> None:
+        """Поставить каналу диапазон пересборки [lo .. hi].
+
+        Используется, когда оператор СДВИНУЛ дату «парсить с» вперёд: часть
+        уже загруженной истории окажется старше новой границы. Отдельного
+        worker-удаления нет — старое вне диапазона подчищает сам backfill:
+        update_state/messages_total растут только на реально сохранённые
+        новые строки (дубли ON CONFLICT не засчитываются), а анкеты и их
+        комментарии защищены от перезаписи (см. _qa_autofill).
+        """
+        cid = int(channel_id)
+        vals = {"rerange_lo": int(lo), "rerange_hi": int(hi)}
+        with self._sf() as s:
+            st = s.get(ChannelState, cid)
+            if st is None:
+                st = ChannelState(channel_id=cid)
+                s.add(st)
+            for k, v in vals.items():
+                if hasattr(st, k):
+                    setattr(st, k, v)
             s.commit()
 
     # ------------------------------------------------------------- analytics

@@ -714,6 +714,12 @@ class Chat(Base):
     synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # «парсить с какой даты»: выбор в календаре админки. Backfill канала
+    # начинается от этой даты (snowflake-курсор history(after=...)); NULL —
+    # глобальный START_DATE / весь канал. Смена даты сбрасывает курсор
+    # чата (state oldest_message_id), чтобы догружение пошло заново.
+    parse_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
 
 class ChatMember(Base):
