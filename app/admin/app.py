@@ -2287,8 +2287,10 @@ def create_app(database_url: str) -> Flask:
             return redirect(url_for("chats_page"))
 
     @app.route("/chats/row/<int:channel_id>", methods=["POST"])
-    @auth_required
     def chat_save_row(channel_id: int):
+        # авторизация — через глобальный before_request require_login
+        # (декоратор auth_required в этом модуле не определён; его случайное
+        #  упоминание роняло create_app с NameError при старте)
         """Одна кнопка 💾 на всю строку чата: дата «парсить с» + все галки
         (отслеж./анкеты/файлы) сохраняются одним POST и редиректом — без JS.
 
