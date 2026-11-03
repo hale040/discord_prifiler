@@ -5,10 +5,28 @@
 """
 from __future__ import annotations
 
+import re
+
 from .env import load_json, parse_ts
 
 
 CONTEXT_WINDOW_SEC = 120  # окно «соседних» реплик для восстановления ветки
+
+USER_MENTION_RE = re.compile(r"<@!?\d{5,25}>?")   # ">" опционален: не терять пинги при обрезке/редации
+
+
+def _pings(msg) -> list[int]:
+    """ID, упомянутые в тексте сообщения (<@id>/<@!id>). Принимает dict или str."""
+    if isinstance(msg, dict):
+        raw = msg.get("content") or msg.get("clean_content") or ""
+    else:
+        raw = msg or ""
+    out = []
+    for x in USER_MENTION_RE.finditer(str(raw)):
+        uid = int(x.group(1))
+        if uid not in out:
+            out.append(uid)
+    return out
 
 
 def rebuild_links(messages_all: dict[int, list[dict]]) -> None:
@@ -29,21 +47,18 @@ def rebuild_links(messages_all: dict[int, list[dict]]) -> None:
             parent = by_id.get(ref)
             if parent and parent["author_id"] != m["author_id"]:
                 m["reply_to_author_id"] = parent["author_id"]
-        elif not ref:
-            for uid in load_json(m.get("mention_users_json")) or []:
-                try:
-                    uid = int(uid)
-                except (TypeError, ValueError):
-                    continue
-                if uid != m["author_id"]:
-                    m["reply_to_author_id"] = uid
-                    break
+        # ВАЖНО: упоминание (<@id>) БОЛЬШЕ не трактуется как ответ
+        # (reply_to_author_id). Пинг без reply — это обращение к человеку,
+        # оно учитывается отдельным флагом pUk и связью в build_dialog,
+        # но не превращается в «ответ», иначе лента наполнялась чужими
+        # сообщениями, никак не связанными с целевым пользователем.
 
 
 def build_dialog(
     all_msgs: list[dict],
     target_uid: int,
     window_sec: int = CONTEXT_WINDOW_SEC,
+    time_window_sec: int = 30,
 ) -> tuple[list[dict], str]:
     """Собрать связанные беседы вокруг сообщений целевого пользователя.
 
@@ -64,20 +79,22 @@ def build_dialog(
     def add(msg: dict) -> None:
         selected[msg["id"]] = msg
 
-    def neighbor_ids(center_idx: int, want_target: bool | None) -> list[int]:
+    def neighbor_ids(center_idx: int, want_target: bool | None,
+                     wsec: int | None = None) -> list[int]:
         """Индексы соседей в окне; want_target=None — все, True/False — только
-        реплики целевого / собеседников."""
+        реплики целевого / собеседников. wsec — размер окна (по умолчанию общий)."""
+        wsec = window_sec if wsec is None else wsec
         ts = tgt_ts[center_idx]
         ids = []
         j = center_idx - 1
-        while j >= 0 and (ts - tgt_ts[j]).total_seconds() <= window_sec:
+        while j >= 0 and (ts - tgt_ts[j]).total_seconds() <= wsec:
             m = all_msgs[j]
             if want_target is None or (m["author_id"] == target_uid) == want_target:
                 ids.append(m["id"])
             j -= 1
         j = center_idx + 1
         end = len(all_msgs)
-        while j < end and (tgt_ts[j] - ts).total_seconds() <= window_sec:
+        while j < end and (tgt_ts[j] - ts).total_seconds() <= wsec:
             m = all_msgs[j]
             if want_target is None or (m["author_id"] == target_uid) == want_target:
                 ids.append(m["id"])
@@ -103,8 +120,38 @@ def build_dialog(
             ):
                 add(other)
                 linked_any = True
-        # 2) временной контекст: реплики собеседников рядом с целевым
-        for nid in neighbor_ids(i, want_target=False):
+        # 1b) ПИНГИ: целевой упомянут в чужом сообщении — берём только само
+        # сообщение-пинг (обращение к целевому), без лавины соседних реплик
+        for other in all_msgs:
+            if other["author_id"] == target_uid or other["id"] in selected:
+                continue
+            if target_uid in _pings(other):
+                add(other)
+                linked_any = True
+        # 1c) исходящие пинги целевого: подтягиваем ОДНУ ближайшую предыдущую
+        # реплику адресата (контекст обращения), а не всё окно канала.
+        # Адресаты — из raw content ИЛИ mention_users_json (если текст вычищен).
+        pinged = set(_pings(m))
+        for uid in load_json(m.get("mention_users_json")) or []:
+            try:
+                pinged.add(int(uid))
+            except (TypeError, ValueError):
+                pass
+        pinged.discard(target_uid)
+        if pinged:
+            for other in reversed(all_msgs[:i]):
+                if other["author_id"] == target_uid:
+                    continue
+                if other["author_id"] in pinged and \
+                        (parse_ts(m["timestamp"]) - parse_ts(other["timestamp"])).total_seconds() <= window_sec:
+                    add(other)
+                    linked_any = True
+                    break
+        # 2) временной контекст: реплики собеседников рядом с целевым.
+        # Узкое окно (time_window_sec): раньше ±120сек тянули весь офтопик
+        # шумных каналов — в промпт попадали сообщения, не связанные с
+        # пользователем. По умолчанию 30 сек.
+        for nid in neighbor_ids(i, want_target=False, wsec=time_window_sec):
             add(all_msgs[tgt_pos[nid]])
         # и собственные соседние реплики (контекст монолога/темы)
         for nid in neighbor_ids(i, want_target=True):

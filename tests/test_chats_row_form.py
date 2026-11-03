@@ -1,26 +1,26 @@
-"""Чаты админки: формат М.Д.ГГГГ, активная галка анкет, кнопка на всю строку."""
+"""Чаты админки: формат Д.М.ГГГГ, активная галка анкет, кнопка на всю строку."""
 import re
 
 
-def test_date_format_m_d_yyyy():
+def test_date_format_d_m_yyyy():
     from app.admin.app import _parse_date_userfmt as f
-    # М.Д.ГГГГ — основной формат (день.месяц.год)
-    v, e = f("11.3.2026"); assert e is None and v.month == 3 and v.day == 11
+    # Д.М.ГГГГ — основной формат (день.месяц.год)
     v, e = f("3.11.2026"); assert e is None and v.month == 11 and v.day == 3
+    v, e = f("11.3.2026"); assert e is None and v.month == 3 and v.day == 11
     v, e = f("03.11.2026"); assert e is None and v.month == 11  # с нулём ок
     # обратная совместимость старых форматов
     v, e = f("2026-11-03"); assert e is None
     # ошибки валидации
-    _, e = f("2026.11.03"); assert e and "М.Д.ГГГГ" in e
-    _, e = f("abc");        assert e and "М.Д.ГГГГ" in e
+    _, e = f("2026.11.03"); assert e and "Д.М.ГГГГ" in e
+    _, e = f("abc");        assert e and "Д.М.ГГГГ" in e
     _, e = f("9.9.2099");   assert e and "будущего" in e
     _, e = f("1.1.2014");   assert e and "ранняя" in e
 
 
 def test_template_row_form_and_active_qa_checkbox():
     src = open("app/admin/templates/admin/chats.html", encoding="utf-8").read()
-    assert "placeholder='М.Д.ГГГГ'" in src
-    assert "ДД.ММ.ГГГГ" not in src
+    assert "placeholder='Д.М.ГГГГ'" in src
+    assert "М.Д.ГГГГ" not in src
     # чекбокс анкет активен: ни disabled, ни {% if guild_id %} вокруг него
     qa = re.search(r"<input[^>]*name='collects_qa'[^>]*>", src).group(0)
     assert "disabled" not in qa and "guild_id" not in qa

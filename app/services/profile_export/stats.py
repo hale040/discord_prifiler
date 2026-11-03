@@ -62,7 +62,7 @@ def strip_mentions(text: str) -> str:
     return MENTION_RE.sub(lambda m: "@" if m.group(1) == "@!" else "#", text or "")
 
 
-USER_MENTION_RE = re.compile(r"<@!?(\d{5,25})>")
+USER_MENTION_RE = re.compile(r"<@!?\d{5,25}>")
 
 
 def ping_targets(text: str) -> list[int]:
