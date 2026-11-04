@@ -16,6 +16,13 @@ CONTEXT_WINDOW_SEC = 120  # окно «соседних» реплик для в
 # совместимость с окружениями, где \d ведёт себя иначе; ID в capture-группе 1.
 USER_MENTION_RE = re.compile(r"<@!?([0-9]{5,25})>?")
 
+# Строгий вариант: ОБЯЗАТЕЛЬНЫЙ закрывающий ">" и только user-формат
+# (<@id>/<@!id>). Роли <@&id> не матчатся. Используется для правил
+# связности (пинг = обращение): мягкий regex выше матчит и обрезанные
+# токены вида "<@123" внутри текста/кода — из-за этого в ленту целевого
+# попадали чужие «несвязанные» сообщения.
+_STRICT_MENTION_RE = re.compile(r"<@!?([0-9]{5,25})>")
+
 
 def _pings(msg) -> list[int]:
     """ID, упомянутые в тексте сообщения (<@id>/<@!id>). Принимает dict или str."""
@@ -24,7 +31,7 @@ def _pings(msg) -> list[int]:
     else:
         raw = msg or ""
     out = []
-    for x in USER_MENTION_RE.finditer(str(raw)):
+    for x in _STRICT_MENTION_RE.finditer(str(raw)):
         uid = int(x.group(1))
         if uid not in out:
             out.append(uid)

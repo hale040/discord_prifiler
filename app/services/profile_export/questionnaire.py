@@ -56,7 +56,13 @@ def qa_text(raw) -> str:
                     f"- {a}" if isinstance(a, str) else json.dumps(
                         a, ensure_ascii=False)
                     for a in ans))
-            return "\n".join(parts).strip() or s
+            joined = "\n".join(parts).strip()
+            # BUGFIX: раньше при пустых text/answers возвращалась сырая JSON-
+            # строка `s` (или "" для {}), т.е. в промпт попадал {"v":1,...} или
+            # анкета «исчезала». Пустая обёртка = анкеты нет → "".
+            return joined
+        # JSON-массив или скаляр вместо объекта — не выбрасываем, показываем
+        return json.dumps(obj, ensure_ascii=False)
     return s
 
 
