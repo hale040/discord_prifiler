@@ -1096,6 +1096,13 @@ class Repository:
                     if parent_author is not None and parent_author != author_id:
                         target = parent_author
                 elif ref_id is None and mentions_json:
+                    # ВАЖНО: упоминание (<@id>) БОЛЬШЕ не трактуется как ответ.
+                    # Пинг без reply — обращение к человеку, оно учитывается
+                    # отдельным флагом pUk и связью в build_dialog, но НЕ
+                    # пишется в reply_to_author_id: иначе ветка «соседи,
+                    # отвечающие целевому» (other.reply_to_author_id == target)
+                    # затягивала в ленту чужие сообщения без явного ответа.
+                    continue
                     # mention_users_json — JSONB: ORM отдаёт list напрямую;
                     # строка поддержана для старых данных (двойная сериализация)
                     mentioned = mentions_json
